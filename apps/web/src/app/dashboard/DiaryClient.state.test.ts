@@ -147,7 +147,7 @@ import {
   parseDiaryPage,
   parseSession,
 } from "../../lib/diary";
-import { DailySummary } from "./DailySummary";
+import { CalmOverview } from "./CalmOverview";
 import { DiaryClient } from "./DiaryClient";
 import { DiaryDayNote } from "./DiaryDayNote";
 
@@ -2355,10 +2355,18 @@ describe("dashboard overview composition", () => {
       45,
     );
     const fetch = await mount(fetcher(fixture), "overview");
-    const summary = elements().find((node) => node.type === DailySummary);
+    const summary = elements().find((node) => node.type === CalmOverview);
     expect(summary?.props.totalEntries).toBe(45);
-    expect(summary?.props.totals).toEqual(fixture.data.totals);
-    expect(elements().some((node) => node.type === DiaryDayNote)).toBe(false);
+    expect(summary?.props.completeDayLoaded).toBe(false);
+    expect(elements().some((node) => node.props["aria-label"] === "Dashboard actions")).toBe(false);
+    expect((summary?.props.day as { totals: unknown })?.totals).toEqual(fixture.data.totals);
+    expect(elements().filter((node) => node.type === DiaryDayNote)).toHaveLength(1);
+    const noteDisclosure = elements().find(
+      (node) => node.type === "details" && node.props.className === "calmNote",
+    );
+    expect(noteDisclosure).toBeDefined();
+    expect(noteDisclosure?.props.open).toBeUndefined();
+    expect(text()).toContain("View or edit note");
     expect(elements().some((node) => node.props.id === "diary-entry-groups")).toBe(false);
     expect(text()).not.toContain("Customize diary groups");
     expect(text()).not.toContain("Load more");
@@ -2373,15 +2381,15 @@ describe("dashboard overview composition", () => {
       url.startsWith("/api/diary?date=2026-08-16") ? pending.promise : base(url, init),
     );
     await mount(fetch, "overview");
-    expect(elements().some((node) => node.type === DailySummary)).toBe(true);
+    expect(elements().some((node) => node.type === CalmOverview)).toBe(true);
     invoke(button("Next day"));
     route.date = "2026-08-16";
     await hooks.settle();
     expect(router.replace).toHaveBeenCalledWith("/overview?date=2026-08-16", { scroll: false });
-    expect(elements().some((node) => node.type === DailySummary)).toBe(false);
+    expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
     pending.resolve(Response.json(page([entry(2, "breakfast", route.date)], null, 1, route.date)));
     await hooks.settle();
-    expect(elements().find((node) => node.type === DailySummary)?.props.totalEntries).toBe(1);
+    expect(elements().find((node) => node.type === CalmOverview)?.props.totalEntries).toBe(1);
   });
 
   it("clears the summary when the existing unauthorized path closes private UI", async () => {
@@ -2392,11 +2400,11 @@ describe("dashboard overview composition", () => {
         : base(url, init),
     );
     await mount(fetch, "overview");
-    expect(elements().some((node) => node.type === DailySummary)).toBe(true);
+    expect(elements().some((node) => node.type === CalmOverview)).toBe(true);
     invoke(button("Next day"));
     route.date = "2026-08-16";
     await hooks.settle();
-    expect(elements().some((node) => node.type === DailySummary)).toBe(false);
+    expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
     expect(router.replace).toHaveBeenCalledWith("/login");
   });
 });

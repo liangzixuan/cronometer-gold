@@ -4,7 +4,6 @@ import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import {
   isLocalDate,
   localDateInTimeZone,
@@ -33,6 +32,8 @@ import {
   prepareHydrationUpdate,
 } from "../../lib/hydration";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { AppNavigation } from "../ui/AppNavigation";
+import { Icon } from "../ui/Icon";
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -714,30 +715,23 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     <>
       <aside className="sidebar">
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" /> Nourishing
         </Link>
-        <nav aria-label="Application navigation">
-          <Link href={`/overview${dateQuery}`}>Dashboard</Link>
-          <Link href={`/dashboard${dateQuery}`}>Diary</Link>
-          <Link href={`/foods${dateQuery}`}>Foods</Link>
-          <Link href={`/recipes${dateQuery}`}>Recipes</Link>
-          <Link href={`/goals${dateQuery}`}>Goals</Link>
-          <Link aria-current="page" href={`/hydration${dateQuery}`}>
-            Hydration
-          </Link>
-          <Link href={`/activities${dateQuery}`}>Activity</Link>
-          <Link href={date ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>Reports</Link>
-          <Link href="/health">Health & privacy</Link>
-        </nav>
-        {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
-        <button
-          className="signOutButton"
-          disabled={busy !== null || privateClosed.current}
-          onClick={() => void signOut()}
-          type="button"
-        >
-          Sign out
-        </button>
+        <AppNavigation active="water" date={date} />
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
+            <button
+              className="signOutButton"
+              disabled={busy !== null || privateClosed.current}
+              onClick={() => void signOut()}
+              type="button"
+            >
+              Sign out
+            </button>
+          </div>
+        </details>
       </aside>
 
       <section className="dashboard hydrationDashboard" aria-busy={state === "loading"}>

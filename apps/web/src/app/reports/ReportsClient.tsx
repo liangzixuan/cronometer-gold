@@ -23,6 +23,7 @@ import {
   targetSnapshotForPoint,
 } from "../../lib/nutrition-reports";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { AppNavigation } from "../ui/AppNavigation";
 import { Icon } from "../ui/Icon";
 import { PrintableNutritionReport } from "./PrintableNutritionReport";
 import printStyles from "./report-print-shell.module.css";
@@ -838,60 +839,37 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }
 
   const navigationDate = range?.to;
-  const dateQuery = navigationDate ? `?date=${encodeURIComponent(navigationDate)}` : "";
 
   return (
     <>
-      <aside className={`sidebar ${printStyles.screen}`}>
+      <aside className={`sidebar ledgerSidebar ${printStyles.screen}`}>
         <Link className="brand brandDark" href="/">
           <Icon name="leaf" /> Nourishing
         </Link>
-        <nav aria-label="Application navigation">
-          <Link href={`/overview${dateQuery}`}>
-            <Icon name="dashboard" /> Dashboard
-          </Link>
-          <Link href={`/dashboard${dateQuery}`}>
-            <Icon name="diary" /> Diary
-          </Link>
-          <Link href={`/foods${dateQuery}`}>
-            <Icon name="foods" /> Foods
-          </Link>
-          <Link href={`/recipes${dateQuery}`}>
-            <Icon name="recipes" /> Recipes
-          </Link>
-          <Link href={`/goals${dateQuery}`}>
-            <Icon name="goals" /> Goals
-          </Link>
-          <Link href={`/hydration${dateQuery}`}>
-            <Icon name="water" /> Hydration
-          </Link>
-          <Link href={`/activities${dateQuery}`}>
-            <Icon name="activity" /> Activity
-          </Link>
-          <Link
-            aria-current="page"
-            href={
-              range
-                ? `/reports?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`
-                : "/reports"
-            }
-          >
-            <Icon name="reports" /> Reports
-          </Link>
-          <Link href="/health">
-            <Icon name="privacy" /> Health & privacy
-          </Link>
-        </nav>
-        {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
-        <button
-          className="signOutButton"
-          disabled={logoutBusy}
-          onClick={() => void signOut()}
-          type="button"
-        >
-          Sign out
-        </button>
-        <p className="wellnessNote">General wellness information—not medical advice.</p>
+        <AppNavigation
+          active="reports"
+          date={navigationDate ?? undefined}
+          reportHref={
+            range
+              ? `/reports?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}`
+              : "/reports"
+          }
+        />
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
+            <button
+              className="signOutButton"
+              disabled={logoutBusy}
+              onClick={() => void signOut()}
+              type="button"
+            >
+              Sign out
+            </button>
+            <p className="wellnessNote">General wellness information—not medical advice.</p>
+          </div>
+        </details>
       </aside>
 
       <section

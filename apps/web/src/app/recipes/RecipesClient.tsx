@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import {
   createOperationId,
   type DiaryGroup,
@@ -44,6 +43,8 @@ import {
   recipeSourceLines,
   type StableMutation,
 } from "../../lib/recipes-goals";
+import { AppNavigation } from "../ui/AppNavigation";
+import { Icon } from "../ui/Icon";
 
 import { PastedIngredientReview } from "./PastedIngredientReview";
 
@@ -1600,24 +1601,16 @@ export function RecipesClient() {
     <>
       <aside className="sidebar">
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" /> Nourishing
         </Link>
-        <nav aria-label="Application navigation">
-          <Link href={date ? `/overview?date=${encodeURIComponent(date)}` : "/overview"}>
-            Dashboard
-          </Link>
-          <Link href={`/dashboard?date=${date}`}>Diary</Link>
-          <Link href={`/foods?date=${date}`}>Foods</Link>
-          <Link aria-current="page" href={`/recipes?date=${date}`}>
-            Recipes
-          </Link>
-          <Link href={`/goals?date=${date}`}>Goals</Link>
-          <Link href={`/hydration?date=${date}`}>Hydration</Link>
-          <Link href={`/activities?date=${date}`}>Activity</Link>
-          <Link href={date ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>Reports</Link>
-          <Link href="/health">Health & privacy</Link>
-        </nav>
-        <p className="wellnessNote">Wellness information only—not medical advice.</p>
+        <AppNavigation active="recipes" date={date} />
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            <Link href={`/dashboard?date=${encodeURIComponent(date)}`}>Open diary</Link>
+            <p className="wellnessNote">Wellness information only—not medical advice.</p>
+          </div>
+        </details>
       </aside>
       <section className="dashboard recipesDashboard">
         <header className="dashboardHeader foodPageHeader">

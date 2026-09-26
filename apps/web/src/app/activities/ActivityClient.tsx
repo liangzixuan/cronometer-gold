@@ -28,6 +28,8 @@ import {
   shiftLocalDate,
 } from "../../lib/diary";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { AppNavigation } from "../ui/AppNavigation";
+import { Icon } from "../ui/Icon";
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -950,7 +952,6 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     }
   }, [reuseChoice, routeContext]);
 
-  const dateQuery = date ? `?date=${encodeURIComponent(date)}` : "";
   const controlsDisabled =
     busy !== null ||
     !session ||
@@ -965,30 +966,23 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     <>
       <aside className="sidebar">
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" /> Nourishing
         </Link>
-        <nav aria-label="Application navigation">
-          <Link href={`/overview${dateQuery}`}>Dashboard</Link>
-          <Link href={`/dashboard${dateQuery}`}>Diary</Link>
-          <Link href={`/foods${dateQuery}`}>Foods</Link>
-          <Link href={`/recipes${dateQuery}`}>Recipes</Link>
-          <Link href={`/goals${dateQuery}`}>Goals</Link>
-          <Link href={`/hydration${dateQuery}`}>Hydration</Link>
-          <Link aria-current="page" href={`/activities${dateQuery}`}>
-            Activity
-          </Link>
-          <Link href={date ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>Reports</Link>
-          <Link href="/health">Health & privacy</Link>
-        </nav>
-        {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
-        <button
-          className="signOutButton"
-          disabled={busy !== null}
-          onClick={() => void signOut()}
-          type="button"
-        >
-          Sign out
-        </button>
+        <AppNavigation active="activity" date={date} />
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
+            <button
+              className="signOutButton"
+              disabled={busy !== null}
+              onClick={() => void signOut()}
+              type="button"
+            >
+              Sign out
+            </button>
+          </div>
+        </details>
       </aside>
 
       <section className="dashboard activityDashboard" aria-busy={state === "loading"}>

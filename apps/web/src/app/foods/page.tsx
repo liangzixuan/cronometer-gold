@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { isLocalDate } from "../../lib/diary";
+import { AppNavigation } from "../ui/AppNavigation";
 import { Icon } from "../ui/Icon";
 import { FoodSearchClient } from "./FoodSearchClient";
 
@@ -11,47 +11,28 @@ interface FoodsPageProps {
 
 export default async function FoodsPage({ searchParams }: FoodsPageProps) {
   const { date } = await searchParams;
-  const dateQuery = typeof date === "string" && isLocalDate(date) ? `?date=${date}` : "";
-  const reportHref =
-    typeof date === "string" && isLocalDate(date)
-      ? `/reports?to=${encodeURIComponent(date)}`
-      : "/reports";
   return (
     <main className="shell">
       <aside className="sidebar">
         <Link className="brand brandDark" href="/">
           <Icon name="leaf" /> Nourishing
         </Link>
-        <nav aria-label="Application navigation">
-          <Link href={`/overview${dateQuery}`}>
-            <Icon name="dashboard" /> Dashboard
-          </Link>
-          <Link href={`/dashboard${dateQuery}`}>
-            <Icon name="diary" /> Diary
-          </Link>
-          <Link aria-current="page" href={`/foods${dateQuery}`}>
-            <Icon name="foods" /> Foods
-          </Link>
-          <Link href={`/recipes${dateQuery}`}>
-            <Icon name="recipes" /> Recipes
-          </Link>
-          <Link href={`/goals${dateQuery}`}>
-            <Icon name="goals" /> Goals
-          </Link>
-          <Link href={`/hydration${dateQuery}`}>
-            <Icon name="water" /> Hydration
-          </Link>
-          <Link href={`/activities${dateQuery}`}>
-            <Icon name="activity" /> Activity
-          </Link>
-          <Link href={reportHref}>
-            <Icon name="reports" /> Reports
-          </Link>
-          <Link href="/health">
-            <Icon name="privacy" /> Health & privacy
-          </Link>
-        </nav>
-        <p className="wellnessNote">Wellness information only—not medical advice.</p>
+        <AppNavigation active="foods" date={typeof date === "string" ? date : undefined} />
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            <Link
+              href={
+                typeof date === "string"
+                  ? `/dashboard?date=${encodeURIComponent(date)}`
+                  : "/dashboard"
+              }
+            >
+              Open diary
+            </Link>
+            <p className="wellnessNote">Wellness information only—not medical advice.</p>
+          </div>
+        </details>
       </aside>
 
       <section className="dashboard foodDashboard">

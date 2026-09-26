@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import {
   defaultDiaryGroups,
   diaryGroupLabel,
@@ -51,6 +50,8 @@ import {
   type Reminder,
   trendAggregateLabel,
 } from "../../lib/retention";
+import { AppNavigation } from "../ui/AppNavigation";
+import { Icon } from "../ui/Icon";
 
 type LoadState = "loading" | "ready" | "error";
 type HealthSection = "foods" | "biometrics" | "reminders" | "integrations";
@@ -2465,31 +2466,24 @@ export function HealthClient() {
     <>
       <aside className="sidebar">
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" /> Nourishing
         </Link>
-        <nav aria-label="Application navigation">
-          <Link href="/overview">Dashboard</Link>
-          <Link href="/dashboard">Diary</Link>
-          <Link href="/foods">Foods</Link>
-          <Link href="/recipes">Recipes</Link>
-          <Link href="/goals">Goals</Link>
-          <Link href="/hydration">Hydration</Link>
-          <Link href="/activities">Activity</Link>
-          <Link href="/reports">Reports</Link>
-          <Link aria-current="page" href="/health">
-            Health & privacy
-          </Link>
-        </nav>
-        {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
-        <button
-          className="signOutButton"
-          disabled={busy === "logout"}
-          onClick={() => void signOut()}
-          type="button"
-        >
-          Sign out
-        </button>
-        <p className="wellnessNote">Wellness information only—not medical advice.</p>
+        <AppNavigation active="privacy" />
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
+            <button
+              className="signOutButton"
+              disabled={busy === "logout"}
+              onClick={() => void signOut()}
+              type="button"
+            >
+              Sign out
+            </button>
+            <p className="wellnessNote">Wellness information only—not medical advice.</p>
+          </div>
+        </details>
       </aside>
 
       <main className="dashboard retentionDashboard">

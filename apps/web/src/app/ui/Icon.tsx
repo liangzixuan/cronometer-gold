@@ -1,4 +1,8 @@
 const glyphs = {
+  sun: "\uf185",
+  moon: "\uf186",
+  info: "\uf05a",
+  energy: "\uf06d",
   dashboard: "\uf015",
   diary: "\uf073",
   foods: "\uf5d1",

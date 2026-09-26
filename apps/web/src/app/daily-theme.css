@@ -1,91 +1,730 @@
-/* Daily Ledger: compact application layout, using the existing Flatly control foundations.
-   Scoped to application screens; the public landing page has its own layout. */
+/* Calm Daily: warm, responsive daily nutrition UI. Values remain application data. */
 .shell {
-  --ink: #172b46;
-  --ink-muted: #526780;
-  --paper: #f8fafc;
-  --paper-deep: #edf2f7;
-  --forest: #007e83;
-  --lime: #d6f2ef;
-  --line: #dce5ee;
+  --ink: #291e18;
+  --ink-muted: #536178;
+  --paper: #fbf9f5;
+  --paper-deep: #f1ece4;
+  --forest: #ad3f26;
+  --lime: #eef0e5;
+  --line: #e5e1dc;
   --white: #ffffff;
-  grid-template-columns: 198px minmax(0, 1fr);
+  --calm-green: #4f7145;
+  --calm-coral: #e38c72;
+  --calm-gold: #dfa72e;
+  display: block;
+  color: var(--ink);
   background: var(--paper);
+  font-size: 1rem;
 }
-
+@font-face {
+  font-family: "Nourishing Icons";
+  src: url("/fonts/fa-solid-900.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+}
+.appIcon {
+  display: inline-block;
+  width: 1.15em;
+  flex: 0 0 auto;
+  font-family: "Nourishing Icons", sans-serif;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+}
+.shell :is(h1, h2, h3) {
+  font-family: Arial, Helvetica, sans-serif;
+  letter-spacing: -0.025em;
+}
+.shell :is(a, button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--calm-green);
+  outline-offset: 3px;
+}
+.shell :is(button, input, select, textarea, .buttonPrimary, .secondaryAction) {
+  border-radius: 6px;
+}
+.shell button {
+  font-weight: 600;
+}
+.shell :is(input, select, textarea) {
+  max-width: 100%;
+}
 .shell .sidebar {
-  padding: 24px 12px;
-  color: #ffffff;
-  background: #192c40;
+  position: relative;
+  top: auto;
+  height: auto;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  padding: 12px clamp(20px, 2.3vw, 56px);
   border: 0;
-  overflow-y: auto;
+  border-bottom: 1px solid var(--line);
+  background: var(--paper);
+  overflow: visible;
+  z-index: 10;
 }
-
 .shell .sidebar .brand {
-  color: #ffffff;
-  font-size: 1.15rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--ink);
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  white-space: nowrap;
 }
-.shell .sidebar .brand span {
-  color: #8de0c9;
+.shell .sidebar .brand > span:not(.appIcon) {
+  color: inherit;
+}
+.shell .sidebar .brand .appIcon {
+  color: var(--calm-green);
+  font-size: 1.65rem;
 }
 .shell .sidebar nav {
-  margin-top: 32px;
+  overflow: visible;
+  display: flex;
+  align-items: center;
   gap: 4px;
+  margin: 0;
+  min-width: 0;
+  justify-content: center;
 }
-.shell .sidebar nav a {
-  color: #e0e9f0;
-  font-weight: 500;
-  border-radius: 5px;
+.shell .sidebar nav a,
+.shell .appNavMore > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 46px;
+  padding: 10px 14px;
+  color: var(--ink);
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 400;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
 }
-.shell .sidebar nav a:hover {
-  background: #3d5368;
+.shell .sidebar nav .appIcon {
+  padding: 0;
+  color: inherit;
+  font-size: 1.1em;
 }
-.shell .sidebar nav a[aria-current="page"] {
-  color: #ffffff;
-  background: #007e83;
+.shell .sidebar nav a:hover,
+.shell .appNavMore > summary:hover {
+  background: var(--paper-deep);
 }
-.shell .sidebar .accountIdentity,
-.shell .sidebar .wellnessNote {
-  color: #d1dce5;
+.shell .sidebar nav a[aria-current="page"],
+.shell .appNavMoreActive {
+  background: var(--lime);
+  color: #224a35;
+  font-weight: 600;
+}
+.appNavPrimary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.appNavMore {
+  position: relative;
+  flex: 0 0 auto;
+}
+.appNavMore > summary {
+  list-style: none;
+}
+.appNavMore > summary::-webkit-details-marker {
+  display: none;
+}
+.appNavMorePanel,
+.shell .ledgerAccountPanel {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 250px;
+  max-width: calc(100vw - 32px);
+  padding: 12px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #291e1814;
+}
+.shell .appNavMorePanel a {
+  display: flex;
+  white-space: normal;
+}
+.shell .ledgerAccount {
+  position: relative;
+  margin: 0;
+  font-size: 0.9rem;
+}
+.shell .ledgerAccount > summary {
+  padding: 11px 12px;
+  min-height: 44px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.shell .ledgerAccountPanel {
+  padding: 18px;
+}
+.shell .sidebar .accountIdentity {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 .shell .sidebar .verificationLink {
-  color: #b1ecdb;
+  display: inline-block;
+  padding: 8px 0;
+}
+.shell .sidebar .wellnessNote {
+  margin: 14px 0 0;
+  font-size: 0.75rem;
 }
 .shell .sidebar .signOutButton {
-  color: #ffffff;
-  border-color: #91a5b6;
+  margin-top: 12px;
 }
 .shell .dashboard {
-  width: min(1440px, 100%);
-  padding: 24px 22px 48px;
+  width: 100%;
+  max-width: none;
+  padding: 28px clamp(20px, 2.3vw, 56px) 48px;
 }
 .shell .dashboardHeader {
   align-items: center;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 12px;
+  margin-bottom: 20px;
 }
 .shell .dashboardHeader h1 {
-  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  margin: 0;
+  font-size: clamp(1.75rem, 2.9vw, 2.7rem);
+  font-weight: 700;
   line-height: 1.2;
   letter-spacing: -0.035em;
 }
 .shell .kicker {
-  letter-spacing: 0.09em;
   font-size: 0.7rem;
+  letter-spacing: 0.09em;
+  margin-bottom: 6px;
 }
 .shell .statusPill {
-  color: #285247;
-  background: #e0f2eb;
+  color: #665440;
+  background: var(--paper-deep);
   border-radius: 5px;
+  font-size: 0.7rem;
+  padding: 5px 8px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.shell .ledgerToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px 24px;
+  margin-bottom: 16px;
+}
+.shell .ledgerToolbar .dashboardHeader {
+  margin: 0;
+}
+.shell .dateNavigator {
+  flex-wrap: wrap;
+  margin: 0;
+  gap: 8px;
+  padding: 0;
+  min-width: 0;
+}
+.shell .dateNavigator :is(button, input) {
+  min-height: 44px;
+  font-size: 0.95rem;
+  background: var(--white);
+}
+.shell .dateNavigator button {
+  padding: 8px 12px;
+}
+.shell .dateNavigator input {
+  width: 165px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+.shell .ledgerToolbar .buttonPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 48px;
+  margin-left: auto;
+  padding: 10px 24px;
+  color: white;
+  background: var(--forest);
+  text-decoration: none;
+  font-size: 1.1rem;
+  font-weight: 600;
+}
+.shell .diaryStatus {
+  margin: 8px 0 14px;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+.shell .diaryStatus:empty {
+  display: none;
+}
+.shell .diaryDashboard .kicker {
+  display: none;
+}
+.shell .ledgerWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 30%, 420px);
+  align-items: start;
+  gap: 20px;
+}
+.shell .ledgerWorkspace > * {
+  min-width: 0;
+}
+.shell .ledgerWorkspace .diaryGrid {
+  display: block;
+}
+.shell .ledgerRail {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.shell .dailySummary {
+  margin: 0 0 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+}
+.shell .dailySummaryHeading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.shell .dailySummaryHeading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.shell .dailySummaryHeading p {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+.shell .diaryDashboard .dailySummaryHeading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .dailySummaryGrid {
+  display: grid;
+  grid-template-columns: 1.2fr repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0;
+}
+.shell .dailySummaryCard {
+  min-width: 0;
+  padding: 0 0 0 16px;
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+}
+.shell .dailySummaryCard:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+.shell .dailySummaryCard dt {
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+  margin: 0 0 3px;
+}
+.shell .dailySummaryCard dd {
+  margin: 0;
+}
+.shell .dailySummaryValue {
+  display: block;
+  font-size: clamp(1.1rem, 1.8vw, 1.5rem);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.shell .dailySummaryQualification,
+.shell .dailySummaryNote {
+  display: block;
+  margin: 6px 0 0;
+  color: var(--ink-muted);
+  font-size: 0.7rem;
+  line-height: 1.5;
+}
+.shell .dailySummaryNote {
+  margin-top: 12px;
+}
+.shell .ledgerTableHead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(108px, 24%, 210px) 90px;
+  padding: 10px 16px;
+  gap: 12px;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+.shell .ledgerContent .diaryPageCount {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+.shell .ledgerContent > .buttonQuiet {
+  display: block;
+  margin: 0 0 8px auto;
+  min-height: 40px;
+  font-size: 0.8rem;
+  border: 0;
+  background: transparent;
+}
+.shell .mealSection {
+  margin: 0 0 14px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+  overflow: visible;
+}
+.shell .mealHeading {
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  background: #f4f2eb;
+  min-height: 48px;
+  border-radius: 8px 8px 0 0;
+}
+.shell .mealHeading h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.3;
+}
+.shell .mealHeading .buttonQuiet {
+  padding: 6px 8px;
+  min-height: 36px;
+  font-size: 0.75rem;
+}
+.shell .mealHeading a {
+  color: var(--forest);
+  font-size: 0.8rem;
+  text-underline-offset: 4px;
+}
+.shell .mealBody,
+.shell .mealEntries {
+  min-width: 0;
+}
+.shell .mealSection ul {
+  margin: 0;
+}
+.shell .mealSection li {
+  position: relative;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.shell .mealSection .diaryEntry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(108px, 24%, 210px) 90px;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-height: 44px;
+  padding: 12px 0 4px;
+}
+.shell .ledgerRowName h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 400;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.shell .ledgerRowName > p {
+  font-size: 0.8rem;
+  margin: 4px 0;
+}
+.shell .ledgerRowPortion {
+  color: var(--ink-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.shell .ledgerRowEnergy {
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.shell .ledgerRowActions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: end;
+  align-items: center;
+  gap: 6px;
+  padding-right: 40px;
+}
+.shell .ledgerRowActions button {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  color: var(--forest);
+  background: transparent;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.shell .ledgerMore {
+  font-size: 0.8rem;
+}
+.shell .ledgerMore > summary {
+  position: absolute;
+  bottom: 4px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-height: 36px;
+  padding: 6px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  list-style: none;
+  border-radius: 4px;
+}
+.shell .ledgerMore > summary::-webkit-details-marker {
+  display: none;
+}
+.shell .ledgerMore > summary > span:not(.appIcon) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .ledgerMore > summary:hover {
+  color: var(--forest);
+  background: var(--paper-deep);
+}
+.shell .ledgerMore[open] > summary {
+  position: static;
+  margin-left: auto;
+}
+.shell .ledgerMoreContent {
+  padding: 14px;
+  background: var(--paper-deep);
+  border-radius: 5px;
+}
+.shell .ledgerEntryEvidence {
+  display: grid;
+  gap: 5px;
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+.shell .ledgerMore .entryActions {
+  padding: 10px 0;
+}
+.shell .mealSection .entryNutrients {
+  padding: 0;
+  font-size: 0.8rem;
+}
+.shell .entryNutrients summary {
+  cursor: pointer;
+  min-height: 32px;
+}
+.shell .mealSection .entryEditor {
+  padding: 16px 0;
+  font-size: 0.85rem;
+}
+.shell .emptyMeal {
+  margin: 0;
+  padding: 16px;
+  border: 0;
+  font-size: 0.9rem;
+}
+.shell .mealFooter {
+  padding: 4px 16px 12px;
+}
+.shell .mealAddFood {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--forest);
+  min-height: 36px;
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+.shell .mealActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.shell .diaryGroupSettingsLauncher {
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
+.shell .ledgerRail .nutritionSummary {
+  position: static;
+  margin: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+}
+.shell .nutritionSummary h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+.shell .ledgerPanelHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.shell .ledgerPanelHeading a {
+  font-size: 0.75rem;
+  color: var(--forest);
+  text-underline-offset: 4px;
+}
+.shell .nutritionSummary dl {
+  margin-top: 16px;
+}
+.shell .nutrientTotal {
+  padding: 11px 0;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+.shell .nutrientTotal dd {
+  overflow-wrap: anywhere;
+}
+.shell .nutrientTotal small {
+  max-width: 185px;
+  font-size: 0.7rem;
+}
+.shell .totalsNote {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+.shell .ledgerOtherNutrients {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+.shell .ledgerOtherNutrients summary {
+  color: var(--forest);
+  min-height: 36px;
+  cursor: pointer;
+}
+.shell .nutritionSummary .ledgerSavedTargets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--forest);
+  font-size: 0.8rem;
+}
+.shell .todayOverviewGrid {
+  gap: 16px;
+  margin: 0;
+}
+.shell .todayOverviewCard {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--white);
+}
+.shell .todayOverviewCard h3 {
+  font-size: 1.15rem;
+  margin: 0;
+}
+.shell .todayOverviewMetric strong {
+  font-size: 1.6rem;
+}
+.shell .todayOverviewBody p {
+  font-size: 0.8rem;
+}
+.shell .ledgerRail .todayOverview,
+.shell .ledgerRail .todayOverviewGrid {
+  margin: 0;
+}
+.shell .ledgerRail .todayOverviewHeading {
+  display: none;
+}
+.shell .ledgerRail .todayOverviewGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+.shell .ledgerRail .todayOverviewCard {
+  padding: 18px;
+}
+.shell .todayOverviewCard header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.shell .todayOverviewCard header a {
+  font-size: 0.8rem;
+  color: var(--forest);
+}
+.shell .todayOverviewBody {
+  min-height: 0;
+  margin-top: 12px;
+}
+.shell .diaryGroupSettings {
+  min-width: 0;
+  border-radius: 8px;
+  background: var(--white);
+}
+.shell .ledgerRail .diaryGroupSettings {
+  margin: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+}
+.shell .diaryGroupSettings h2 {
+  font-size: 1.35rem;
+  margin: 0 0 10px;
+}
+.shell .diaryGroupSettings :is(p, label) {
+  font-size: 0.85rem;
+}
+.shell .diaryGroupSettings textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 90px;
+  padding: 12px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  font: inherit;
+}
+.shell .ledgerDayNoteHelp {
+  margin: 10px 0;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+.shell .ledgerDayNoteHelp summary {
+  cursor: pointer;
+}
+.shell .emptyDiary {
+  margin: 24px 0;
+  padding: 24px;
+  border-radius: 8px;
+}
+.shell .emptyDiary h2 {
+  font-size: 1.7rem;
 }
 .shell .foodIntro {
   max-width: 68ch;
-  font-size: 0.95rem;
+  font-size: 1rem;
 }
 .shell .foodTools {
   margin-top: 24px;
-  gap: 20px;
+  gap: 24px;
 }
 .shell .foodSearchPanel,
 .shell .barcodePanel {
@@ -95,192 +734,171 @@
 }
 .shell .foodPanelHeading h2,
 .shell .barcodePanel h2 {
-  font-size: 1.5rem;
+  font-size: 1.7rem;
   line-height: 1.25;
-  letter-spacing: -0.025em;
 }
 .shell .foodPanelHeading > p {
-  font-size: 0.8rem;
+  font-size: 0.85rem;
 }
 .shell .diaryContext {
   margin-top: 20px;
 }
-.shell .dateNavigator {
-  flex-wrap: wrap;
-  margin-bottom: 20px;
-  gap: 8px;
-}
-.shell .dateNavigator input {
-  min-height: 42px;
-  padding: 6px 10px;
-}
-.shell .dateNavigator button {
-  background: var(--white);
-}
-.shell :is(a, button, input, select, textarea):focus-visible {
-  outline: 3px solid #2269b2;
-  outline-offset: 3px;
-}
-.shell .sidebar :is(a, button):focus-visible {
-  outline-color: #b1ecdb;
-}
-.shell .todayOverviewGrid {
-  gap: 20px;
-  margin: 24px 0;
-}
-.shell .todayOverviewCard {
-  border-radius: 8px;
-  background: var(--white);
-}
-.shell .nutritionSummary {
-  background: var(--white);
-  border-radius: 8px;
-}
 
-.overviewQuickLinks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 8px 0 28px;
-}
-.shell .overviewDashboard .overviewQuickLinks a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  padding: 10px 18px;
-  border-radius: 5px;
-  font-size: 0.9rem;
-  font-weight: 700;
-  text-decoration: none;
-}
-.overviewQuickLinks .buttonPrimary {
-  color: #ffffff;
-  background: #007e83;
-  border: 1px solid #146e5b;
-}
-.overviewQuickLinks .secondaryAction {
-  background: var(--white);
-}
-.dailySummary {
-  margin: 0 0 24px;
-}
-.dailySummaryHeading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 14px;
-}
-.shell .dailySummaryHeading h2 {
-  margin: 0;
-  font-size: 1.1rem;
-}
-.shell .dailySummaryHeading p {
-  margin: 0;
-  font-size: 0.8rem;
-  color: var(--ink-muted);
-}
-.dailySummaryGrid {
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px;
-}
-.dailySummaryCard {
-  padding: 20px;
-  background: var(--white);
-  border: 1px solid var(--line);
-  border-top: 3px solid #146e5b;
-  border-radius: 7px;
-}
-.dailySummaryCard[data-nutrient="protein"] {
-  border-top-color: #376fa3;
-}
-.dailySummaryCard[data-nutrient="carbohydrate"] {
-  border-top-color: #b47a24;
-}
-.dailySummaryCard[data-nutrient="fat"] {
-  border-top-color: #9261aa;
-}
-.dailySummaryCard dt {
-  margin: 0 0 8px;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-.dailySummaryValue {
-  margin: 0;
-  font-size: 1.65rem;
-  font-weight: 700;
-  letter-spacing: -0.03em;
-  overflow-wrap: anywhere;
-}
-.dailySummaryQualification {
-  margin: 8px 0 0;
-  font-size: 0.8rem;
-  color: var(--ink-muted);
-}
-.dailySummaryNote {
-  margin: 12px 0 0;
-  max-width: 85ch;
-  font-size: 0.8rem;
-  color: var(--ink-muted);
-}
-
-@media (max-width: 1100px) {
-  .dailySummaryGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 760px) {
-  .shell {
-    display: block;
-  }
+@media (max-width: 1200px) {
   .shell .sidebar {
-    position: static;
-    height: auto;
-    padding: 18px;
-    overflow: visible;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px 20px;
   }
   .shell .sidebar nav {
-    display: flex;
-    margin-top: 8px;
-    overflow-x: auto;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: start;
   }
-  .shell .sidebar .accountIdentity {
-    margin-top: 0;
+  .shell .ledgerAccount {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .shell .mealSection .diaryEntry {
+    grid-template-columns: minmax(0, 1fr) 90px;
+  }
+  .shell .ledgerRowName {
+    grid-column: 1 / -1;
+  }
+  .shell .ledgerRowPortion {
+    grid-column: 1;
+  }
+  .shell .ledgerRowEnergy {
+    grid-column: 2;
+  }
+}
+@media (max-width: 980px) {
+  .shell .ledgerWorkspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell .ledgerRail {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shell .ledgerRail .nutritionSummary {
+    grid-row: span 2;
+  }
+  .shell .mealSection .diaryEntry {
+    grid-template-columns: minmax(0, 1fr) clamp(108px, 24%, 210px) 90px;
+  }
+  .shell .ledgerRowName,
+  .shell .ledgerRowPortion,
+  .shell .ledgerRowEnergy {
+    grid-column: auto;
+  }
+}
+@media (max-width: 760px) {
+  .shell .sidebar {
+    padding: 10px 16px;
+  }
+  .shell .sidebar .brand {
+    font-size: 1.3rem;
+  }
+  .shell .sidebar nav a,
+  .shell .appNavMore > summary {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+  .shell .sidebar nav a {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .shell .appNavMorePanel a {
+    flex-direction: row;
   }
   .shell .dashboard {
-    padding: 24px 18px 48px;
+    padding: 22px 16px 40px;
   }
   .shell .dashboardHeader {
-    align-items: flex-start;
     flex-wrap: wrap;
   }
-  .shell .foodTools {
+  .shell .ledgerToolbar {
+    gap: 14px;
+  }
+  .shell .ledgerToolbar .dashboardHeader {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .shell .ledgerToolbar .buttonPrimary {
+    margin-left: 0;
+    min-height: 44px;
+    padding: 10px 18px;
+    font-size: 1rem;
+  }
+  .shell .dailySummaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 18px;
+  }
+  .shell .dailySummaryCard:nth-child(odd) {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .shell .mealSection .diaryEntry {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .shell .ledgerRowName {
+    grid-column: 1 / -1;
+  }
+  .shell .ledgerRowPortion {
+    grid-column: 1;
+  }
+  .shell .ledgerRowEnergy {
+    grid-column: 2;
+  }
+  .shell .ledgerRail {
     grid-template-columns: 1fr;
   }
-  .dailySummaryCard {
-    padding: 16px;
+  .shell .ledgerRail .nutritionSummary {
+    grid-row: auto;
   }
-  .dailySummaryValue {
-    font-size: 1.35rem;
+  .shell .ledgerTableHead {
+    display: none;
+  }
+  .shell .ledgerRowActions button,
+  .shell .ledgerMore > summary {
+    min-height: 44px;
+  }
+  .shell .entryEditor {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
-
-@media (max-width: 380px) {
-  .dailySummaryGrid {
-    grid-template-columns: 1fr;
+@media (max-width: 400px) {
+  .shell .sidebar {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+  .shell .sidebar .brand {
+    font-size: 1.15rem;
+  }
+  .shell .ledgerAccount > summary {
+    padding: 10px 4px;
+    font-size: 0.8rem;
+  }
+  .shell .dashboard {
+    padding: 20px 12px 36px;
+  }
+  .shell .dateNavigator {
+    gap: 6px;
+  }
+  .shell .dateNavigator input {
+    width: 146px;
+  }
+  .shell .dateNavigator button {
+    padding: 8px 10px;
+  }
+  .shell .appNavMore > summary {
+    gap: 4px;
+    padding: 10px 6px;
   }
 }
-
-.dailySummaryCard dd {
-  margin: 0;
-}
-.dailySummaryValue,
-.dailySummaryQualification {
-  display: block;
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
 }
 
 /* Keep the date controls and report metadata secondary to the intake chart. */
@@ -381,37 +999,7 @@
   }
 }
 
-@media screen and (max-width: 760px) {
-  .shell .sidebar {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 8px 12px;
-    padding: 14px 18px;
-  }
-  .shell .sidebar .brand {
-    grid-column: 1;
-    grid-row: 1;
-    font-size: 1.05rem;
-  }
-  .shell .sidebar .signOutButton {
-    grid-column: 2;
-    grid-row: 1;
-    margin: 0;
-    min-height: 40px;
-  }
-  .shell .sidebar nav {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    min-width: 0;
-    margin: 0;
-  }
-  .shell .sidebar .accountIdentity,
-  .shell .sidebar .verificationLink,
-  .shell .sidebar .wellnessNote {
-    grid-column: 1 / -1;
-    margin: 0;
-  }
+@media (max-width: 760px) {
   .shell .reportOverview,
   .shell .reportPanel {
     padding: 16px;
@@ -555,811 +1143,790 @@
   }
 }
 
-@font-face {
-  font-family: "Nourishing Icons";
-  src: url("/fonts/fa-solid-900.woff2") format("woff2");
-  font-style: normal;
-  font-weight: 900;
-  font-display: block;
+/* Dashboard composition. Native progress visuals are driven only by saved targets. */
+.shell .calmOverview {
+  display: grid;
+  gap: 20px;
 }
-.appIcon {
-  display: inline-block;
-  width: 1.15em;
-  flex: 0 0 auto;
-  font-family: "Nourishing Icons", sans-serif;
-  font-style: normal;
-  font-weight: 900;
-  line-height: 1;
+.shell .calmSummary,
+.shell .calmMeals,
+.shell .calmSnapshot {
+  min-width: 0;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--white);
+}
+.shell .calmSummaryHeading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .calmSummaryHeading h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+.shell .calmSummaryHeading > span {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+.shell .calmSummaryBody {
+  display: grid;
+  grid-template-columns: minmax(350px, 0.8fr) minmax(0, 1.2fr);
+  gap: 32px;
+  align-items: center;
+}
+.shell .calmEnergy {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(190px, 1fr) minmax(90px, 0.6fr);
+  align-items: center;
+  gap: 4px 12px;
   text-align: center;
 }
-.shell {
-  color: var(--ink);
-  font-size: 14px;
+.shell .calmEnergyGraphic {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 230px;
+  height: 230px;
+  max-width: 100%;
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  justify-self: center;
 }
-.shell .sidebar .brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 0 8px;
-  font-size: 16px;
-  letter-spacing: 0;
+.shell .calmEnergyGraphic--untracked {
+  height: 180px;
 }
-.shell .sidebar .brand .appIcon {
-  color: #62d2cb;
-  font-size: 21px;
-}
-.shell .sidebar nav {
-  margin-top: 30px;
-  gap: 4px;
-}
-.shell .sidebar nav a {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-height: 43px;
-  padding: 10px 12px;
-  font-size: 14px;
-  white-space: nowrap;
-}
-.shell .sidebar nav .appIcon {
-  font-size: 16px;
-  padding: 0;
-  color: inherit;
-  font-weight: 900;
-}
-.shell .sidebar .accountIdentity {
-  padding-top: 24px;
-}
-.shell .sidebar .wellnessNote {
-  font-size: 11px;
-  line-height: 1.5;
-}
-.shell .overviewDashboard,
-.shell .diaryDashboard {
+.shell .calmEnergyRing {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  max-width: none;
+  height: 100%;
+  fill: none;
+  stroke-width: 8;
 }
-.shell :is(button, input, select, textarea, .buttonPrimary, .secondaryAction) {
-  border-radius: 5px;
+.shell .calmEnergyRingTrack {
+  stroke: #e8e9e2;
 }
-.shell button {
-  font-weight: 600;
+.shell .calmEnergyRingValue {
+  stroke: var(--calm-green);
+  stroke-linecap: round;
 }
-.shell .diaryDashboard .kicker {
-  display: none;
+.shell .calmEnergyValue {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 3px;
+  max-width: 86%;
 }
-.shell .ledgerToolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px 18px;
-  margin-bottom: 18px;
+.shell .calmEnergyValue > span {
+  font-size: 0.95rem;
 }
-.shell .ledgerToolbar .dashboardHeader {
-  margin: 0;
+.shell .calmEnergyValue strong {
+  font-size: clamp(1.25rem, 1.8vw, 1.8rem);
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
 }
-.shell .ledgerToolbar .dateNavigator {
-  margin: 0;
-}
-.shell .ledgerToolbar h1 {
-  font-size: 32px;
-  letter-spacing: -0.04em;
-}
-.shell .ledgerToolbar .statusPill {
-  font-size: 10px;
-  padding: 4px 7px;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.shell .ledgerToolbar .buttonPrimary {
+.shell .nutrientIcon {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  min-height: 40px;
-  padding: 9px 17px;
-  margin-left: auto;
-  color: white;
-  text-decoration: none;
-  font-size: 14px;
+  width: 40px;
+  height: 40px;
 }
-.shell .dateNavigator :is(button, input) {
-  min-height: 40px;
-  font-size: 13px;
+.shell .nutrientIcon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
-.shell .dateNavigator button {
-  padding: 8px 12px;
+.shell .calmEnergyValue .nutrientIcon {
+  color: #b64c30;
+  font-size: 2rem;
+  margin-bottom: 3px;
 }
-.shell .dateNavigator input {
-  width: 156px;
-}
-.shell .diaryStatus {
-  margin: 8px 0;
-}
-.shell .diaryStatus:empty {
+.shell .calmEnergy > .calmProgressTrack {
   display: none;
 }
-.shell .dailySummary {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: white;
-  margin: 0 0 18px;
-  padding: 13px 18px 11px;
-}
-.shell .dailySummaryHeading {
-  margin-bottom: 9px;
-}
-.shell .dailySummaryHeading h2 {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--ink-muted);
-}
-.shell .dailySummaryHeading p {
-  font-size: 11px;
-}
-.shell .dailySummaryGrid {
-  grid-template-columns: 1.3fr repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-.shell .dailySummaryCard {
-  border: 0;
+.shell .calmMacros {
+  min-width: 0;
+  margin: 0;
+  padding-left: 32px;
   border-left: 1px solid var(--line);
-  border-radius: 0;
-  background: transparent;
-  padding: 0 0 0 18px;
 }
-.shell .dailySummaryCard:first-child {
-  border-left: 3px solid var(--forest);
-  padding-left: 12px;
-}
-.shell .dailySummaryCard dt {
-  font-size: 12px;
-  margin-bottom: 1px;
-  color: var(--ink-muted);
-}
-.shell .dailySummaryValue {
-  font-size: 22px;
-  line-height: 1.35;
-  letter-spacing: -0.03em;
-}
-.shell .dailySummaryQualification {
-  font-size: 10px;
-  margin-top: 2px;
-}
-.shell .dailySummaryNote {
-  font-size: 11px;
-  margin: 9px 0 0;
-  max-width: none;
-}
-.shell .ledgerWorkspace {
+.shell .calmMacroRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(300px, 34%, 420px);
-  gap: 20px;
-  align-items: start;
+  grid-template-columns: 135px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 0;
+  align-items: center;
 }
-.shell .ledgerWorkspace .diaryGrid {
-  display: block;
+.shell .calmMacroRow + .calmMacroRow {
+  border-top: 1px solid var(--line);
 }
-.shell .ledgerWorkspace > * {
-  min-width: 0;
-}
-.shell .ledgerRail {
-  min-width: 0;
-  display: grid;
-  gap: 14px;
-  position: sticky;
-  top: 18px;
-}
-.shell .ledgerRail .nutritionSummary {
-  position: static;
-  margin: 0;
-  padding: 17px;
-  border-radius: 6px;
-  background: white;
-}
-.shell .nutritionSummary h2 {
-  font-size: 17px;
-  letter-spacing: -0.025em;
-}
-.shell .nutritionSummary > a {
-  display: inline-block;
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--forest);
-  text-underline-offset: 3px;
-}
-.shell .nutritionSummary dl {
-  margin-top: 12px;
-}
-.shell .nutrientTotal {
-  padding: 9px 0;
-  gap: 8px;
-  font-size: 12px;
-}
-.shell .nutrientTotal dd {
-  overflow-wrap: anywhere;
-}
-.shell .nutrientTotal small {
-  font-size: 10px;
-  max-width: 170px;
-}
-.shell .totalsNote {
-  font-size: 11px;
-  line-height: 1.5;
-}
-.shell .ledgerTableHead {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(100px, 24%, 220px) 94px 86px;
+.shell .calmMacroRow dt {
+  display: flex;
+  align-items: center;
   gap: 10px;
-  background: #edf3f8;
-  padding: 9px 14px;
-  border: 1px solid var(--line);
-  border-radius: 5px 5px 0 0;
-  font-size: 11px;
-  color: var(--ink-muted);
+  font-size: 1.05rem;
 }
-.shell .mealSection {
-  margin: 0 0 12px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: white;
-  overflow: visible;
-}
-.shell .mealHeading {
-  min-height: 45px;
-  padding: 7px 12px;
-  gap: 10px;
-  background: #f0f5f9;
-  border-radius: 5px 5px 0 0;
-}
-.shell .mealHeading h2 {
-  font-size: 15px;
-  line-height: 1.3;
-  letter-spacing: 0;
-}
-.shell .mealHeading .buttonQuiet {
-  padding: 4px 6px;
-  min-height: 30px;
-  font-size: 11px;
-}
-.shell .mealHeading a {
-  font-size: 12px;
-}
-.shell .mealSection ul {
+.shell .calmMacroRow dd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, auto);
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
   margin: 0;
-}
-.shell .mealSection li {
   padding: 0;
 }
-.shell .mealSection li:last-child {
-  border-bottom: 0;
-}
-.shell .mealSection .diaryEntry {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(100px, 24%, 220px) 94px 86px;
-  align-items: center;
-  padding: 10px 14px;
-  gap: 10px;
-  min-height: 53px;
-}
-.shell .ledgerRowName h3 {
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-.shell .ledgerRowName > p {
-  font-size: 11px;
-}
-.shell .ledgerRowPortion {
-  font-size: 12px;
-  color: var(--ink-muted);
-  overflow-wrap: anywhere;
-}
-.shell .ledgerRowEnergy {
-  font-size: 12px;
+.shell .calmMacroRow strong {
+  font-size: 1.15rem;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
-.shell .ledgerRowActions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: end;
-  gap: 4px;
-}
-.shell .ledgerRowActions button {
-  min-height: 32px;
-  padding: 5px 7px;
-  font-size: 11px;
-}
-.shell .ledgerMore {
-  grid-column: 1 / -1;
-  font-size: 12px;
-}
-.shell .ledgerMore > summary {
-  width: fit-content;
-  cursor: pointer;
+.shell .calmQualification {
+  display: block;
   color: var(--ink-muted);
-  min-height: 28px;
-  padding: 4px 0;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  margin-top: 3px;
 }
-.shell .ledgerMore[open] {
-  padding: 8px 0;
-}
-.shell .ledgerMore .entryActions {
-  padding: 10px 0;
-}
-.shell .mealSection .entryNutrients {
-  padding: 0 14px;
-  font-size: 11px;
-}
-.shell .entryNutrients summary {
-  cursor: pointer;
-}
-.shell .mealSection .entryEditor {
-  padding: 14px;
-  font-size: 12px;
-}
-.shell .emptyMeal {
-  margin: 0;
-  padding: 14px;
-  border: 0;
-  font-size: 12px;
-}
-.shell .diaryPageCount {
-  display: inline-block;
-  font-size: 11px;
+.shell .calmTarget {
+  display: block;
   color: var(--ink-muted);
-  margin: 0 14px 10px 0;
+  font-size: 0.8rem;
+  margin: 7px 0 3px;
 }
-.shell .ledgerRail .todayOverviewHeading {
-  display: none;
-}
-.shell .ledgerRail .todayOverviewGrid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
-  margin: 0;
-}
-.shell .ledgerRail .todayOverviewCard {
-  padding: 16px;
-  border-radius: 6px;
-}
-.shell .ledgerRail .todayOverviewCard header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  justify-content: space-between;
-}
-.shell .ledgerRail .todayOverviewCard h3 {
-  font-size: 15px;
-  margin: 0;
-}
-.shell .ledgerRail .todayOverviewCard header a {
-  font-size: 11px;
-}
-.shell .ledgerRail .todayOverviewMetric {
-  margin: 8px 0 0;
-  font-size: 13px;
-}
-.shell .ledgerRail .todayOverviewMetric strong {
-  font-size: 22px;
-}
-.shell .ledgerRail .todayOverviewBody p {
-  font-size: 11px;
-}
-.shell .ledgerRail .diaryGroupSettings {
-  margin: 0;
-  padding: 16px;
-  border-radius: 6px;
-  min-width: 0;
-}
-.shell .ledgerRail .diaryGroupSettings h2 {
-  font-size: 15px;
-  margin-bottom: 10px;
-}
-.shell .ledgerRail .diaryGroupSettings :is(p, label) {
-  font-size: 11px;
-}
-.shell .ledgerRail .diaryGroupSettings textarea {
+.shell .calmProgressTrack {
   width: 100%;
-  min-width: 0;
-  min-height: 78px;
-  resize: vertical;
-  padding: 10px;
-  border: 1px solid var(--line);
-  font: inherit;
-}
-.shell .ledgerRail .diaryGroupSettings .entryActions button {
-  min-height: 32px;
-  padding: 5px 8px;
-  font-size: 11px;
-}
-.shell .ledgerDayNoteHelp {
-  margin: 10px 0;
-  color: var(--ink-muted);
-  font-size: 11px;
-}
-.shell .ledgerDayNoteHelp summary {
-  cursor: pointer;
-}
-.shell .diaryGroupSettingsLauncher {
-  margin-top: 16px;
-  font-size: 12px;
-}
-.shell .emptyDiary {
+  height: 12px;
+  margin: 7px 0 4px;
+  background: #ededeb;
   border-radius: 6px;
-  padding: 24px;
+  overflow: hidden;
 }
-.shell .emptyDiary h2 {
-  font-size: 23px;
+.shell .calmProgressTrack > span {
+  display: block;
+  height: 100%;
+  background: var(--calm-green);
+  border-radius: inherit;
 }
-
-@media (max-width: 1200px) {
-  .shell .ledgerWorkspace {
-    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
-    gap: 14px;
-  }
-  .shell .ledgerTableHead,
-  .shell .mealSection .diaryEntry {
-    grid-template-columns: minmax(0, 1fr) 100px 78px;
-  }
-  .shell .ledgerRowActions {
-    grid-column: 1 / -1;
-    justify-content: start;
-  }
+.shell [data-nutrient="carbohydrate"] .calmProgressTrack > span,
+.shell [data-nutrient="calcium"] .calmProgressTrack > span {
+  background: var(--calm-coral);
 }
-@media (max-width: 1020px) {
-  .shell .ledgerWorkspace {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .shell .ledgerRail {
-    position: static;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .shell .ledgerRail .nutritionSummary {
-    grid-row: span 2;
-  }
-  .shell .ledgerTableHead,
-  .shell .mealSection .diaryEntry {
-    grid-template-columns: minmax(0, 1fr) minmax(100px, 0.45fr) 94px 86px;
-  }
-  .shell .ledgerRowActions {
-    grid-column: auto;
-    justify-content: end;
-  }
+.shell [data-nutrient="fat"] .calmProgressTrack > span,
+.shell [data-nutrient="iron"] .calmProgressTrack > span {
+  background: var(--calm-gold);
 }
-@media (max-width: 760px) {
-  .shell .sidebar .brand {
-    padding: 0;
-    font-size: 15px;
-  }
-  .shell .sidebar nav {
-    gap: 4px;
-  }
-  .shell .sidebar nav a {
-    gap: 7px;
-    min-height: 40px;
-    font-size: 12px;
-    padding: 8px 10px;
-  }
-  .shell .sidebar .accountIdentity {
-    padding-top: 0;
-  }
-  .shell .dashboard {
-    padding: 20px 16px 40px;
-  }
-  .shell .ledgerToolbar {
-    gap: 10px;
-  }
-  .shell .ledgerToolbar .dashboardHeader {
-    width: 100%;
-  }
-  .shell .ledgerToolbar h1 {
-    font-size: 28px;
-  }
-  .shell .ledgerToolbar .buttonPrimary {
-    margin-left: 0;
-  }
-  .shell .dailySummaryGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .shell .dailySummaryCard {
-    padding-left: 12px;
-  }
-  .shell .dailySummaryValue {
-    font-size: 20px;
-  }
-  .shell .dailySummaryNote {
-    line-height: 1.5;
-  }
+.shell .calmProgressLabel {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
 }
-@media (max-width: 580px) {
-  .shell .ledgerTableHead {
-    display: none;
-  }
-  .shell .ledgerRail {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .shell .ledgerRail .nutritionSummary {
-    grid-row: auto;
-  }
-  .shell .mealSection .diaryEntry {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 5px 10px;
-    padding: 12px;
-  }
-  .shell .ledgerRowName {
-    grid-column: 1 / -1;
-  }
-  .shell .ledgerRowName h3 {
-    font-size: 14px;
-  }
-  .shell .ledgerRowPortion {
-    grid-column: 1;
-  }
-  .shell .ledgerRowEnergy {
-    grid-column: 2;
-  }
-  .shell .ledgerRowActions {
-    grid-column: 1 / -1;
-    justify-content: start;
-    margin-top: 3px;
-  }
-  .shell .ledgerRowActions button,
-  .shell .ledgerMore > summary {
-    min-height: 40px;
-  }
-  .shell .mealHeading {
-    gap: 5px;
-  }
-  .shell .entryEditor {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.shell .calmSummaryFooter {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 14px;
+  color: var(--ink-muted);
+  font-size: 0.74rem;
 }
-
-.shell .sidebar .brand > span:not(.appIcon) {
-  color: white;
+.shell .calmSummaryFooter p {
+  margin: 0;
 }
-.shell .mealSection li {
-  position: relative;
+.shell .calmSummaryFooter a {
+  color: var(--forest);
 }
-.shell .ledgerRowActions {
-  padding-right: 28px;
+.shell .calmSummaryFooter button {
+  min-height: 36px;
 }
-.shell .ledgerMore > summary {
-  position: absolute;
-  top: 10px;
-  right: 9px;
+.shell .calmOverviewGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: stretch;
+}
+.shell .calmCardHeading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 16px;
+  margin-bottom: 14px;
+}
+.shell .calmCardHeading h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.25;
+}
+.shell .calmCardHeading > a {
+  color: var(--forest);
+  font-size: 0.95rem;
+  text-decoration: none;
+  padding: 6px 0;
+}
+.shell .calmCardHeading .appIcon {
+  margin-left: 5px;
+}
+.shell .calmMealCoverage {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+.shell .calmMealList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.shell .calmMealRow {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(90px, auto) 40px;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 0;
+  border-top: 1px solid var(--line);
+}
+.shell .calmMealIcon {
+  color: var(--calm-green);
+  font-size: 1.6rem;
+}
+.shell .calmMealDescription {
+  min-width: 0;
+}
+.shell .calmMealDescription h3 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  margin: 0;
+  font-size: 1.1rem;
+  line-height: 1.3;
+}
+.shell .calmMealDescription p {
+  margin: 4px 0;
+  font-size: 0.92rem;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+.shell .calmMealDescription small {
+  color: var(--ink-muted);
+  font-size: 0.75rem;
+}
+.shell .calmMealEnergy {
+  max-width: 150px;
+  font-size: 1rem;
+  text-align: right;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.shell .calmMealAdd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 44px;
+  color: var(--forest);
+  border-radius: 6px;
+}
+.shell .calmMealAdd:hover {
+  background: var(--paper-deep);
+}
+.shell .calmSnapshot {
+  display: flex;
+  flex-direction: column;
+}
+.shell .calmSnapshot dl {
+  margin: 0 0 12px;
+}
+.shell .calmSnapshotRow {
+  display: grid;
+  grid-template-columns: minmax(75px, 0.45fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.shell .calmSnapshotRow:last-child {
+  border-bottom: 0;
+}
+.shell .calmSnapshotRow dt {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.shell .calmSnapshotRow dd {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.95rem;
+  overflow-wrap: anywhere;
+}
+.shell .calmSnapshotRow strong {
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+.shell .calmCardFooter {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  list-style: none;
-}
-.shell .ledgerMore > summary::-webkit-details-marker {
-  display: none;
-}
-.shell .ledgerMore > summary > span:not(.appIcon) {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-.shell .ledgerMore > summary:hover {
-  background: #edf4f7;
-  color: var(--forest);
-}
-.shell .ledgerMore > summary:focus-visible {
-  outline: 3px solid #2269b2;
-  outline-offset: 2px;
-}
-.shell .ledgerMore[open] {
-  padding: 0;
-}
-.shell .ledgerMoreContent {
-  border-top: 1px solid var(--line);
-  padding: 12px 14px;
-  background: #f8fafc;
-}
-.shell .ledgerEntryEvidence {
-  color: var(--ink-muted);
-  font-size: 11px;
-  display: grid;
-  gap: 5px;
-}
-.shell .ledgerPanelHeading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
-}
-.shell .ledgerPanelHeading a {
-  font-size: 11px;
-  color: var(--forest);
-  text-underline-offset: 3px;
-}
-.shell .ledgerContent > .buttonQuiet {
-  font-size: 11px;
-  min-height: 30px;
-  margin-bottom: 8px;
-}
-@media (max-width: 1200px) and (min-width: 1021px) {
-  .shell .ledgerMore > summary {
-    top: 43px;
-  }
-}
-@media (max-width: 580px) {
-  .shell .ledgerRowActions {
-    padding-right: 0;
-  }
-  .shell .ledgerMore > summary {
-    top: auto;
-    bottom: 10px;
-    min-width: 40px;
-  }
-  .shell .ledgerMore[open] > summary {
-    position: static;
-    margin: 0 0 8px auto;
-  }
-}
-
-/* The compact strip and key nutrient view keep the day's controls in reach. */
-.shell .diaryDashboard .dailySummaryHeading {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-.shell .diaryDashboard .dailySummary {
-  padding-top: 14px;
-}
-.shell .ledgerContent .diaryPageCount {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-.shell .ledgerContent > .buttonQuiet {
-  display: block;
-  margin: 0 0 8px auto;
-  padding: 2px 6px;
-  min-height: 24px;
-  border: 0;
-  background: transparent;
-}
-.shell .mealSection .diaryEntry {
-  min-height: 44px;
-  padding-top: 6px;
-  padding-bottom: 6px;
-}
-.shell .ledgerRowActions button {
-  color: var(--forest);
-  background: white;
-  border: 1px solid var(--line);
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.shell .ledgerMore > summary {
-  top: 6px;
-}
-.shell .nutrientTotal {
-  padding: 7px 0;
-}
-.shell .ledgerOtherNutrients {
-  border-top: 1px solid var(--line);
-  margin-top: 8px;
-  padding-top: 8px;
-  font-size: 12px;
-}
-.shell .ledgerOtherNutrients summary {
-  color: var(--forest);
-  cursor: pointer;
-  min-height: 28px;
-}
-.shell .ledgerOtherNutrients summary:focus-visible {
-  outline: 3px solid #2269b2;
-  outline-offset: 2px;
-}
-.shell .nutritionSummary .ledgerSavedTargets {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 11px;
-  text-decoration: none;
-}
-@media (max-width: 1200px) and (min-width: 1021px) {
-  .shell .ledgerMore > summary {
-    top: auto;
-    bottom: 7px;
-  }
-  .shell .ledgerMore[open] > summary {
-    position: static;
-    margin-left: auto;
-  }
-}
-@media (max-width: 580px) {
-  .shell .mealSection .diaryEntry {
-    padding: 12px;
-  }
-  .shell .ledgerMore > summary {
-    top: auto;
-    bottom: 12px;
-  }
-  .shell .ledgerMore[open] > summary {
-    position: static;
-  }
-}
-
-.shell .ledgerAccount {
+  gap: 12px;
   margin-top: auto;
-  font-size: 12px;
-}
-.shell .ledgerAccount > summary {
+  min-height: 48px;
   padding: 10px;
-  cursor: pointer;
-  min-height: 40px;
-  border: 1px solid #587082;
-  border-radius: 5px;
+  color: #244631;
+  background: var(--lime);
+  border-radius: 6px;
+  text-decoration: none;
+  font-weight: 600;
+  text-align: center;
 }
-.shell .ledgerAccount > summary:focus-visible {
-  outline: 3px solid #b1ecdb;
-  outline-offset: 2px;
+.shell .calmOverviewSupport {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 20px;
+  margin-top: 20px;
+  align-items: start;
 }
-.shell .ledgerAccountPanel {
-  padding: 4px 10px 10px;
+.shell .calmOverviewSupport > * {
+  min-width: 0;
 }
-.shell .ledgerAccount .accountIdentity {
-  padding-top: 8px;
-}
-@media (max-width: 760px) {
-  .shell .ledgerAccount {
-    grid-column: 2;
-    grid-row: 1;
-    margin: 0;
-    position: relative;
-  }
-  .shell .ledgerAccountPanel {
-    position: absolute;
-    z-index: 5;
-    width: 240px;
-    max-width: calc(100vw - 40px);
-    top: 46px;
-    right: 0;
-    padding: 14px;
-    background: #192c40;
-    border: 1px solid #587082;
-    border-radius: 5px;
-  }
-  .shell .ledgerAccount .signOutButton {
-    margin-top: 10px;
-  }
-  .shell .ledgerAccount .verificationLink {
-    display: inline-block;
-    padding: 8px 0;
-  }
-  .shell .ledgerAccount .wellnessNote {
-    margin-top: 8px;
-  }
-}
-
-.shell .ledgerRail .todayOverview {
+.shell .calmOverviewSupport .todayOverview {
   margin: 0;
 }
-.shell .ledgerRail .todayOverviewBody {
-  min-height: 0;
-  margin-top: 8px;
+.shell .calmOverviewSupport .todayOverviewHeading {
+  display: none;
+}
+.shell .calmOverviewSupport .todayOverviewGrid {
+  grid-template-columns: 1fr;
+}
+.shell .calmOverviewSupport .todayOverviewCard {
+  padding: 18px 20px;
+}
+.shell .calmOverviewSupport .todayOverviewBody {
+  margin: 8px 0 0;
+}
+.shell .calmOverviewSupport .todayOverviewMetric {
+  margin: 0;
+}
+.shell .calmOverviewSupport .todayOverviewBody p {
+  margin: 4px 0 0;
+}
+.shell .calmOverviewSupport .diaryGroupSettings {
+  margin: 0;
+  padding: 20px;
+  border: 1px solid var(--line);
+}
+.overviewQuickLinks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 0 8px;
+}
+.shell .overviewQuickLinks a {
+  color: var(--forest);
+  min-height: 36px;
+  padding: 4px 0;
+  font-size: 0.8rem;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+@media (min-width: 1800px) {
+  .shell .calmSummaryBody {
+    grid-template-columns: minmax(360px, 0.7fr) minmax(0, 1.3fr);
+    gap: 48px;
+  }
+  .shell .calmMacros {
+    padding-left: 48px;
+  }
+  .shell .calmMacroRow {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+  .shell .calmEnergyGraphic {
+    width: 250px;
+    height: 250px;
+  }
+  .shell .calmEnergyGraphic--untracked {
+    height: 195px;
+  }
+}
+@media (max-width: 1100px) {
+  .shell .calmSummaryBody {
+    grid-template-columns: minmax(220px, 0.65fr) minmax(0, 1.35fr);
+    gap: 20px;
+  }
+  .shell .calmMacros {
+    padding-left: 20px;
+  }
+  .shell .calmMacroRow {
+    grid-template-columns: 115px minmax(0, 1fr);
+    gap: 10px;
+  }
+  .shell .calmOverviewGrid,
+  .shell .calmOverviewSupport {
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  }
+  .shell .calmMealRow {
+    grid-template-columns: 32px minmax(0, 1fr) 40px;
+    gap: 10px;
+  }
+  .shell .calmMealDescription {
+    grid-column: 2;
+  }
+  .shell .calmMealEnergy {
+    grid-column: 2;
+    text-align: left;
+    max-width: none;
+    font-size: 0.9rem;
+  }
+  .shell .calmMealAdd {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+}
+@media (max-width: 820px) {
+  .shell .calmOverviewGrid,
+  .shell .calmOverviewSupport {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell .calmSummaryBody {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .shell .calmMacros {
+    padding: 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .shell .calmEnergyGraphic {
+    width: 215px;
+    height: 215px;
+  }
+  .shell .calmEnergyGraphic--untracked {
+    height: 145px;
+  }
+  .shell .calmMacroRow {
+    grid-template-columns: 145px minmax(0, 1fr);
+  }
+  .shell .calmMealRow {
+    grid-template-columns: 42px minmax(0, 1fr) minmax(90px, auto) 40px;
+  }
+  .shell .calmMealEnergy,
+  .shell .calmMealAdd {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .shell .calmMealEnergy {
+    text-align: right;
+  }
+  .shell .calmOverviewSupport .todayOverviewGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 540px) {
+  .shell .calmSummary,
+  .shell .calmMeals,
+  .shell .calmSnapshot {
+    padding: 16px;
+  }
+  .shell .calmSummaryHeading {
+    flex-wrap: wrap;
+  }
+  .shell .calmMacroRow {
+    grid-template-columns: 108px minmax(0, 1fr);
+    gap: 8px;
+  }
+  .shell .calmMacroRow dt {
+    gap: 6px;
+    font-size: 0.9rem;
+  }
+  .shell .nutrientIcon {
+    width: 32px;
+    height: 32px;
+  }
+  .shell .calmMacroRow strong {
+    font-size: 1rem;
+  }
+  .shell .calmCardHeading h2 {
+    font-size: 1.3rem;
+  }
+  .shell .calmMealRow {
+    grid-template-columns: 28px minmax(0, 1fr) 36px;
+    gap: 8px;
+  }
+  .shell .calmMealEnergy {
+    grid-column: 2;
+    text-align: left;
+  }
+  .shell .calmMealAdd {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+    min-width: 36px;
+  }
+  .shell .calmMealIcon {
+    font-size: 1.35rem;
+  }
+  .shell .calmMealDescription h3 {
+    font-size: 1rem;
+  }
+  .shell .calmMealDescription p {
+    font-size: 0.85rem;
+  }
+  .shell .calmSnapshotRow {
+    grid-template-columns: minmax(65px, 0.4fr) minmax(0, 1fr);
+    gap: 10px;
+  }
+  .shell .calmOverviewSupport .todayOverviewGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.shell .calmEnergyRemaining {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  margin: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 1.5rem;
+  line-height: 1.4;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.shell .overviewDashboard .kicker {
+  display: none;
+}
+.shell .calmMacros h3 {
+  font-size: 1.35rem;
+  margin: 0 0 4px;
+}
+.shell .calmMacros dl {
+  margin: 0;
+}
+.shell .calmMacroRow dd > strong {
+  grid-column: 1;
+  grid-row: 1;
+}
+.shell .calmMacroRow dd > .calmTarget {
+  grid-column: 2 / 4;
+  grid-row: 1;
+  justify-self: end;
+  margin: 0;
+}
+.shell .calmMacroRow dd > .calmProgressTrack {
+  grid-column: 1 / 3;
+  grid-row: 2;
+}
+.shell .calmMacroRow dd > .calmProgressLabel {
+  grid-column: 3;
+  grid-row: 2;
+  color: var(--ink);
+  font-weight: 600;
+}
+.shell .calmMacroRow dd > .calmQualification {
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.shell .calmSnapshotRow .calmProgressTrack {
+  grid-column: 1;
+  grid-row: 3;
+}
+.shell .calmSnapshotRow .calmProgressLabel {
+  grid-column: 2;
+  grid-row: 3;
+  font-weight: 600;
+  color: var(--ink);
+}
+.shell .calmSnapshotRow .calmTarget {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin: 0;
+}
+.shell .calmSnapshotRow .calmQualification {
+  grid-column: 1 / -1;
+}
+.shell :is(.calmMacroRow, .calmSnapshotRow)[data-exact="true"] .calmQualification {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .calmEnergy > .calmQualification {
+  grid-column: 1 / -1;
+  font-size: 0.7rem;
+}
+.shell .calmEnergyValue .calmTarget {
+  margin-top: 4px;
+  font-size: 0.8rem;
+  max-width: 150px;
+}
+.shell .calmMealIcon:has(.appIcon) {
+  color: var(--calm-green);
+}
+@media (max-width: 1100px) {
+  .shell .calmEnergy {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell .calmEnergyRemaining {
+    grid-column: 1;
+    grid-row: auto;
+    border-left: 0;
+    padding-left: 0;
+    font-size: 1.2rem;
+  }
+}
+@media (max-width: 820px) {
+  .shell .calmEnergy {
+    grid-template-columns: minmax(180px, 1fr) minmax(110px, 0.6fr);
+    max-width: 470px;
+    justify-self: center;
+  }
+  .shell .calmEnergyRemaining {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    padding-left: 12px;
+    border-left: 1px solid var(--line);
+  }
+  .shell .calmMacros h3 {
+    margin-top: 18px;
+  }
+}
+@media (max-width: 540px) {
+  .shell .calmEnergy {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell .calmEnergyRemaining {
+    grid-column: 1;
+    grid-row: auto;
+    border: 0;
+    padding: 0;
+  }
+  .shell .calmMacroRow {
+    grid-template-columns: 100px minmax(0, 1fr);
+  }
+  .shell .calmMacroRow dd {
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  }
+  .shell .calmMacroRow dd > .calmTarget {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .shell .calmMacroRow dd > .calmProgressTrack {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  .shell .calmMacroRow dd > .calmProgressLabel {
+    grid-column: 2;
+    grid-row: 3;
+  }
+  .shell .calmMacroRow dd > .calmQualification {
+    grid-row: 4;
+  }
+}
+
+.shell .sidebar .appNavMorePanel {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+.shell .sidebar .appNavMorePanel a {
+  flex-direction: row;
+  justify-content: start;
+}
+.shell .calmNote {
+  min-width: 0;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.shell .calmNote > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding: 20px;
+  min-height: 94px;
+  cursor: pointer;
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.shell .calmNote > summary span {
+  color: var(--forest);
+  font-size: 0.85rem;
+  font-weight: 400;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.shell .calmNote > .diaryGroupSettings {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.shell .calmNote .diaryGroupSettings h2 {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .calmMealIcon:has(.appIcon) {
+  font-size: 1.8rem;
+}
+
+.shell .calmEnergy[data-exact="true"] > .calmQualification {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .calmMealDescription {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 2px 16px;
+}
+.shell .calmMealDescription h3 {
+  grid-column: 1;
+}
+.shell .calmMealDescription p {
+  grid-column: 1;
+  margin: 0;
+  font-size: 1rem;
+}
+.shell .calmMealDescription small {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  font-size: 0.85rem;
+}
+.shell .calmMealRow {
+  padding: 14px 0;
+}
+@media (max-width: 1100px) {
+  .shell .calmMealDescription {
+    display: block;
+  }
+  .shell .calmMealDescription p {
+    margin: 4px 0;
+    font-size: 0.9rem;
+  }
+  .shell .calmMealDescription small {
+    font-size: 0.8rem;
+  }
+}
+
+/* Keep keyboard focus inside the scrolling navigation strip. */
+.shell .appNavPrimary a:focus-visible {
+  outline-offset: -3px;
+}
+.shell .calmTarget,
+.shell .calmProgressLabel {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }

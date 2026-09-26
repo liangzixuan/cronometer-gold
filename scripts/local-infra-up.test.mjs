@@ -479,6 +479,9 @@ test("rejects unsafe rendered Compose topology before any mutation or secret out
       config.services["object-store"].volumes[1].bind.create_host_path = true;
     },
     (config) => {
+      config.services["object-store"].volumes[1].bind = {};
+    },
+    (config) => {
       config.services["object-store"].volumes[1].source = "/unreviewed/s3.json";
     },
     (config) => {
@@ -761,6 +764,70 @@ test("locks package scripts, docs, readiness health, and no-argument CLIs", () =
   }
 });
 
+function composeBoundaryDiagnostic(rendered, dockerVersion, composeVersion) {
+  let config;
+  try {
+    config = JSON.parse(rendered);
+  } catch {
+    config = undefined;
+  }
+  const mount = config?.services?.["object-store"]?.volumes?.[1];
+  const bind = mount?.bind;
+  const shape = (value) =>
+    typeof value === "boolean"
+      ? value
+      : value === null
+        ? "null"
+        : Array.isArray(value)
+          ? "array"
+          : typeof value;
+  const keys = bind && typeof bind === "object" && !Array.isArray(bind) ? Object.keys(bind) : [];
+  const known = new Set(["create_host_path", "propagation", "recursive", "selinux"]);
+  return JSON.stringify({
+    bindKeys: keys.filter((key) => known.has(key)).sort(),
+    bindType: shape(bind),
+    composeVersion: /^v?(\d+\.\d+\.\d+)\b/u.exec(composeVersion)?.[1] ?? "unavailable",
+    createHostPath: shape(bind?.create_host_path),
+    dockerVersion: /^Docker version (\d+\.\d+\.\d+)\b/u.exec(dockerVersion)?.[1] ?? "unavailable",
+    readOnly: shape(mount?.read_only),
+    unknownBindKeyCount: keys.filter((key) => !known.has(key)).length,
+  });
+}
+
+test("Compose boundary diagnostics expose only versions, known keys, and boolean shapes", () => {
+  const config = composeConfiguration();
+  config.services.postgres.environment.POSTGRES_PASSWORD = "protected-secret";
+  const mount = config.services["object-store"].volumes[1];
+  mount.source = "/protected-secret";
+  mount.bind = { create_host_path: "protected-secret", "protected-secret": true };
+  const diagnostic = composeBoundaryDiagnostic(
+    JSON.stringify(config),
+    "Docker version 29.7.2, build protected-secret",
+    "v5.5.0 protected-secret",
+  );
+  assert.doesNotMatch(diagnostic, /protected-secret/u);
+  assert.deepEqual(JSON.parse(diagnostic), {
+    bindKeys: ["create_host_path"],
+    bindType: "object",
+    composeVersion: "5.5.0",
+    createHostPath: "string",
+    dockerVersion: "29.7.2",
+    readOnly: true,
+    unknownBindKeyCount: 1,
+  });
+  for (const bind of [{}, { create_host_path: false }, { create_host_path: true }, null, []]) {
+    mount.bind = bind;
+    const summary = JSON.parse(composeBoundaryDiagnostic(JSON.stringify(config), "", ""));
+    assert.equal(summary.createHostPath, bind?.create_host_path ?? "undefined");
+    assert.equal(summary.dockerVersion, "unavailable");
+    assert.equal(summary.composeVersion, "unavailable");
+  }
+  assert.equal(
+    JSON.parse(composeBoundaryDiagnostic("protected-secret", "", "")).bindType,
+    "undefined",
+  );
+});
+
 test("accepts the genuine offline Compose render at the exact startup boundary", () => {
   const rendered = spawnSync(
     "docker",
@@ -779,7 +846,25 @@ test("accepts the genuine offline Compose render at the exact startup boundary",
     { cwd: repositoryRoot, encoding: "utf8", env: process.env, shell: false, timeout: 15000 },
   );
   assert.equal(rendered.status, 0, "offline Compose render must succeed");
-  assert.doesNotThrow(() => assertComposeConfiguration(rendered.stdout));
+  try {
+    assertComposeConfiguration(rendered.stdout);
+  } catch (error) {
+    const version = (args) =>
+      spawnSync("docker", args, {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+        env: process.env,
+        shell: false,
+        timeout: 15000,
+      }).stdout ?? "";
+    assert.fail(
+      `Compose boundary rejected the genuine offline render: ${composeBoundaryDiagnostic(
+        rendered.stdout,
+        version(["--version"]),
+        version(["compose", "version", "--short"]),
+      )}; stage=${error instanceof LocalInfrastructureError ? error.stage : "unknown"}`,
+    );
+  }
 });
 
 test("prepares the validated rendered port and stops before service startup on private-state failure", () => {

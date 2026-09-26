@@ -37,9 +37,10 @@ describe("overview route", () => {
 
   it("renders the compact dashboard with same-date actions and one active navigation link", async () => {
     const markup = renderToStaticMarkup(await OverviewPage());
-    expect(markup).toContain("<h1>Dashboard</h1>");
+    expect(markup).toContain("<h1>Your day at a glance</h1>");
     expect(markup).toContain('aria-label="Dashboard actions"');
-    expect(markup).toContain('href="/foods?date=2026-11-01">Add food</a>');
+    expect(markup).toContain('href="/foods?date=2026-11-01"');
+    expect(markup).toContain("Add food</a>");
     expect(markup).toContain('href="/dashboard?date=2026-11-01">Open diary</a>');
     expect(markup).toContain('href="/reports?to=2026-11-01">Nutrition report</a>');
     expect(markup).toContain('aria-current="page" href="/overview?date=2026-11-01"');
