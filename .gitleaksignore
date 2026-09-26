@@ -3,3 +3,15 @@ d02896a3d2e3c5ed608758f558df0b6aad421669:packages/ingestion/test/real-artifact.t
 a513345de1b21b2e17819688a0d7d8c6aa448ead:packages/db/test/catalogue-validation.test.ts:generic-api-key:144
 a513345de1b21b2e17819688a0d7d8c6aa448ead:apps/ingest/test/run.test.ts:generic-api-key:403
 4b27e4873be94f86808555126dc80746054f498d:apps/mobile/src/diary/quick-add-outbox.test.ts:generic-api-key:1017
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:3
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:18
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:40
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:63
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:85
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:108
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:130
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:153
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:176
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:197
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:220
+f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:generic-api-key:727

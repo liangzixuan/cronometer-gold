@@ -83,7 +83,7 @@ test("native parser tests are mandatory and build evidence is outside runtime", 
   );
   assert.match(dockerfile, /COPY --from=build \/review\/NOTICES\.txt \/licenses\/NOTICES\.txt/);
 });
-test("reviewed module inputs match their frozen hashes and exact candidate version map", () => {
+test("reviewed module inputs match their frozen hashes and complete native version map", () => {
   const mod = read("object-store.go.mod");
   const sums = read("object-store.go.sum");
   assert.equal(hash(mod), lock.goModSha256);
@@ -94,7 +94,8 @@ test("reviewed module inputs match their frozen hashes and exact candidate versi
   assert.equal(requires.length, 503);
   for (const [, path, version] of requires)
     assert.equal(lock.expectedSelectedVersions[path], version);
-  assert.equal(Object.keys(lock.expectedSelectedVersions).length, 508);
+  assert.equal(Object.keys(lock.expectedSelectedVersions).length, 1159);
+  assert.equal(lock.expectedSelectedVersions["atomicgo.dev/assert"], "v0.0.2");
   assert.deepEqual(lock.allowedReplacements, [
     {
       path: "github.com/tyler-smith/go-bip39",
@@ -115,6 +116,52 @@ test("new module evidence is old enough and pins official checksums and licenses
     assert.match(module.licenseSha256, /^[0-9a-f]{64}$/);
     assert.ok(module.licenseIdentifiers.length > 0);
   }
-  assert.equal(lock.nativeGoGraphVerified, false);
-  assert.equal(lock.sumdbSignatureVerificationPending, true);
+  assert.equal(Object.hasOwn(lock, "nativeGoGraphVerified"), false);
+  assert.equal(Object.hasOwn(lock, "sumdbSignatureVerificationPending"), false);
+});
+test("native resolution provenance binds the full graph and frozen input checksums", () => {
+  const resolution = lock.nativeResolution;
+  assert.equal(resolution.toolchainVersion, "go1.26.6");
+  assert.ok(PATCHED_STORE.goImage.includes("golang:1.26.6-"));
+  assert.equal(resolution.hostPlatform, "linux/amd64");
+  assert.equal(resolution.targetSettings, "linux/arm64");
+  assert.deepEqual(resolution.graphCommand, ["go", "list", "-mod=readonly", "-m", "-json", "all"]);
+  assert.equal(resolution.originalSelectedCount, 1159);
+  assert.equal(resolution.selectedCount, Object.keys(lock.expectedSelectedVersions).length);
+  assert.equal(resolution.actualVersionChangeCount, 8);
+  assert.equal(resolution.addedChecksumRecordCount, 849);
+  assert.equal(resolution.goModSha256, lock.goModSha256);
+  assert.equal(resolution.goSumSha256, lock.goSumSha256);
+  const selected = Object.fromEntries(
+    Object.keys(lock.expectedSelectedVersions)
+      .sort()
+      .map((path) => [path, lock.expectedSelectedVersions[path]]),
+  );
+  assert.equal(hash(`${JSON.stringify(selected)}\n`), resolution.selectedVersionsSha256);
+  for (const name of [
+    "toolchainArchiveSha256",
+    "originalGoModSha256",
+    "originalGoSumSha256",
+    "originalGraphSha256",
+    "resolvedGraphSha256",
+    "originalSelectedVersionsSha256",
+  ])
+    assert.match(resolution[name], /^[0-9a-f]{64}$/);
+  const sums = new Map(
+    read("object-store.go.sum")
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const [path, version, checksum] = line.split(" ");
+        return [`${path}@${version}`, checksum];
+      }),
+  );
+  for (const [path, version] of Object.entries(selected)) {
+    const replacement = lock.allowedReplacements.find((item) => item.path === path);
+    const actualPath = replacement?.replacementPath ?? path;
+    const actualVersion = replacement?.replacementVersion ?? version;
+    assert.match(sums.get(`${actualPath}@${actualVersion}`), /^h1:[A-Za-z0-9+/]{43}=$/);
+    assert.match(sums.get(`${actualPath}@${actualVersion}/go.mod`), /^h1:[A-Za-z0-9+/]{43}=$/);
+  }
+  assert.match(resolution.qualificationBoundary, /native ARM64/);
 });

@@ -58,7 +58,7 @@ LABEL org.opencontainers.image.source="https://github.com/liangzixuan/cronometer
       io.cronometer.runtime.component="object-store" \
       io.cronometer.upstream.source.revision="c5073360007d28385a33426a42ac3e4ec504c5a3" \
       io.cronometer.upstream.image.digest="sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882" \
-      io.cronometer.module-lock.sha256="123ae5b96deb916e9b4614fa43c15e788beed08ad9722465260017eccbdc5155" \
+      io.cronometer.module-lock.sha256="dec013a4efaa79c0875d64f4e7471302dbac939e779ead1b59de6bae6d1d561c" \
       io.cronometer.grpc.version="v1.85.0-dev.0.20260825072537-93e31b48545e"
 # Preserve the upstream entrypoint, companions and its drop to seaweed UID/GID 1000.
 COPY --from=build /out/weed /usr/bin/weed
