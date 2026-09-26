@@ -372,7 +372,7 @@ function assertHealthcheck(serviceName, service, stage) {
   }
 }
 
-function assertPersistentVolume(serviceName, service, stage) {
+function assertPersistentVolume(serviceName, service, stage, composeVersion) {
   const expected = expectedVolumeMounts.get(serviceName);
   const volumes = service?.volumes ?? [];
   if (!Array.isArray(volumes)) fail(stage);
@@ -384,8 +384,15 @@ function assertPersistentVolume(serviceName, service, stage) {
   if (serviceName === "object-store") {
     const configMount = volumes[1];
     exactObjectKeys(configMount, ["bind", "read_only", "source", "target", "type"], stage);
-    exactObjectKeys(configMount.bind, ["create_host_path"], stage);
-    if (configMount.bind.create_host_path !== false) fail(stage);
+    // Compose 2.38.2 uses compose-go 2.7.1's bool/json omitempty: false is absent.
+    // Newer serializers can omit true instead, so this shape needs an exact version.
+    const omittedFalse =
+      (composeVersion === "2.38.2" || composeVersion === "v2.38.2") &&
+      typeof configMount.bind === "object" &&
+      configMount.bind !== null &&
+      Object.keys(configMount.bind).length === 0;
+    exactObjectKeys(configMount.bind, omittedFalse ? [] : ["create_host_path"], stage);
+    if (!omittedFalse && configMount.bind.create_host_path !== false) fail(stage);
     if (
       configMount.type !== "bind" ||
       configMount.source !== resolve(repositoryRoot, ".local-data/object-store/s3.json") ||
@@ -406,7 +413,7 @@ function assertPersistentVolume(serviceName, service, stage) {
   }
 }
 
-export function assertComposeConfiguration(value) {
+export function assertComposeConfiguration(value, composeVersion) {
   const stage = "Compose boundary validation";
   const config = parseJson(stage, value);
   exactObjectKeys(config, ["name", "networks", "services", "volumes"], stage);
@@ -447,7 +454,7 @@ export function assertComposeConfiguration(value) {
     assertServiceRuntime(serviceName, service, stage);
     assertHealthcheck(serviceName, service, stage);
     assertNetworkAttachment(service, stage);
-    assertPersistentVolume(serviceName, service, stage);
+    assertPersistentVolume(serviceName, service, stage, composeVersion);
 
     if (!Array.isArray(service.ports) || service.ports.length !== targets.length) fail(stage);
     const mappings = service.ports
@@ -565,7 +572,14 @@ export function startLocalInfrastructure(options = {}) {
     [...composePrefix, "config", "--format", "json"],
     STAGE_TIMEOUT_MS,
   );
-  const expectedPublishedPorts = assertComposeConfiguration(renderedConfig);
+  const composeVersion = execute(
+    run,
+    environment,
+    "Compose version",
+    ["compose", "version", "--short"],
+    STAGE_TIMEOUT_MS,
+  ).trim();
+  const expectedPublishedPorts = assertComposeConfiguration(renderedConfig, composeVersion);
   write("[local-infra] Compose configuration accepted.");
   try {
     prepare({ port: expectedPublishedPorts.get("object-store")[0].published });
@@ -616,7 +630,14 @@ export function statusLocalInfrastructure(options = {}) {
     [...composePrefix, "config", "--format", "json"],
     STAGE_TIMEOUT_MS,
   );
-  const expectedPublishedPorts = assertComposeConfiguration(renderedConfig);
+  const composeVersion = execute(
+    run,
+    environment,
+    "Compose version",
+    ["compose", "version", "--short"],
+    STAGE_TIMEOUT_MS,
+  ).trim();
+  const expectedPublishedPorts = assertComposeConfiguration(renderedConfig, composeVersion);
   write("[local-infra] Compose configuration accepted.");
 
   const status = execute(

@@ -273,6 +273,7 @@ function createRunner(replacements = new Map()) {
     success("linux\n"),
     success("docker-desktop|Docker Desktop\n"),
     success(JSON.stringify(composeConfiguration())),
+    success("5.5.0\n"),
     success(),
     success(),
     success(persistentStatus()),
@@ -371,6 +372,7 @@ test("uses the exact shell-free fail-closed local lifecycle", () => {
       ["docker", ["version", "--format", "{{.Server.Os}}"]],
       ["docker", ["info", "--format", "{{.Name}}|{{.OperatingSystem}}"]],
       ["docker", [...composePrefix, "config", "--format", "json"]],
+      ["docker", ["compose", "version", "--short"]],
       [
         "docker",
         [...composePrefix, "up", "-d", "--wait", "--wait-timeout", "300", ...persistentServices],
@@ -558,7 +560,7 @@ test("rejects unsafe rendered Compose topology before any mutation or secret out
     const outcome = callStart(runner);
     assert.ok(outcome.error instanceof LocalInfrastructureError);
     assert.equal(outcome.error.stage, "Compose boundary validation");
-    assert.equal(runner.calls.length, 4);
+    assert.equal(runner.calls.length, 5);
     assert.equal(
       JSON.stringify({ error: outcome.error.message, messages: outcome.messages }).includes(
         "protected-secret",
@@ -572,12 +574,170 @@ test("rejects unsafe rendered Compose topology before any mutation or secret out
   }
 });
 
+test("accepts the evidenced omitted false bind flag only for Compose 2.38.2", () => {
+  const config = composeConfiguration();
+  config.services["object-store"].volumes[1].bind = {};
+  for (const version of ["2.38.2", "v2.38.2"]) {
+    assert.deepEqual(
+      assertComposeConfiguration(JSON.stringify(config), version),
+      new Map([
+        ["postgres", [{ published: 5432, target: 5432 }]],
+        ["meilisearch", [{ published: 7700, target: 7700 }]],
+        ["object-store", [{ published: 9000, target: 9000 }]],
+        [
+          "mailpit",
+          [
+            { published: 1025, target: 1025 },
+            { published: 8025, target: 8025 },
+          ],
+        ],
+      ]),
+    );
+  }
+});
+
+test("rejects ambiguous bind flags and renderer identities before preparation or service actions", () => {
+  for (const version of [
+    undefined,
+    "",
+    "5.5.0",
+    "2.38.1",
+    "2.38.20",
+    "2.38.2-extra",
+    "prefix2.38.2",
+    "2.38.2\nextra",
+  ]) {
+    const config = composeConfiguration();
+    config.services["object-store"].volumes[1].bind = {};
+    assert.throws(
+      () => assertComposeConfiguration(JSON.stringify(config), version),
+      LocalInfrastructureError,
+    );
+  }
+  const mutations = [
+    (mount) => {
+      delete mount.bind;
+    },
+    (mount) => {
+      mount.bind = null;
+    },
+    (mount) => {
+      mount.bind = [];
+    },
+    (mount) => {
+      mount.bind = "";
+    },
+    (mount) => {
+      mount.bind.create_host_path = true;
+    },
+    (mount) => {
+      mount.bind.create_host_path = "false";
+    },
+    (mount) => {
+      mount.bind.create_host_path = null;
+    },
+    (mount) => {
+      mount.bind.create_host_path = 0;
+    },
+    (mount) => {
+      mount.bind.propagation = "rshared";
+    },
+    (mount) => {
+      mount.bind = { unreviewed: false };
+    },
+    (mount) => {
+      mount.source = "/unreviewed/s3.json";
+    },
+    (mount) => {
+      mount.target = "/unreviewed/s3.json";
+    },
+    (mount) => {
+      mount.read_only = false;
+    },
+  ];
+  for (const version of ["2.38.2", "5.5.0"]) {
+    for (const omitted of [false, true]) {
+      for (const mutate of mutations) {
+        const config = composeConfiguration();
+        if (omitted) config.services["object-store"].volumes[1].bind = {};
+        mutate(config.services["object-store"].volumes[1]);
+        for (const call of [callStart, callStatus]) {
+          const runner = createRunner(
+            new Map([
+              [3, success(JSON.stringify(config))],
+              [4, success(version)],
+            ]),
+          );
+          let prepared = false;
+          const outcome = call(runner, {
+            prepare: () => {
+              prepared = true;
+            },
+          });
+          assert.equal(outcome.error?.stage, "Compose boundary validation");
+          assert.equal(prepared, false);
+          assert.equal(runner.calls.length, 5);
+        }
+      }
+    }
+  }
+});
+
+test("startup and status bind omitted false to the successful actual Compose version", () => {
+  const config = composeConfiguration();
+  config.services["object-store"].volumes[1].bind = {};
+  for (const call of [callStart, callStatus]) {
+    for (const version of ["2.38.2\n", "v2.38.2\n"]) {
+      const replacements = new Map([
+        [3, success(JSON.stringify(config))],
+        [4, success(version)],
+      ]);
+      if (call === callStatus) replacements.set(5, success(persistentStatus()));
+      const runner = createRunner(replacements);
+      assert.equal(call(runner).error, undefined);
+      assert.deepEqual(runner.calls[4].args, ["compose", "version", "--short"]);
+      assert.equal(
+        runner.calls.filter(({ args }) => args.join(" ") === "compose version --short").length,
+        1,
+      );
+    }
+    const rejected = [
+      success("5.5.0\n"),
+      success("2.38.2-extra\n"),
+      success(""),
+      { ...success("2.38.2\n"), status: 1 },
+      { ...success("2.38.2\n"), error: new Error("protected-child-output") },
+      { ...success("2.38.2\n"), signal: "SIGTERM" },
+      { ...success("2.38.2\n"), stdout: undefined },
+    ];
+    for (const result of rejected) {
+      const runner = createRunner(
+        new Map([
+          [3, success(JSON.stringify(config))],
+          [4, result],
+        ]),
+      );
+      let prepared = false;
+      const outcome = call(runner, {
+        prepare: () => {
+          prepared = true;
+        },
+      });
+      assert.ok(outcome.error instanceof LocalInfrastructureError);
+      assert.equal(prepared, false);
+      assert.equal(runner.calls.length, 5);
+      assert.doesNotMatch(outcome.error.message, /protected-child-output/u);
+    }
+  }
+});
+
 test("stops at the first failed lifecycle stage without exposing child output", () => {
   const stages = [
     { call: 3, count: 4, stage: "Compose configuration" },
-    { call: 4, count: 5, stage: "persistent-service startup" },
-    { call: 5, count: 6, stage: "object-store bootstrap" },
-    { call: 6, count: 7, stage: "persistent-service postcondition" },
+    { call: 4, count: 5, stage: "Compose version" },
+    { call: 5, count: 6, stage: "persistent-service startup" },
+    { call: 6, count: 7, stage: "object-store bootstrap" },
+    { call: 7, count: 8, stage: "persistent-service postcondition" },
   ];
   for (const { call, count, stage } of stages) {
     const runner = createRunner(
@@ -651,7 +811,7 @@ test("matches healthy loopback publishers to the rendered host-port mapping", ()
   ];
 
   for (const output of cases) {
-    const runner = createRunner(new Map([[6, success(output)]]));
+    const runner = createRunner(new Map([[7, success(output)]]));
     const outcome = callStart(runner);
     assert.ok(outcome.error instanceof LocalInfrastructureError);
     assert.equal(outcome.error.stage, "persistent-service postcondition");
@@ -665,7 +825,7 @@ test("matches healthy loopback publishers to the rendered host-port mapping", ()
   const customRunner = createRunner(
     new Map([
       [3, success(JSON.stringify(custom))],
-      [6, success(customStatus)],
+      [7, success(customStatus)],
     ]),
   );
   assert.equal(
@@ -675,7 +835,7 @@ test("matches healthy loopback publishers to the rendered host-port mapping", ()
 });
 
 test("uses the same guarded boundary and effective model for status", () => {
-  const runner = createRunner(new Map([[4, success(persistentStatus())]]));
+  const runner = createRunner(new Map([[5, success(persistentStatus())]]));
   const outcome = callStatus(runner);
   assert.equal(outcome.error, undefined);
   assert.deepEqual(
@@ -685,6 +845,7 @@ test("uses the same guarded boundary and effective model for status", () => {
       ["docker", ["version", "--format", "{{.Server.Os}}"]],
       ["docker", ["info", "--format", "{{.Name}}|{{.OperatingSystem}}"]],
       ["docker", [...composePrefix, "config", "--format", "json"]],
+      ["docker", ["compose", "version", "--short"]],
       ["docker", [...composePrefix, "ps", "--format", "json"]],
     ],
   );
@@ -846,8 +1007,20 @@ test("accepts the genuine offline Compose render at the exact startup boundary",
     { cwd: repositoryRoot, encoding: "utf8", env: process.env, shell: false, timeout: 15000 },
   );
   assert.equal(rendered.status, 0, "offline Compose render must succeed");
+  const composeVersionResult = spawnSync("docker", ["compose", "version", "--short"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+    env: process.env,
+    shell: false,
+    timeout: 15000,
+  });
+  assert.equal(composeVersionResult.status, 0, "Compose version query must succeed");
+  assert.equal(composeVersionResult.error, undefined);
+  assert.equal(composeVersionResult.signal, null);
+  assert.equal(typeof composeVersionResult.stdout, "string");
+  const composeVersion = composeVersionResult.stdout.trim();
   try {
-    assertComposeConfiguration(rendered.stdout);
+    assertComposeConfiguration(rendered.stdout, composeVersion);
   } catch (error) {
     const version = (args) =>
       spawnSync("docker", args, {
@@ -861,7 +1034,7 @@ test("accepts the genuine offline Compose render at the exact startup boundary",
       `Compose boundary rejected the genuine offline render: ${composeBoundaryDiagnostic(
         rendered.stdout,
         version(["--version"]),
-        version(["compose", "version", "--short"]),
+        composeVersion,
       )}; stage=${error instanceof LocalInfrastructureError ? error.stage : "unknown"}`,
     );
   }
@@ -875,12 +1048,12 @@ test("prepares the validated rendered port and stops before service startup on p
   const outcome = callStart(runner, {
     prepare: ({ port }) => {
       selectedPort = port;
-      assert.equal(runner.calls.length, 4);
+      assert.equal(runner.calls.length, 5);
       throw new Error("protected-state");
     },
   });
   assert.equal(selectedPort, 19000);
   assert.equal(outcome.error?.stage, "object-store preparation");
-  assert.equal(runner.calls.length, 4);
+  assert.equal(runner.calls.length, 5);
   assert.doesNotMatch(outcome.error.message, /protected-state/u);
 });
