@@ -43,9 +43,11 @@ import {
   recipeSourceLines,
   type StableMutation,
 } from "../../lib/recipes-goals";
+import type { CustomFood } from "../../lib/retention";
 import { AppNavigation } from "../ui/AppNavigation";
 import { Icon } from "../ui/Icon";
 
+import { MyFoodIngredientPicker } from "./MyFoodIngredientPicker";
 import { PastedIngredientReview } from "./PastedIngredientReview";
 
 type LoadState = "loading" | "ready" | "error";
@@ -1206,6 +1208,40 @@ export function RecipesClient() {
     );
   }
 
+  function addMyFood(food: CustomFood, mode: "grams" | "serving"): boolean {
+    if (
+      !canOpenRecipe() ||
+      builder.ingredients.length >= 50 ||
+      food.status !== "active" ||
+      (mode === "serving" && !food.currentVersion.serving)
+    )
+      return false;
+    const serving = food.currentVersion.serving;
+    const ingredient: RecipeIngredientDraft = {
+      kind: "food",
+      clientKey: createOperationId(),
+      foodVersionId: food.currentVersion.id,
+      name: food.currentVersion.name,
+      brandName: food.currentVersion.brandName,
+      portion:
+        mode === "serving" && serving
+          ? { kind: "serving", servingId: serving.id, servingLabel: serving.label, amount: "1" }
+          : { kind: "grams", grams: "100" },
+      source: null,
+      foodProvenance: {
+        kind: "private_custom",
+        customFoodId: food.id,
+        customFoodVersionNumber: food.currentVersion.versionNumber,
+      },
+      note: null,
+    };
+    setBuilder({ ...builder, ingredients: [...builder.ingredients, ingredient] });
+    setMessage(
+      `${food.currentVersion.name} saved version ${food.currentVersion.versionNumber} added ${mode === "serving" ? "using its saved serving" : "as 100 grams"}.`,
+    );
+    return true;
+  }
+
   function addNested(recipe: RecipeSummaryView) {
     if (
       !canUseNestedFilter() ||
@@ -2101,6 +2137,17 @@ export function RecipesClient() {
                     >
                       {searchState === "loading" ? "Loading more foods…" : "Load more foods"}
                     </button>
+                  ) : null}
+                  {reviewOwner && !privateUiClosed.current ? (
+                    <MyFoodIngredientPicker
+                      key={reviewContext}
+                      ownerUserId={reviewOwner}
+                      date={date}
+                      disabled={!canOpenRecipe()}
+                      remainingCapacity={50 - builder.ingredients.length}
+                      onAdd={addMyFood}
+                      onSessionClosed={signInAgain}
+                    />
                   ) : null}
                   <section className="workspaceSection" aria-labelledby="nested-recipes-heading">
                     <h3 id="nested-recipes-heading">Nested recipe ingredients</h3>

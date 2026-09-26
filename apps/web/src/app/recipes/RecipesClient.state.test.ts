@@ -126,6 +126,8 @@ vi.mock("next/navigation", () => ({
 import { type DiaryNutrient, defaultDiaryGroups, localDateInTimeZone } from "../../lib/diary";
 import type { FoodSearchHit } from "../../lib/food-search";
 import { parseRecipeResponse, type RecipeIngredientDraft } from "../../lib/recipes-goals";
+import type { CustomFood } from "../../lib/retention";
+import { MyFoodIngredientPicker, type MyFoodIngredientPickerProps } from "./MyFoodIngredientPicker";
 import { PastedIngredientReview } from "./PastedIngredientReview";
 import { RecipesClient } from "./RecipesClient";
 
@@ -4482,4 +4484,303 @@ it("focuses Keep editing for each new replacement choice without refocusing ordi
   await click("Keep editing");
   expect(focus).toHaveBeenCalledTimes(2);
   expect(field("Name").props.value).toBe("Retained draft");
+});
+
+function myFoodsPicker(): MyFoodIngredientPickerProps {
+  const found = elements().find((node) => node.type === MyFoodIngredientPicker);
+  if (!found) throw new Error("Missing My foods ingredient picker.");
+  return found.props as unknown as MyFoodIngredientPickerProps;
+}
+const personalFood: CustomFood = {
+  id: "58c25730-1f6d-42c8-a411-0ee89f560623",
+  status: "active",
+  revision: "7",
+  createdAt: timestamp,
+  updatedAt: timestamp,
+  currentVersion: {
+    id: "9007199254740993",
+    versionNumber: 7,
+    name: "Personal oats",
+    brandName: "Owner brand",
+    notes: "Private food notes",
+    serving: { id: "9007199254740995", label: "scoop", grams: "40.125001" },
+    nutrients: [
+      {
+        nutrient: { id: "1", code: "protein", name: "Protein", unit: "g" },
+        state: "unknown",
+        amountPer100Grams: null,
+        reason: "not_analyzed",
+      },
+    ],
+    provenance: { kind: "user_entered", statement: "Entered by the owner." },
+    createdAt: timestamp,
+  },
+};
+
+describe("actual recipe builder My foods integration", () => {
+  it("pins a personal food version with private attribution and exact recipe payload", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    expect(myFoodsPicker().ownerUserId).toBe(owner);
+    expect(myFoodsPicker().date).toBe("2026-09-09");
+    expect(myFoodsPicker().remainingCapacity).toBe(50);
+    expect(myFoodsPicker().onAdd(personalFood, "grams")).toBe(true);
+    await hooks.settle();
+    expect(field("Personal oats quantity in grams").props.value).toBe("100");
+    expect(text()).toContain("Owner-entered private custom food · pinned version 7");
+    expect(text()).not.toContain("USDA FoodData Central");
+    await change("Personal oats quantity in grams", "999999999999.999999");
+    await change("Name", "Personal breakfast");
+    await change("Final yield grams", "0.000001");
+    save();
+    await hooks.settle();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(required(posts[0])[1]?.body))).toEqual({
+      name: "Personal breakfast",
+      description: null,
+      instructions: null,
+      ingredients: [
+        {
+          kind: "food",
+          foodVersionId: personalFood.currentVersion.id,
+          portion: { kind: "grams", grams: "999999999999.999999" },
+          position: 0,
+          note: null,
+        },
+      ],
+      finalYield: { grams: "0.000001", source: "measured" },
+      servingCount: null,
+      servingLabel: null,
+    });
+  });
+});
+
+describe("My foods ingredient transfer fences", () => {
+  it("mounts lazily for both new and saved recipes without any private food or nutrient request", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    expect(myFoodsPicker().disabled).toBe(false);
+    openSaved();
+    await hooks.settle();
+    expect(myFoodsPicker().ownerUserId).toBe(owner);
+    expect(myFoodsPicker().remainingCapacity).toBe(49);
+    expect(myFoodsPicker().disabled).toBe(false);
+    expect(
+      fetcher.mock.calls.some(([url]) => url.includes("custom-foods") || url.includes("nutrients")),
+    ).toBe(false);
+  });
+
+  it("keeps exact serving IDs and decimal strings through notes, reorder and removal", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    myFoodsPicker().onAdd(personalFood, "grams");
+    await hooks.settle();
+    myFoodsPicker().onAdd(personalFood, "serving");
+    await hooks.settle();
+    expect(field("Personal oats quantity in scoop").props.value).toBe("1");
+    await change("Personal oats quantity in scoop", "0.000001");
+    const notes = elements().filter((node) => node.props["aria-label"] === "Personal oats note");
+    invoke(required(notes[1]), "onChange", { target: { value: "  Raw serving note\nkept  " } });
+    await hooks.settle();
+    invoke(field("Move Personal oats up from position 2 of 2"), "onClick");
+    await hooks.settle();
+    invoke(field("Remove Personal oats at position 2 of 2"), "onClick");
+    await hooks.settle();
+    expect(text()).toContain("Ingredients (1/50)");
+    await change("Name", "Serving recipe");
+    await change("Final yield grams", "40.125001");
+    save();
+    await hooks.settle();
+    const post = required(fetcher.mock.calls.find(([, init]) => init?.method === "POST"));
+    expect(JSON.parse(String(post[1]?.body)).ingredients).toEqual([
+      {
+        kind: "food",
+        foodVersionId: personalFood.currentVersion.id,
+        portion: {
+          kind: "serving",
+          servingId: personalFood.currentVersion.serving?.id,
+          amount: "0.000001",
+        },
+        position: 0,
+        note: "  Raw serving note\nkept  ",
+      },
+    ]);
+  });
+
+  it("pins the earlier ingredient when a refreshed choice adds the newer version", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    expect(myFoodsPicker().onAdd(personalFood, "serving")).toBe(true);
+    await hooks.settle();
+    const newer: CustomFood = {
+      ...personalFood,
+      revision: "8",
+      currentVersion: {
+        ...personalFood.currentVersion,
+        id: "9007199254740997",
+        versionNumber: 8,
+        serving: { id: "9007199254740999", label: "new scoop", grams: "41.000001" },
+      },
+    };
+    expect(myFoodsPicker().onAdd(newer, "serving")).toBe(true);
+    await hooks.settle();
+    expect(text()).toContain("pinned version 7");
+    expect(text()).toContain("pinned version 8");
+    expect(field("Personal oats quantity in scoop").props.value).toBe("1");
+    expect(field("Personal oats quantity in new scoop").props.value).toBe("1");
+    await change("Name", "Both versions");
+    await change("Final yield grams", "100");
+    save();
+    await hooks.settle();
+    const post = required(fetcher.mock.calls.find(([, init]) => init?.method === "POST"));
+    expect(JSON.parse(String(post[1]?.body)).ingredients).toEqual([
+      {
+        kind: "food",
+        foodVersionId: "9007199254740993",
+        portion: { kind: "serving", servingId: "9007199254740995", amount: "1" },
+        position: 0,
+        note: null,
+      },
+      {
+        kind: "food",
+        foodVersionId: "9007199254740997",
+        portion: { kind: "serving", servingId: "9007199254740999", amount: "1" },
+        position: 1,
+        note: null,
+      },
+    ]);
+  });
+
+  it("enforces the 50 ingredient limit synchronously across retained add callbacks", async () => {
+    readyFetcher();
+    await mountReady();
+    review().onConfirm(Array.from({ length: 49 }, (_, index) => ingredient(`filled-${index}`)));
+    await hooks.settle();
+    const add = myFoodsPicker().onAdd;
+    expect(add(personalFood, "grams")).toBe(true);
+    expect(add(personalFood, "grams")).toBe(false);
+    await hooks.settle();
+    expect(myFoodsPicker().remainingCapacity).toBe(0);
+    expect(text()).toContain("Ingredients (50/50)");
+  });
+
+  it("rejects archived foods and absent servings before allocating ingredient keys", async () => {
+    readyFetcher();
+    await mountReady();
+    const randomUUID = vi.fn(() => "78502e2b-a5c8-4345-aa26-1df33584008e");
+    vi.stubGlobal("crypto", { randomUUID });
+    expect(myFoodsPicker().onAdd({ ...personalFood, status: "archived" }, "grams")).toBe(false);
+    expect(
+      myFoodsPicker().onAdd(
+        { ...personalFood, currentVersion: { ...personalFood.currentVersion, serving: null } },
+        "serving",
+      ),
+    ).toBe(false);
+    expect(randomUUID).not.toHaveBeenCalled();
+    expect(text()).toContain("Ingredients (0/50)");
+  });
+
+  it.each(["new", "open", "route", "closed", "unmounted"] as const)(
+    "rejects retained personal-food insertion after %s without a new key or state update",
+    async (transition) => {
+      readyFetcher();
+      await mountReady();
+      const retained = myFoodsPicker().onAdd;
+      if (transition === "new") await click("New recipe");
+      if (transition === "open") {
+        openSaved();
+        await hooks.settle();
+      }
+      if (transition === "route") {
+        navigation.query = "date=2026-09-10";
+        hooks.render();
+        await hooks.settle();
+      }
+      if (transition === "closed") {
+        myFoodsPicker().onSessionClosed();
+        await hooks.settle();
+      }
+      if (transition === "unmounted") hooks.unmount();
+      const randomUUID = vi.fn(() => "78502e2b-a5c8-4345-aa26-1df33584008e");
+      vi.stubGlobal("crypto", { randomUUID });
+      const updates = hooks.afterClose();
+      expect(retained(personalFood, "grams")).toBe(false);
+      await hooks.settle();
+      expect(randomUUID).not.toHaveBeenCalled();
+      expect(hooks.afterClose()).toBe(updates);
+      expect(text()).not.toContain("Personal oats");
+      if (transition === "closed") expect(router.replace).toHaveBeenCalledWith("/login");
+    },
+  );
+
+  it.each(["save", "log"] as const)(
+    "blocks personal-food insertion throughout an in-flight %s",
+    async (operation) => {
+      const fetcher = readyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      const retained = myFoodsPicker().onAdd;
+      const pending = deferred<Response>(),
+        original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) =>
+        init?.method === "POST" ? pending.promise : original(url, init),
+      );
+      if (operation === "save") save();
+      else invoke(button("Log recipe"), "onClick");
+      expect(retained(personalFood, "grams")).toBe(false);
+      await hooks.settle();
+      expect(myFoodsPicker().disabled).toBe(true);
+      expect(myFoodsPicker().onAdd(personalFood, "serving")).toBe(false);
+      expect(text()).toContain("Ingredients (1/50)");
+      pending.resolve(Response.json({ error: "Ambiguous write" }, { status: 503 }));
+      await hooks.settle();
+      expect(myFoodsPicker().disabled).toBe(false);
+    },
+  );
+
+  it("retains the original exact save operation after later additions are removed", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    myFoodsPicker().onAdd(personalFood, "serving");
+    await hooks.settle();
+    await change("Personal oats quantity in scoop", "2.000001");
+    await change("Name", "Retry unchanged pins");
+    await change("Final yield grams", "100.000001");
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      init?.method === "POST"
+        ? Promise.resolve(Response.json({ error: "Lost receipt" }, { status: 503 }))
+        : original(url, init),
+    );
+    save();
+    await hooks.settle();
+    myFoodsPicker().onAdd(
+      {
+        ...personalFood,
+        currentVersion: {
+          ...personalFood.currentVersion,
+          id: "9007199254740997",
+          versionNumber: 8,
+        },
+      },
+      "grams",
+    );
+    await hooks.settle();
+    invoke(field("Remove Personal oats at position 2 of 2"), "onClick");
+    await hooks.settle();
+    save();
+    await hooks.settle();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+    expect(new Headers(posts[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(posts[0]?.[1]?.headers).get("idempotency-key"),
+    );
+    expect(JSON.parse(String(posts[1]?.[1]?.body)).ingredients[0]).toMatchObject({
+      foodVersionId: "9007199254740993",
+      portion: { kind: "serving", servingId: "9007199254740995", amount: "2.000001" },
+    });
+  });
 });

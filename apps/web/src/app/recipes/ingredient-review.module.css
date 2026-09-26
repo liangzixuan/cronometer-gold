@@ -10,13 +10,3 @@
 .item > div {
   min-width: 0;
 }
-
-@media (max-width: 40rem) {
-  .item.item {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .item > button {
-    justify-self: start;
-  }
-}

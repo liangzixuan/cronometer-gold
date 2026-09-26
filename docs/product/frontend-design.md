@@ -72,6 +72,20 @@ saves and logs cannot be interrupted by New or Open, and an old choice cannot
 replace newer edits. These protections cover the current recipe page; they do
 not add persistent autosave or protection from every navigation or browser close.
 
+## Personal recipe ingredients
+
+The recipe builder offers My foods alongside public catalogue search. Load the
+private library when needed, filter the foods already loaded, or load another
+page. Retry and refresh affect that picker independently of the recipe draft.
+Manage the library from the My foods page.
+
+Add 100 g or the food's saved serving, then use the ingredient's existing quantity,
+note and ordering controls. Each ingredient keeps the version and serving chosen
+at that moment. Refreshing the library changes future choices; it does not repin
+existing ingredients. Private foods retain private provenance and unknown
+nutrients. An archived food cannot enter a new or revised recipe, while an
+existing saved recipe snapshot remains loggable.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

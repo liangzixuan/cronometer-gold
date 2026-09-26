@@ -391,6 +391,138 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     }
   });
 
+  it("keeps exact private serving pins across revisions and rejects another owner's use", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const fixture = await createFixture(databaseUrl, "retention_recipe_portion");
+    try {
+      const original = await createCustomFood(fixture.database, {
+        clientOperationId: randomUUID(),
+        food: {
+          ...customDraft(fixture.nutrients.energyId, fixture.nutrients.proteinId, "Original"),
+          serving: { grams: "50.0001", label: "precise serving" },
+        },
+        requestDigest: digest("1"),
+        userId: fixture.owner.userId,
+      });
+      const revisedDraft = customDraft(
+        fixture.nutrients.energyId,
+        fixture.nutrients.proteinId,
+        "Revised",
+      );
+      const revised = await reviseCustomFood(fixture.database, {
+        clientOperationId: randomUUID(),
+        customFoodId: original.food.id,
+        expectedRevision: "1",
+        food: {
+          ...revisedDraft,
+          nutrients: revisedDraft.nutrients.map((nutrient) =>
+            nutrient.state === "quantified" ? { ...nutrient, amountPer100Grams: "400" } : nutrient,
+          ),
+          serving: { grams: "20.0002", label: "revised serving" },
+        },
+        requestDigest: digest("2"),
+        userId: fixture.owner.userId,
+      });
+      const oldServing = original.food.currentVersion.serving;
+      const newServing = revised.food.currentVersion.serving;
+      if (!oldServing || !newServing) throw new Error("Expected both saved servings");
+      expect(newServing.id).not.toBe(oldServing.id);
+      const draft = {
+        description: null,
+        ingredients: [
+          {
+            foodVersionId: original.food.currentVersion.id,
+            kind: "food" as const,
+            note: "Old saved portion",
+            portion: { amount: "1.2501", kind: "serving" as const, servingId: oldServing.id },
+          },
+          {
+            foodVersionId: revised.food.currentVersion.id,
+            kind: "food" as const,
+            portion: { grams: "100", kind: "grams" as const },
+          },
+        ],
+        instructions: null,
+        name: "Two saved versions",
+        servingCount: null,
+        servingLabel: null,
+        yield: { grams: "162.505125", source: "measured" as const },
+      };
+      const saved = await createRecipe(fixture.database, {
+        clientOperationId: randomUUID(),
+        recipe: draft,
+        requestDigest: digest("3"),
+        userId: fixture.owner.userId,
+      });
+      expect(saved.recipe.currentVersion.sources).toEqual([]);
+      expect(saved.recipe.currentVersion.inputMassGrams).toBe("162.50512501");
+      expect(saved.recipe.currentVersion.ingredients).toMatchObject([
+        {
+          food: { foodVersionId: original.food.currentVersion.id, name: "Original custom food" },
+          foodProvenance: {
+            customFoodId: original.food.id,
+            customFoodVersionNumber: "1",
+            kind: "private_custom",
+          },
+          note: "Old saved portion",
+          portion: {
+            amount: "1.2501",
+            inputUnit: "serving",
+            resolvedGrams: "62.50512501",
+            servingId: oldServing.id,
+            servingLabel: "precise serving",
+          },
+          position: 0,
+          source: null,
+        },
+        {
+          food: { foodVersionId: revised.food.currentVersion.id, name: "Revised custom food" },
+          foodProvenance: {
+            customFoodId: original.food.id,
+            customFoodVersionNumber: "2",
+            kind: "private_custom",
+          },
+          portion: { amount: "100", inputUnit: "g", resolvedGrams: "100", servingId: null },
+          position: 1,
+          source: null,
+        },
+      ]);
+      expect(
+        saved.recipe.currentVersion.nutrients.find((nutrient) => nutrient.code === "energy"),
+      ).toMatchObject({ knownAmount: "525.01025002", quantifiedCount: 2, unknownCount: 0 });
+      expect(
+        saved.recipe.currentVersion.nutrients.find((nutrient) => nutrient.code === "protein"),
+      ).toMatchObject({ completeness: "unknown", knownAmount: "0", unknownCount: 2 });
+      await expect(
+        createRecipe(fixture.database, {
+          clientOperationId: randomUUID(),
+          recipe: draft,
+          requestDigest: digest("4"),
+          userId: fixture.other.userId,
+        }),
+      ).rejects.toBeInstanceOf(RecipeValidationError);
+      await expect(
+        createRecipe(fixture.database, {
+          clientOperationId: randomUUID(),
+          recipe: {
+            ...draft,
+            ingredients: [
+              {
+                foodVersionId: original.food.currentVersion.id,
+                kind: "food",
+                portion: { amount: "1.2501", kind: "serving", servingId: newServing.id },
+              },
+            ],
+          },
+          requestDigest: digest("5"),
+          userId: fixture.owner.userId,
+        }),
+      ).rejects.toBeInstanceOf(RecipeValidationError);
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("versions local reminder consent and preserves exact biometric values across pages", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const fixture = await createFixture(databaseUrl, "retention_daily");

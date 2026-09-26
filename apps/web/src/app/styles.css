@@ -1579,8 +1579,42 @@ button:disabled {
 }
 
 .ingredientResult {
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   padding: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ingredientResult > div:first-child {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.ingredientResult > div + div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ingredientResult > button,
+.ingredientResult > div + div {
+  max-width: 100%;
+}
+
+.myFoodPickerActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.myFoodPickerActions > a {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  text-decoration: none;
 }
 
 .ingredientResult + .ingredientResult,
