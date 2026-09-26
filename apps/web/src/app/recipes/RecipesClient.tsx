@@ -1890,9 +1890,7 @@ export function RecipesClient() {
                             </label>
                           </div>
                           <label className="formField">
-                            <span className="srOnly">
-                              {ingredient.name} quantity in {unit}
-                            </span>
+                            <span>Quantity ({unit})</span>
                             <input
                               aria-label={`${ingredient.name} quantity in ${unit}`}
                               inputMode="decimal"
@@ -2151,35 +2149,37 @@ export function RecipesClient() {
                       </button>
                     ) : null}
                   </fieldset>
-                  <table className="nutritionTable">
-                    <caption>
-                      {nutritionBasis === "perServing"
-                        ? `Per serving (${selected.servingLabel ?? "serving"})`
-                        : "Per 100 g"}
-                    </caption>
-                    <thead>
-                      <tr>
-                        <th>Nutrient</th>
-                        <th>Coverage</th>
-                        <th>Known amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(nutritionBasis === "perServing" && selected.nutrientsPerServing !== null
-                        ? selected.nutrientsPerServing
-                        : selected.nutrientsPer100Grams
-                      ).map((nutrient) => {
-                        const display = nutrientDisplay(nutrient);
-                        return (
-                          <tr key={nutrient.nutrientId}>
-                            <td>{nutrient.name}</td>
-                            <td>{display.qualification}</td>
-                            <td>{display.amount}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                  <section className="reportTableScroller" aria-label="Recipe nutrition table">
+                    <table className="nutritionTable">
+                      <caption>
+                        {nutritionBasis === "perServing"
+                          ? `Per serving (${selected.servingLabel ?? "serving"})`
+                          : "Per 100 g"}
+                      </caption>
+                      <thead>
+                        <tr>
+                          <th>Nutrient</th>
+                          <th>Coverage</th>
+                          <th>Known amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(nutritionBasis === "perServing" && selected.nutrientsPerServing !== null
+                          ? selected.nutrientsPerServing
+                          : selected.nutrientsPer100Grams
+                        ).map((nutrient) => {
+                          const display = nutrientDisplay(nutrient);
+                          return (
+                            <tr key={nutrient.nutrientId}>
+                              <td>{nutrient.name}</td>
+                              <td>{display.qualification}</td>
+                              <td>{display.amount}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </section>
                 </section>
                 <section className="workspaceSection" aria-labelledby="source-heading">
                   <h3 id="source-heading">Transitive source provenance</h3>
@@ -2226,7 +2226,7 @@ export function RecipesClient() {
                     <label className="formField">
                       <span>Local diary date</span>
                       <input
-                        maxLength={10}
+                        type="date"
                         disabled={logControlsUnavailable}
                         onChange={(event) => {
                           changeLogField(date, event.target.value, setDate);

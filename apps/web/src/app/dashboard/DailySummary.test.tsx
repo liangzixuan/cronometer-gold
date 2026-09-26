@@ -27,7 +27,7 @@ function renderSummary(totals: readonly DiaryNutrient[], totalEntries = 45) {
 }
 
 describe("daily nutrition summary", () => {
-  it("renders authoritative whole-day totals and entry counts without rounding exact values", () => {
+  it("renders authoritative whole-day totals and entry counts with compact display values", () => {
     const markup = renderSummary([
       nutrient("energy", { knownAmount: "1540.750000" }),
       nutrient("protein", { knownAmount: "96.125000" }),
@@ -38,9 +38,9 @@ describe("daily nutrition summary", () => {
     expect(markup).toContain('aria-labelledby="daily-summary-title"');
     expect(markup).toContain("45 entries logged");
     expect(markup).toContain("Totals cover all 45 diary entries for this day.");
-    expect(markup).toContain("1540.750000 kcal");
-    expect(markup).toContain("96.125000 g");
-    expect(markup).toContain("54.375000 g");
+    expect(markup).toContain("1,541 kcal");
+    expect(markup).toContain("96.1 g");
+    expect(markup).toContain("54.4 g");
     expect(markup).toMatch(/data-nutrient="carbohydrate".*?>Carbs<.*?>0 g</su);
     expect(markup.match(/Complete coverage · quantified/gu)).toHaveLength(4);
   });
@@ -59,11 +59,11 @@ describe("daily nutrition summary", () => {
       nutrient("fat", { isExact: false }),
     ]);
 
-    expect(markup).toContain("≥ 125.500000 kcal");
+    expect(markup).toContain("≥ 125 kcal");
     expect(markup).toContain("Partial · 2/3 contributions quantified");
     expect(markup).toContain("Complete coverage · includes trace values");
     expect(markup).toContain("Complete coverage · estimated");
-    expect(markup.match(/≥ 125.500000 g/gu)).toHaveLength(2);
+    expect(markup.match(/≥ 125.5 g/gu)).toHaveLength(2);
     expect(markup).toContain("Partial totals are lower bounds.");
   });
 

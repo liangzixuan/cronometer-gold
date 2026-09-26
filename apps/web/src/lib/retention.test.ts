@@ -272,9 +272,64 @@ describe("retention response boundaries", () => {
       25 * 60 * 60 * 1_000,
     );
     expect(trendAggregateLabel(trend.points[0]?.aggregate ?? null)).toBe(
-      "At least 123.45 kcal · partial",
+      "≥ 123 kcal · Partial · 1/2 contributions quantified",
     );
     expect(trendAggregateLabel(null)).toBe("No data");
+  });
+
+  it.each([
+    ["kcal", "1234.5", "1,235 kcal"],
+    ["g", "12.375", "12.4 g"],
+    ["mg", "0.00001", "<0.1 mg"],
+    ["g", "0.000", "0 g"],
+  ])("formats exact %s trends without changing their saved decimal", (unit, amount, expected) => {
+    const aggregate = {
+      ...nutrient,
+      unit,
+      knownAmount: amount,
+      completeness: "complete" as const,
+      isExact: true,
+      contributorCount: 1,
+      quantifiedCount: 1,
+      unknownCount: 0,
+      unknownReasonCounts: { ...nutrient.unknownReasonCounts, not_reported: 0 },
+    };
+    expect(trendAggregateLabel(aggregate)).toBe(`${expected} · Complete coverage · quantified`);
+    expect(aggregate.knownAmount).toBe(amount);
+  });
+
+  it("keeps partial trend amounts as true lower bounds at display precision", () => {
+    const aggregate = { ...nutrient, unit: "g", completeness: "partial" as const };
+    expect(trendAggregateLabel({ ...aggregate, knownAmount: "12.399" })).toBe(
+      "≥ 12.3 g · Partial · 1/2 contributions quantified",
+    );
+    expect(trendAggregateLabel({ ...aggregate, knownAmount: "0.00001" })).toBe(
+      ">0 g · Partial · 1/2 contributions quantified",
+    );
+  });
+
+  it("distinguishes unquantified and trace trends from an exact zero", () => {
+    expect(
+      trendAggregateLabel({
+        ...nutrient,
+        knownAmount: "0",
+        completeness: "unknown",
+        quantifiedCount: 0,
+        unknownCount: 2,
+        unknownReasonCounts: { ...nutrient.unknownReasonCounts, not_reported: 2 },
+      }),
+    ).toBe("Unknown · 0/2 contributions quantified");
+    expect(
+      trendAggregateLabel({
+        ...nutrient,
+        knownAmount: "0",
+        completeness: "complete",
+        quantifiedCount: 1,
+        traceCount: 1,
+        unknownCount: 0,
+        unknownReasonCounts: { ...nutrient.unknownReasonCounts, not_reported: 0 },
+      }),
+    ).toBe("≥ 0 kcal · Complete coverage · includes trace values");
   });
 
   it("rejects response drift and numeric coercion", () => {

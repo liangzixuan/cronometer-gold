@@ -1,7 +1,7 @@
 import {
   type NutritionReport,
   type NutritionReportSeriesPoint,
-  reportAmountText,
+  reportExactAmountText as reportAmountText,
   reportComparisonText,
   reportPointCoverageText,
   targetSnapshotForPoint,

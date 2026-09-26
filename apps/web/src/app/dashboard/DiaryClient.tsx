@@ -1859,12 +1859,12 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
               </p>
               <h1>{view === "overview" ? "Your day at a glance" : "Diary"}</h1>
             </div>
-            <span className="statusPill">
-              {session?.profile.timeZone ?? diary?.timeZone ?? "Local time"}
+            <span className="srOnly" id="diary-time-zone">
+              Dates use {session?.profile.timeZone ?? diary?.timeZone ?? "local time"}.
             </span>
           </header>
 
-          <fieldset className="dateNavigator">
+          <fieldset className="dateNavigator" aria-describedby="diary-time-zone">
             <legend className="srOnly">Diary date</legend>
             <button
               disabled={!hasCommittedDate || controlsBusy}

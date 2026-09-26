@@ -17,6 +17,7 @@ import {
   type SessionSummary,
   shiftLocalDate,
 } from "../../lib/diary";
+import { formatNutrientAmount } from "../../lib/nutrition-display";
 import { confirmBrowserLogout } from "../../lib/private-api";
 import { parseTargetableNutrients, type TargetableNutrient } from "../../lib/recipes-goals";
 import {
@@ -3093,7 +3094,10 @@ export function HealthClient() {
                                   </dt>
                                   <dd style={{ marginInlineStart: 0 }}>
                                     {snapshot.state === "quantified"
-                                      ? snapshot.amountPer100Grams
+                                      ? formatNutrientAmount(
+                                          snapshot.amountPer100Grams,
+                                          snapshot.nutrient.unit,
+                                        )
                                       : snapshot.state === "trace"
                                         ? "Trace"
                                         : `Unknown — ${unknownNutrientReasons[snapshot.reason]}`}
@@ -3811,6 +3815,7 @@ export function HealthClient() {
                 />
               </label>
               <button
+                className="buttonPrimary"
                 disabled={busy === "export"}
                 onClick={() => void requestExport()}
                 type="button"
@@ -3821,6 +3826,7 @@ export function HealthClient() {
                 <div className="jobStatus">
                   <strong>Status: {exportJob.status}</strong>
                   <button
+                    className="secondaryAction"
                     disabled={busy === "export-status"}
                     onClick={() => void refreshExport()}
                     type="button"
@@ -3875,7 +3881,7 @@ export function HealthClient() {
                 />
               </label>
               <button
-                className="dangerAction"
+                className="buttonDanger dangerAction"
                 disabled={!confirmConsequences || busy === "erasure"}
                 onClick={() => void requestErasure()}
                 type="button"
@@ -3894,6 +3900,7 @@ export function HealthClient() {
                   </small>
                   <small>{erasureJob.consequences.join(" · ")}</small>
                   <button
+                    className="secondaryAction"
                     disabled={busy === "erasure-status"}
                     onClick={() => void refreshErasure()}
                     type="button"

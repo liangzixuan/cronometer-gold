@@ -1,3 +1,5 @@
+import { formatNutrientAmount } from "./nutrition-display";
+
 export const mealSlots = ["breakfast", "lunch", "dinner", "snacks"] as const;
 export const defaultDiaryGroups = [
   { mealSlot: "breakfast", label: "Breakfast" },
@@ -1504,13 +1506,13 @@ export function nutrientDisplay(nutrient: DiaryNutrient): {
   }
   if (nutrient.completeness === "partial") {
     return {
-      amount: `≥ ${nutrient.knownAmount} ${nutrient.unit}`,
+      amount: formatNutrientAmount(nutrient.knownAmount, nutrient.unit, { lowerBound: true }),
       qualification: `Partial · ${nutrient.quantifiedCount}/${nutrient.contributorCount} contributions quantified`,
     };
   }
   if (nutrient.traceCount > 0 || !nutrient.isExact) {
     return {
-      amount: `≥ ${nutrient.knownAmount} ${nutrient.unit}`,
+      amount: formatNutrientAmount(nutrient.knownAmount, nutrient.unit, { lowerBound: true }),
       qualification:
         nutrient.traceCount > 0
           ? "Complete coverage · includes trace values"
@@ -1518,7 +1520,7 @@ export function nutrientDisplay(nutrient: DiaryNutrient): {
     };
   }
   return {
-    amount: `${nutrient.knownAmount} ${nutrient.unit}`,
+    amount: formatNutrientAmount(nutrient.knownAmount, nutrient.unit),
     qualification: "Complete coverage · quantified",
   };
 }

@@ -9,6 +9,7 @@ import {
   nutrientDisplay,
   type SessionSummary,
 } from "../../lib/diary";
+import { formatNutrientAmount } from "../../lib/nutrition-display";
 import type { GoalProgressView } from "../../lib/recipes-goals";
 import { Icon } from "../ui/Icon";
 import { NutrientIcon } from "../ui/NutrientIcon";
@@ -64,22 +65,25 @@ function Target({
     return percent === null ? null : (
       <svg aria-hidden="true" className="calmEnergyRing" viewBox="0 0 120 120">
         <circle className="calmEnergyRingTrack" cx="60" cy="60" r="52" />
-        <circle
-          className="calmEnergyRingValue"
-          cx="60"
-          cy="60"
-          r="52"
-          pathLength="100"
-          strokeDasharray={`${percent} 100`}
-          transform="rotate(-90 60 60)"
-        />
+        {percent > 0 ? (
+          <circle
+            className="calmEnergyRingValue"
+            cx="60"
+            cy="60"
+            r="52"
+            pathLength="100"
+            strokeDasharray="100"
+            strokeDashoffset={100 - percent}
+            transform="rotate(-90 60 60)"
+          />
+        ) : null}
       </svg>
     );
   return (
     <>
       {row?.target ? (
         <small className="calmTarget">
-          Saved target: {row.target.amount} {row.unit}
+          Saved target: {formatNutrientAmount(row.target.amount, row.unit)}
         </small>
       ) : null}
       {percent !== null ? (
@@ -87,10 +91,7 @@ function Target({
           <div aria-hidden="true" className="calmProgressTrack">
             <span style={{ width: `${percent}%` }} />
           </div>
-          <small
-            className="calmProgressLabel"
-            title={`${row?.target?.lowerBoundPercent}% of saved target`}
-          >
+          <small className="calmProgressLabel" title={`${label} of saved target`}>
             {label}
             <span className="srOnly"> of saved target</span>
           </small>
@@ -185,7 +186,7 @@ export function CalmOverview({
                 <strong>{energyDisplay.amount}</strong>
                 {energyRow?.target ? (
                   <small className="calmTarget">
-                    Saved target: {energyRow.target.amount} {energyRow.unit}
+                    Saved target: {formatNutrientAmount(energyRow.target.amount, energyRow.unit)}
                   </small>
                 ) : null}
               </div>
@@ -202,6 +203,9 @@ export function CalmOverview({
               {macros.map(({ code, label }) => {
                 const nutrient = day.totals.find((candidate) => candidate.code === code);
                 const display = displayNutrient(nutrient);
+                const row = matchedGoalRow(nutrient, progress);
+                const percent = goalPercent(nutrient, row);
+                const percentLabel = goalPercentLabel(nutrient, row);
                 return (
                   <div
                     className="calmMacroRow"
@@ -215,9 +219,23 @@ export function CalmOverview({
                       {label}
                     </dt>
                     <dd>
-                      <strong>{display.amount}</strong>
+                      <div className="calmMacroMetric">
+                        <strong>{display.amount}</strong>
+                        {row?.target ? (
+                          <span>
+                            <span aria-hidden="true"> / </span>
+                            <span className="srOnly">of saved target </span>
+                            {formatNutrientAmount(row.target.amount, row.unit)}
+                          </span>
+                        ) : null}
+                        {percentLabel ? <span>({percentLabel})</span> : null}
+                      </div>
                       <small className="calmQualification">{display.qualification}</small>
-                      <Target nutrient={nutrient} progress={progress} />
+                      {percent !== null ? (
+                        <div aria-hidden="true" className="calmProgressTrack">
+                          <span style={{ width: `${percent}%` }} />
+                        </div>
+                      ) : null}
                     </dd>
                   </div>
                 );
@@ -308,7 +326,7 @@ export function CalmOverview({
                     aria-label={`Add food to ${group.label}`}
                     href={`/foods${dateQuery}&meal=${group.mealSlot}`}
                   >
-                    <Icon name="plus" />
+                    <Icon name="plus" /> Add
                   </Link>
                 </li>
               );

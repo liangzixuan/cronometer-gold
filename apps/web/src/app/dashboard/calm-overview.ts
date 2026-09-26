@@ -5,6 +5,7 @@ import {
   parseSession,
   type SessionSummary,
 } from "../../lib/diary";
+import { formatNutrientAmount } from "../../lib/nutrition-display";
 import {
   type GoalProgressRowView,
   type GoalProgressView,
@@ -45,7 +46,7 @@ export function mealEnergy(entries: readonly DiaryEntry[]): string {
       (nutrient) =>
         nutrient.completeness === "complete" && nutrient.isExact && nutrient.traceCount === 0,
     );
-  return `${exact ? "" : "≥ "}${sumAmounts(known.map((nutrient) => nutrient.knownAmount))} kcal${exact ? "" : " · lower bound"}`;
+  return `${formatNutrientAmount(sumAmounts(known.map((nutrient) => nutrient.knownAmount)), "kcal", { lowerBound: !exact })}${exact ? "" : " · lower bound"}`;
 }
 
 export function matchedGoalRow(
@@ -125,7 +126,7 @@ export function remainingEnergy(
     scale === 0
       ? absolute
       : `${absolute.slice(0, -scale)}.${absolute.slice(-scale)}`.replace(/\.?0+$/u, "");
-  return `${amount} ${nutrient.unit} ${difference < 0n ? "over saved target" : "remaining"}`;
+  return `${formatNutrientAmount(amount, nutrient.unit)} ${difference < 0n ? "over saved target" : "remaining"}`;
 }
 
 export async function loadCalmGoalProgress({

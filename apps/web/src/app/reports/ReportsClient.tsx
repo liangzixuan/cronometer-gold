@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isLocalDate, parseSession, type SessionSummary } from "../../lib/diary";
+import { formatNutrientAmount } from "../../lib/nutrition-display";
 import {
   adjacentNutritionReportRange,
   type NutritionReport,
@@ -110,9 +111,15 @@ function targetText(
   const target = targetSnapshotForPoint(report, nutrientId, point.goalVersionId);
   if (!target) return point.goalVersionId === null ? "No saved goal" : "No saved threshold";
   const thresholds = [
-    target.minimumAmount === null ? null : `minimum ${target.minimumAmount} ${unit}`,
-    target.targetAmount === null ? null : `target ${target.targetAmount} ${unit}`,
-    target.maximumAmount === null ? null : `maximum ${target.maximumAmount} ${unit}`,
+    target.minimumAmount === null
+      ? null
+      : `minimum ${formatNutrientAmount(target.minimumAmount, unit)}`,
+    target.targetAmount === null
+      ? null
+      : `target ${formatNutrientAmount(target.targetAmount, unit)}`,
+    target.maximumAmount === null
+      ? null
+      : `maximum ${formatNutrientAmount(target.maximumAmount, unit)}`,
   ].filter((value): value is string => value !== null);
   return thresholds.length === 0
     ? `No saved threshold · ${target.source.label}`
@@ -1094,9 +1101,10 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                 </label>
               </div>
               <p className="coverageCopy">
-                Bars show the known amount against this chart’s {selectedSeries.scaleMaximum}{" "}
-                {selectedSeries.nutrient.unit} scale. Markers show saved minimum, target, and
-                maximum values when present; they are not recommendations.
+                Bars show the known amount against this chart’s{" "}
+                {formatNutrientAmount(selectedSeries.scaleMaximum, selectedSeries.nutrient.unit)}{" "}
+                scale. Markers show saved minimum, target, and maximum values when present; they are
+                not recommendations.
               </p>
               <figure className="reportChart">
                 <figcaption className="srOnly">

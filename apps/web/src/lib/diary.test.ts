@@ -307,7 +307,7 @@ describe("web diary contract", () => {
     expect(diary.totals[0]?.knownAmount).toBe("125.500000000000");
     const total = diary.totals[0];
     if (!total) throw new Error("Expected a nutrient total fixture.");
-    expect(nutrientDisplay(total).amount).toBe("≥ 125.500000000000 kcal");
+    expect(nutrientDisplay(total).amount).toBe("≥ 125 kcal");
   });
 
   it("strictly parses a mixed food and immutable recipe day", () => {
@@ -511,11 +511,11 @@ describe("web diary contract", () => {
       },
     };
     expect(nutrientDisplay(trace)).toEqual({
-      amount: "≥ 125.500000000000 kcal",
+      amount: "≥ 125 kcal",
       qualification: "Complete coverage · includes trace values",
     });
     expect(entryEnergyDisplay({ ...entry, nutrients: [{ ...trace, code: "energy" }] })).toBe(
-      "≥ 125.500000000000 kcal",
+      "≥ 125 kcal",
     );
   });
 

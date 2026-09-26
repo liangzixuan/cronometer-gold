@@ -37,6 +37,14 @@
   font-family: Arial, Helvetica, sans-serif;
   letter-spacing: -0.025em;
 }
+.shell h2 {
+  font-size: 1.5rem;
+  line-height: 1.25;
+}
+.shell h3 {
+  font-size: 1.1rem;
+  line-height: 1.3;
+}
 .shell :is(a, button, input, select, textarea, summary):focus-visible {
   outline: 3px solid var(--calm-green);
   outline-offset: 3px;
@@ -188,8 +196,26 @@
 }
 .shell .dashboard {
   width: 100%;
-  max-width: none;
-  padding: 28px clamp(20px, 2.3vw, 56px) 48px;
+  max-width: 1800px;
+  margin-inline: auto;
+  padding: 28px clamp(16px, 2.3vw, 40px) 48px;
+}
+.shell .foodDashboard {
+  max-width: 1180px;
+}
+.shell .recipesDashboard,
+.shell .goalsDashboard,
+.shell .retentionDashboard {
+  max-width: 1240px;
+}
+.shell .hydrationDashboard,
+.shell .activityDashboard {
+  max-width: 1120px;
+}
+@media (min-width: 761px) {
+  .shell .goalWorkspace {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 0.55fr);
+  }
 }
 .shell .dashboardHeader {
   align-items: center;
@@ -228,24 +254,45 @@
   margin: 0;
 }
 .shell .dateNavigator {
-  flex-wrap: wrap;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: stretch;
   margin: 0;
-  gap: 8px;
+  gap: 0;
   padding: 0;
   min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--white);
 }
 .shell .dateNavigator :is(button, input) {
   min-height: 44px;
   font-size: 0.95rem;
   background: var(--white);
+  border: 0;
+  border-radius: 0;
+}
+.shell .dateNavigator :is(button, input) + button,
+.shell .dateNavigator input {
+  border-left: 1px solid var(--line);
+}
+.shell .dateNavigator :is(button, input):focus-visible {
+  outline-offset: -3px;
+}
+.shell .dateNavigator button:first-of-type {
+  border-radius: 5px 0 0 5px;
+}
+.shell .dateNavigator button:last-child {
+  border-radius: 0 5px 5px 0;
 }
 .shell .dateNavigator button {
-  padding: 8px 12px;
+  padding: 8px 10px;
 }
 .shell .dateNavigator input {
-  width: 165px;
+  width: 148px;
   min-width: 0;
-  padding: 8px 10px;
+  padding: 8px;
+  color-scheme: light;
 }
 .shell .ledgerToolbar .buttonPrimary {
   display: inline-flex;
@@ -881,9 +928,6 @@
   .shell .dashboard {
     padding: 20px 12px 36px;
   }
-  .shell .dateNavigator {
-    gap: 6px;
-  }
   .shell .dateNavigator input {
     width: 146px;
   }
@@ -1277,12 +1321,24 @@
 }
 .shell .calmMacroRow dd {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, auto);
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
-  gap: 4px 10px;
+  gap: 4px;
   min-width: 0;
   margin: 0;
   padding: 0;
+}
+.shell .calmMacroMetric {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 6px;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.shell .calmMacroMetric strong {
+  color: var(--ink);
 }
 .shell .calmMacroRow strong {
   font-size: 1.15rem;
@@ -1385,7 +1441,7 @@
 }
 .shell .calmMealRow {
   display: grid;
-  grid-template-columns: 42px minmax(0, 1fr) minmax(90px, auto) 40px;
+  grid-template-columns: 42px minmax(0, 1fr) minmax(90px, auto) auto;
   align-items: center;
   gap: 12px;
   padding: 15px 0;
@@ -1426,10 +1482,17 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 40px;
+  min-width: 64px;
   min-height: 44px;
+  padding: 6px 12px;
+  gap: 5px;
   color: var(--forest);
+  border: 1px solid var(--line);
   border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
 }
 .shell .calmMealAdd:hover {
   background: var(--paper-deep);
@@ -1571,7 +1634,7 @@
     grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
   }
   .shell .calmMealRow {
-    grid-template-columns: 32px minmax(0, 1fr) 40px;
+    grid-template-columns: 32px minmax(0, 1fr) auto;
     gap: 10px;
   }
   .shell .calmMealDescription {
@@ -1613,7 +1676,7 @@
     grid-template-columns: 145px minmax(0, 1fr);
   }
   .shell .calmMealRow {
-    grid-template-columns: 42px minmax(0, 1fr) minmax(90px, auto) 40px;
+    grid-template-columns: 42px minmax(0, 1fr) minmax(90px, auto) auto;
   }
   .shell .calmMealEnergy,
   .shell .calmMealAdd {
@@ -1655,7 +1718,7 @@
     font-size: 1.3rem;
   }
   .shell .calmMealRow {
-    grid-template-columns: 28px minmax(0, 1fr) 36px;
+    grid-template-columns: 28px minmax(0, 1fr) auto;
     gap: 8px;
   }
   .shell .calmMealEnergy {
@@ -1707,30 +1770,6 @@
 }
 .shell .calmMacros dl {
   margin: 0;
-}
-.shell .calmMacroRow dd > strong {
-  grid-column: 1;
-  grid-row: 1;
-}
-.shell .calmMacroRow dd > .calmTarget {
-  grid-column: 2 / 4;
-  grid-row: 1;
-  justify-self: end;
-  margin: 0;
-}
-.shell .calmMacroRow dd > .calmProgressTrack {
-  grid-column: 1 / 3;
-  grid-row: 2;
-}
-.shell .calmMacroRow dd > .calmProgressLabel {
-  grid-column: 3;
-  grid-row: 2;
-  color: var(--ink);
-  font-weight: 600;
-}
-.shell .calmMacroRow dd > .calmQualification {
-  grid-column: 1 / -1;
-  grid-row: 3;
 }
 .shell .calmSnapshotRow .calmProgressTrack {
   grid-column: 1;
@@ -1808,26 +1847,15 @@
     padding: 0;
   }
   .shell .calmMacroRow {
-    grid-template-columns: 100px minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
-  .shell .calmMacroRow dd {
-    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  .shell .dateNavigator input {
+    width: 136px;
+    padding-inline: 4px;
   }
-  .shell .calmMacroRow dd > .calmTarget {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    justify-self: start;
-  }
-  .shell .calmMacroRow dd > .calmProgressTrack {
-    grid-column: 1;
-    grid-row: 3;
-  }
-  .shell .calmMacroRow dd > .calmProgressLabel {
-    grid-column: 2;
-    grid-row: 3;
-  }
-  .shell .calmMacroRow dd > .calmQualification {
-    grid-row: 4;
+  .shell .dateNavigator button {
+    padding-inline: 8px;
   }
 }
 

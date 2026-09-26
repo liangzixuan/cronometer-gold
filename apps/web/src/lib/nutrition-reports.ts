@@ -5,6 +5,7 @@ import {
   localDateInTimeZone,
   parseDiaryNutrient,
 } from "./diary";
+import { formatNutrientAmount } from "./nutrition-display";
 
 export const MAX_NUTRITION_REPORT_DAYS = 31;
 export const NUTRITION_REPORT_NOTICE = "General wellness estimate; not medical advice.";
@@ -864,10 +865,19 @@ export function reportPointCoverageText(point: NutritionReportSeriesPoint): stri
   return "Complete for logged diary contributions.";
 }
 
-export function reportAmountText(point: NutritionReportSeriesPoint, unit: string): string {
+export function reportExactAmountText(point: NutritionReportSeriesPoint, unit: string): string {
   if (!point.aggregate) return "Missing";
   if (point.aggregate.completeness === "unknown") return "Unknown";
   return `${point.aggregate.isExact ? "" : "At least "}${point.aggregate.knownAmount} ${unit}`;
+}
+
+export function reportAmountText(point: NutritionReportSeriesPoint, unit: string): string {
+  if (!point.aggregate) return "Missing";
+  if (point.aggregate.completeness === "unknown") return "Unknown";
+  return formatNutrientAmount(point.aggregate.knownAmount, unit, {
+    lowerBound: !point.aggregate.isExact,
+    lowerBoundPrefix: "At least",
+  });
 }
 
 const exactTargetPercentFormatter = new Intl.NumberFormat("en-US", {

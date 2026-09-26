@@ -27,6 +27,7 @@ import {
   type SessionSummary,
   shiftLocalDate,
 } from "../../lib/diary";
+import { formatNutrientAmount } from "../../lib/nutrition-display";
 import { confirmBrowserLogout } from "../../lib/private-api";
 import { AppNavigation } from "../ui/AppNavigation";
 import { Icon } from "../ui/Icon";
@@ -1352,7 +1353,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                         <small>
                           {entry.durationMinutes.toLocaleString("en-US")} min ·{" "}
                           {entry.selfReportedEnergyKilocalories
-                            ? `${entry.selfReportedEnergyKilocalories} kcal (self-reported) · `
+                            ? `${formatNutrientAmount(entry.selfReportedEnergyKilocalories, "kcal")} (self-reported) · `
                             : "No calorie estimate · "}
                           <time dateTime={entry.occurredAt}>{entry.localTime.slice(0, 5)}</time> ·{" "}
                           {entry.timeZone}

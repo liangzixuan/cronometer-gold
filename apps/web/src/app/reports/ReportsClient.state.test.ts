@@ -1213,7 +1213,7 @@ describe("actual report source diary navigation", () => {
 
   it.each([
     ["zero", "0 kcal"],
-    ["partial", "At least 0.123456789 kcal"],
+    ["partial", ">0 kcal"],
     ["trace", "At least 0 kcal"],
     ["unknown", "Unknown"],
   ] as const)(
@@ -1498,7 +1498,7 @@ describe("web report day inspector evidence and lifecycle", () => {
     );
     expect(text(rows[0])).toContain("0 kcalComplete for logged diary contributions.");
     expect(text(rows[1])).toContain(
-      "At least 0.123456789 gKnown lower bound; 2 of 3 contributions lack values.",
+      "At least 0.1 gKnown lower bound; 2 of 3 contributions lack values.",
     );
     expect(text(rows[2])).toContain("At least 0 gKnown lower bound with 3 trace contributions.");
     expect(text(rows[3])).toContain(

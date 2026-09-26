@@ -1150,9 +1150,9 @@ describe("logged portion nutrient details", () => {
     expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
     expect(detailsRows(1)).toEqual([
       "First recorded value (kcal)",
-      "≥ 125.500000000000 kcalPartial · 1/2 contributions quantified",
+      "≥ 125 kcalPartial · 1/2 contributions quantified",
       "Second recorded value (kcal)",
-      "≥ 3.000 kcalPartial · 1/2 contributions quantified",
+      "≥ 3 kcalPartial · 1/2 contributions quantified",
     ]);
     const keys = elements(nutrientDetail(1))
       .filter((node) => String(node.props.className).startsWith("nutrientTotal"))
@@ -1308,7 +1308,7 @@ describe("logged portion nutrient details", () => {
         expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
         await toggleNutrients(0);
         expect(nutrientDetailText(0)).toContain("Entry revision 4.");
-        expect(nutrientDetailText(0)).toContain("999.000");
+        expect(nutrientDetailText(0)).toContain("≥ 999 kcal");
       }
     },
   );
@@ -2013,7 +2013,7 @@ describe("web diary repeat destination", () => {
       const summary = elements().find(
         (node) => node.props["aria-labelledby"] === "nutrition-summary-title",
       );
-      expect(text(summary)).toContain("≥ 125.500000000000 kcal");
+      expect(text(summary)).toContain("≥ 125 kcal");
       expect(text()).not.toContain("Pending repeat:");
     },
   );
@@ -2300,7 +2300,7 @@ describe("web diary repeat destination", () => {
     const summary = elements().find(
       (node) => node.props["aria-labelledby"] === "nutrition-summary-title",
     );
-    expect(text(summary)).toContain("≥ 377.250000000000 kcal");
+    expect(text(summary)).toContain("≥ 377 kcal");
   });
 
   it("fences an explicit retry while its meal is collapsed and reuses it after expansion", async () => {

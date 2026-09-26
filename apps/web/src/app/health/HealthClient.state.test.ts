@@ -416,7 +416,7 @@ afterEach(() => {
 });
 
 describe("actual saved custom-food nutrient disclosures", () => {
-  it("shows exact saved metadata, every state and original order without picker data or requests", async () => {
+  it("shows saved metadata, compact amounts, every state and original order without requests", async () => {
     const first = allStates();
     const archived = { ...food(2), status: "archived" as const };
     const { fetcher } = workspace([first, archived]);
@@ -443,8 +443,8 @@ describe("actual saved custom-food nutrient disclosures", () => {
         .filter((node) => node.type === "dd")
         .map(text),
     ).toEqual([
-      longAmount,
-      "0",
+      "<1 kcal",
+      "0 g",
       "Trace",
       "Unknown — Not reported",
       "Unknown — Not analyzed",
@@ -457,7 +457,41 @@ describe("actual saved custom-food nutrient disclosures", () => {
     expect(fetcher).toHaveBeenCalledTimes(requests);
   });
 
-  it("renders all 256 saved rows, including repeated names and long exact values", async () => {
+  it.each([
+    ["kcal", "1234.5", "1,235 kcal"],
+    ["g", "12.375", "12.4 g"],
+    ["mg", "0.00001", "<0.1 mg"],
+  ])(
+    "formats saved %s amounts while preserving their exact revision input",
+    async (unit, amount, expected) => {
+      const base = food();
+      const first: CustomFood = {
+        ...base,
+        currentVersion: {
+          ...base.currentVersion,
+          nutrients: [
+            {
+              nutrient: { id: "2", code: "protein", name: "Saved nutrient", unit },
+              state: "quantified",
+              amountPer100Grams: amount,
+            },
+          ],
+        },
+      };
+      workspace([first]);
+      await mount();
+      await toggle(first);
+      expect(
+        elements(details(first))
+          .filter((node) => node.type === "dd")
+          .map(text),
+      ).toEqual([expected]);
+      await click("Revise", card(first));
+      expect(field("Amount per 100 grams 1").props.value).toBe(amount);
+    },
+  );
+
+  it("renders all 256 saved rows, including repeated names and compact long decimals", async () => {
     const initial = food();
     const maximum = {
       ...initial,
@@ -484,7 +518,7 @@ describe("actual saved custom-food nutrient disclosures", () => {
       elements(details(maximum))
         .filter((node) => node.type === "dd")
         .map(text),
-    ).toEqual(Array(256).fill(longAmount));
+    ).toEqual(Array(256).fill(`0.1 ${"u".repeat(32)}`));
     expect(text(details(maximum))).toContain(maximum.currentVersion.name);
   });
 
@@ -1163,7 +1197,7 @@ describe("actual loaded saved-food name filter", () => {
     const before = otherFields();
     const trendText = () => text(elements().find((node) => node.props.className === "trendTables"));
     const beforeTrend = trendText();
-    expect(beforeTrend).toContain("12.345");
+    expect(beforeTrend).toContain("12.3 g · Complete coverage · quantified");
     const requests = fetcher.mock.calls.length;
     await change(savedFilterLabel, "absent");
     await click(clearFilterLabel);
@@ -3710,7 +3744,7 @@ describe("Health trend date shortcuts", () => {
     ]);
     expect(trendText()).toContain(String(from));
     expect(trendText()).toContain("0.00000 kg");
-    expect(trendText()).toContain("At least 0 g · partial");
+    expect(trendText()).toContain("≥ 0 g · Partial · 1/2 contributions quantified");
     expect(writes()).toHaveLength(0);
     for (const count of [7, 30, 90]) expect(button(`Last ${count} days`).props.type).toBe("button");
     expect(text()).toContain("Ranges end today in your profile time zone.");
@@ -4002,9 +4036,9 @@ describe("trend shortcut aggregate meaning", () => {
       await click("Last 7 days");
       expect(trendText()).toContain(
         kind === "exact zero"
-          ? "0 g · exact"
+          ? "0 g · Complete coverage · quantified"
           : kind === "unknown"
-            ? "At least 0 g · unknown"
+            ? "Unknown · 0/1 contributions quantified"
             : "No data",
       );
       expect(trendText()).toContain("2026-09-07");
@@ -4206,8 +4240,8 @@ describe("web Health trend nutrient name search", () => {
         kind === "no data"
           ? "No data"
           : kind === "exact zero"
-            ? "0 g · exact"
-            : "At least 0 g · unknown",
+            ? "0 g · Complete coverage · quantified"
+            : "Unknown · 0/1 contributions quantified",
       );
       await change(trendSearchLabel, "absent");
       await click(clearTrendSearchLabel);

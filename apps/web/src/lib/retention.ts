@@ -11,6 +11,7 @@ import {
   type DiaryNutrient,
   localTimeInTimeZone,
   type MealSlot,
+  nutrientDisplay,
   parseDiaryNutrient,
 } from "./diary";
 
@@ -965,9 +966,8 @@ export function isSignedExactDecimal(value: unknown): value is string {
 
 export function trendAggregateLabel(aggregate: DiaryNutrient | null): string {
   if (aggregate === null) return "No data";
-  return aggregate.isExact
-    ? `${aggregate.knownAmount} ${aggregate.unit} · exact`
-    : `At least ${aggregate.knownAmount} ${aggregate.unit} · ${aggregate.completeness}`;
+  const display = nutrientDisplay(aggregate);
+  return `${display.amount} · ${display.qualification}`;
 }
 
 export function repeatRequestBody(input: {

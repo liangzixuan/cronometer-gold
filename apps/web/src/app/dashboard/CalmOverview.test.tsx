@@ -135,13 +135,13 @@ describe("Calm overview nutrition semantics", () => {
         entry([nutrient({ knownAmount: "0.1" })]),
         entry([nutrient({ knownAmount: "0.2" })]),
       ]),
-    ).toBe("0.3 kcal");
+    ).toBe("<1 kcal");
     expect(
       mealEnergy([
         entry([nutrient({ knownAmount: "9007199254740993.000000000001" })]),
         entry([nutrient({ knownAmount: "0.000000000001" })]),
       ]),
-    ).toBe("9007199254740993.000000000002 kcal");
+    ).toBe("9,007,199,254,740,993 kcal");
     expect(mealEnergy([entry([nutrient({ knownAmount: "0.000" })])])).toBe("0 kcal");
   });
   it("preserves absent, partial, trace, estimated and unknown energy", () => {
@@ -157,9 +157,9 @@ describe("Calm overview nutrition semantics", () => {
       { traceCount: 1 },
       { isExact: false },
     ]) {
-      expect(mealEnergy([entry([nutrient(change)])])).toBe("≥ 125.5 kcal · lower bound");
+      expect(mealEnergy([entry([nutrient(change)])])).toBe("≥ 125 kcal · lower bound");
     }
-    expect(mealEnergy([entry(), entry([])])).toBe("≥ 125.5 kcal · lower bound");
+    expect(mealEnergy([entry(), entry([])])).toBe("≥ 125 kcal · lower bound");
   });
   it("shows only saved matching goal progress, and never maps unknown to zero", () => {
     expect(matchedGoalRow(nutrient(), progress({ goal: null }))).toBeNull();
@@ -222,9 +222,9 @@ describe("Calm overview nutrition semantics", () => {
     ).toBe(100);
   });
   it("computes remaining or over only from complete exact data and a positive saved target", () => {
-    expect(remainingEnergy(nutrient(), progressRow())).toBe("1874.5 kcal remaining");
+    expect(remainingEnergy(nutrient(), progressRow())).toBe("1,875 kcal remaining");
     expect(remainingEnergy(nutrient({ knownAmount: "2000.000000000001" }), progressRow())).toBe(
-      "0.000000000001 kcal over saved target",
+      "<1 kcal over saved target",
     );
     expect(remainingEnergy(nutrient({ knownAmount: "2000" }), progressRow())).toBe(
       "0 kcal remaining",

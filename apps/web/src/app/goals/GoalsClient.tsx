@@ -13,6 +13,7 @@ import {
   quoteRevision,
   type SessionSummary,
 } from "../../lib/diary";
+import { formatNutrientAmount } from "../../lib/nutrition-display";
 import {
   type GoalProgressView,
   type GoalView,
@@ -1216,7 +1217,7 @@ export function GoalsClient() {
                   <span>Effective from</span>
                   <input
                     aria-describedby={builder.goalId ? "effective-date-help" : undefined}
-                    maxLength={10}
+                    type="date"
                     onBlur={() => {
                       const ownerSession = sessionRef.current;
                       if (ownerSession && isLocalDate(builder.effectiveFrom)) {
@@ -1795,8 +1796,10 @@ export function GoalsClient() {
               <section className="workspaceSection">
                 <h3>Explainable energy estimate</h3>
                 <p>
-                  <strong>{goal.energy.targetKcal} kcal estimated daily energy</strong> from{" "}
-                  {goal.energy.bmrKcal} kcal estimated resting energy.
+                  <strong>
+                    {formatNutrientAmount(goal.energy.targetKcal, "kcal")} estimated daily energy
+                  </strong>{" "}
+                  from {formatNutrientAmount(goal.energy.bmrKcal, "kcal")} estimated resting energy.
                 </p>
                 <details>
                   <summary>Calculation inputs</summary>
@@ -1830,7 +1833,7 @@ export function GoalsClient() {
             <label className="formField">
               <span>Progress date</span>
               <input
-                maxLength={10}
+                type="date"
                 onChange={(event) => {
                   const nextDate = event.target.value;
                   if (selectedDateRef.current !== nextDate) {
@@ -1890,12 +1893,10 @@ function ReferenceTargetRows({
               {target.source.version} · {target.source.table}
             </p>
           </div>
-          <span>
-            Target {target.targetAmount} {target.definition.unit}
-          </span>
+          <span>Target {formatNutrientAmount(target.targetAmount, target.definition.unit)}</span>
           <span>
             {target.maximumAmount
-              ? `UL ${target.maximumAmount} ${target.definition.unit}`
+              ? `UL ${formatNutrientAmount(target.maximumAmount, target.definition.unit)}`
               : "No compatible UL copied"}
           </span>
           <a href={target.source.url} rel="noreferrer" target="_blank">

@@ -172,7 +172,8 @@ describe("goal and recipe accessibility semantics", () => {
       lowerBoundPercent: "0",
       percentIsExact: false,
     });
-    expect(presentation.valueText).toBe("at least 0 ug");
+    expect(presentation.valueText).toBe("Unknown");
+    expect(presentation.progressPercent).toBeNull();
     expect(presentation.accessibilityLabel).toContain("zero is not a measured zero");
   });
 
@@ -209,7 +210,7 @@ describe("goal and recipe accessibility semantics", () => {
       lowerBoundPercent: "999999999999999999999999",
       percentIsExact: true,
     });
-    expect(presentation.valueText).toBe(`${knownAmount} kcal`);
+    expect(presentation.valueText).toBe(`100${",000".repeat(26)} kcal`);
     expect(presentation.progressPercent).toBe(100);
   });
 

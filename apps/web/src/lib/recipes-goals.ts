@@ -8,6 +8,7 @@ import {
   parseDiaryNutrient,
   quickAddOccurredAt,
 } from "./diary";
+import { formatNutrientAmount } from "./nutrition-display";
 
 export type Coverage = "complete" | "partial" | "unknown";
 
@@ -1382,9 +1383,17 @@ export function nutrientProgressPresentation(
   }
 
   const lowerBound = input.amountInterpretation === "lower_bound";
-  const valueText = `${lowerBound ? "at least " : ""}${input.knownAmount} ${input.unit}`;
+  const valueText =
+    input.completeness === "unknown"
+      ? "Unknown"
+      : formatNutrientAmount(input.knownAmount, input.unit, {
+          lowerBound,
+          lowerBoundPrefix: "at least",
+        });
   const targetText =
-    input.targetAmount === null ? "No daily target" : `Target ${input.targetAmount} ${input.unit}`;
+    input.targetAmount === null
+      ? "No daily target"
+      : `Target ${formatNutrientAmount(input.targetAmount, input.unit)}`;
   const coverageText =
     input.amountInterpretation === "exact"
       ? "Complete quantified coverage"
@@ -1393,7 +1402,8 @@ export function nutrientProgressPresentation(
         : input.completeness === "partial"
           ? "Partial coverage — shown amount is a quantified lower bound"
           : "Unknown coverage — zero is not a measured zero";
-  const progressPercent = displayPercent(input.lowerBoundPercent);
+  const progressPercent =
+    input.completeness === "unknown" ? null : displayPercent(input.lowerBoundPercent);
   return {
     valueText,
     targetText,

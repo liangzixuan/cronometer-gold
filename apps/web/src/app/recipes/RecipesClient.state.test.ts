@@ -842,7 +842,7 @@ describe("actual saved recipe nutrition inspection", () => {
     expect(nutritionRows()).toEqual([
       ["Measured zero", "Complete coverage · quantified", "0 g"],
       ["Unknown nutrient", "0/1 contributions quantified", "Unknown"],
-      ["Partial nutrient", "Partial · 1/2 contributions quantified", "≥ 74.0740734 g"],
+      ["Partial nutrient", "Partial · 1/2 contributions quantified", "≥ 74 g"],
       ["Trace nutrient", "Complete coverage · includes trace values", "≥ 0 g"],
     ]);
     const calls = fetcher.mock.calls.length;
@@ -852,10 +852,10 @@ describe("actual saved recipe nutrition inspection", () => {
     expect(nutritionRows()[2]).toEqual([
       "Partial nutrient",
       "Partial · 1/2 contributions quantified",
-      "≥ 123.456789 g",
+      "≥ 123.4 g",
     ]);
     await click("Per serving (bowl)");
-    expect(nutritionRows()[2]?.[2]).toBe("≥ 74.0740734 g");
+    expect(nutritionRows()[2]?.[2]).toBe("≥ 74 g");
     expect(fetcher.mock.calls).toHaveLength(calls);
   });
 
@@ -868,13 +868,13 @@ describe("actual saved recipe nutrition inspection", () => {
     expect(
       elements().some((node) => node.type === "button" && text(node).startsWith("Per serving")),
     ).toBe(false);
-    expect(nutritionRows()[2]?.[2]).toBe("≥ 123.456789 g");
+    expect(nutritionRows()[2]?.[2]).toBe("≥ 123.4 g");
     await change("Serving count (optional)", "3");
     await change("Serving label", "plate");
     expect(
       elements().some((node) => node.type === "button" && text(node).startsWith("Per serving")),
     ).toBe(false);
-    expect(nutritionRows()[2]?.[2]).toBe("≥ 123.456789 g");
+    expect(nutritionRows()[2]?.[2]).toBe("≥ 123.4 g");
   });
 
   it("keeps the saved name, amounts and serving definition independent of unsaved edits and diary quantity", async () => {

@@ -452,7 +452,7 @@ describe("web nutrition-report presentation", () => {
       },
       knownPercentOfScale: "70",
     };
-    expect(reportAmountText(partial, "kcal")).toBe("At least 1400 kcal");
+    expect(reportAmountText(partial, "kcal")).toBe("At least 1,400 kcal");
     expect(reportPointCoverageText(partial)).toContain("Known lower bound");
   });
 
