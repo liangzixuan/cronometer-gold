@@ -118,6 +118,18 @@ exact biometric values, nutrient coverage labels and profile-local day boundarie
 missing nutrition values remain unknown. Trend recovery must leave biometric,
 reminder and privacy-action drafts alone.
 
+## Reports session recovery
+
+A temporary failure to verify the Reports session offers Retry session. It verifies
+the current route and profile before loading its report. Keep report content,
+printing and day inspection unavailable during verification. A failed report read
+uses its own Retry report action after the session is verified.
+
+Retry must ignore duplicate clicks and callbacks retained from an older route or
+session. Late responses cannot restore closed private content or replace the
+current route. Existing explicit date ranges and profile-local defaults remain
+intact; a different owner or expired session requires signing in again.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

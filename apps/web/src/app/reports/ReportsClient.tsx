@@ -166,6 +166,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     readonly sessionGeneration: number;
     readonly ownerUserId: string;
   } | null>(null);
+  const sessionController = useRef<AbortController | null>(null);
   const reportController = useRef<AbortController | null>(null);
   const completedReportRequest = useRef<{
     readonly range: NutritionReportRange;
@@ -245,6 +246,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     privateUiClosed.current = true;
     sessionGeneration.current += 1;
     reportGeneration.current += 1;
+    sessionController.current?.abort();
     reportController.current?.abort();
     setSession(null);
     setRange(null);
@@ -255,6 +257,76 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     router.replace("/login");
     router.refresh();
   }, [clearInspection, invalidatePrint, router]);
+
+  const loadSession = useCallback(() => {
+    if (sessionExplicitlyClosed.current) return null;
+    diaryNavigationPending.current = false;
+    clearInspection();
+    controlGeneration.current += 1;
+    reportGeneration.current += 1;
+    completedReportRequest.current = null;
+    sessionController.current?.abort();
+    reportController.current?.abort();
+    invalidatePrint();
+    setReport(null);
+    setState("loading");
+    setSessionVerifying(true);
+    setMessage("Verifying your private report session…");
+    const controller = new AbortController();
+    sessionController.current = controller;
+    const generation = sessionGeneration.current + 1;
+    sessionGeneration.current = generation;
+    const controls = controlGeneration.current;
+    const expectedOwner = sessionRef.current?.user.id;
+    const isCurrent = () =>
+      !controller.signal.aborted &&
+      !privateUiClosed.current &&
+      routeReadyRef.current &&
+      routeRef.current === routeContext &&
+      sessionController.current === controller &&
+      sessionGeneration.current === generation &&
+      controlGeneration.current === controls;
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/me", {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!isCurrent()) return;
+        if (response.status === 401) return signInAgain();
+        const body = await responseJson(response);
+        if (!isCurrent()) return;
+        if (!response.ok) {
+          throw new Error(responseError(body, "Your report session could not be verified."));
+        }
+        const nextSession = parseSession(body);
+        if (expectedOwner && nextSession.user.id !== expectedOwner) return signInAgain();
+        const nextRange = resolveInitialNutritionReportRange({
+          ...(initialFrom ? { initialFrom } : {}),
+          ...(initialTo ? { initialTo } : {}),
+          profileTimeZone: nextSession.profile.timeZone,
+        });
+        setSessionVerifying(false);
+        setSession(nextSession);
+        rangeRef.current = nextRange;
+        setRange(nextRange);
+        setDraftFrom(nextRange.from);
+        setDraftTo(nextRange.to);
+        setMessage(`Loading ${nextRange.from} through ${nextRange.to}…`);
+      } catch (error) {
+        if (isCurrent()) {
+          setState("error");
+          setMessage(
+            error instanceof Error ? error.message : "Your report session could not be verified.",
+          );
+        }
+      } finally {
+        if (sessionController.current === controller) sessionController.current = null;
+      }
+    })();
+    return controller;
+  }, [clearInspection, initialFrom, initialTo, invalidatePrint, routeContext, signInAgain]);
 
   useEffect(() => {
     const ownedCommit = ownedRouteCommit.current;
@@ -270,75 +342,9 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       rangeKey(rangeRef.current) === ownedCommit.rangeKey
     )
       return;
-    diaryNavigationPending.current = false;
-    clearInspection();
-    controlGeneration.current += 1;
-    reportGeneration.current += 1;
-    completedReportRequest.current = null;
-    reportController.current?.abort();
-    invalidatePrint();
-    setReport(null);
-    setState("loading");
-    setSessionVerifying(true);
-    const controller = new AbortController();
-    const generation = sessionGeneration.current + 1;
-    sessionGeneration.current = generation;
-    void (async () => {
-      try {
-        const response = await fetch("/api/auth/me", {
-          headers: { accept: "application/json" },
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (
-          controller.signal.aborted ||
-          privateUiClosed.current ||
-          !routeReadyRef.current ||
-          sessionGeneration.current !== generation
-        )
-          return;
-        if (response.status === 401) return signInAgain();
-        const body = await responseJson(response);
-        if (!response.ok) {
-          throw new Error(responseError(body, "Your report session could not be verified."));
-        }
-        const nextSession = parseSession(body);
-        const nextRange = resolveInitialNutritionReportRange({
-          ...(initialFrom ? { initialFrom } : {}),
-          ...(initialTo ? { initialTo } : {}),
-          profileTimeZone: nextSession.profile.timeZone,
-        });
-        if (
-          controller.signal.aborted ||
-          privateUiClosed.current ||
-          !routeReadyRef.current ||
-          sessionGeneration.current !== generation
-        ) {
-          return;
-        }
-        setSessionVerifying(false);
-        setSession(nextSession);
-        rangeRef.current = nextRange;
-        setRange(nextRange);
-        setDraftFrom(nextRange.from);
-        setDraftTo(nextRange.to);
-        setMessage(`Loading ${nextRange.from} through ${nextRange.to}…`);
-      } catch (error) {
-        if (
-          !controller.signal.aborted &&
-          !privateUiClosed.current &&
-          routeReadyRef.current &&
-          sessionGeneration.current === generation
-        ) {
-          setState("error");
-          setMessage(
-            error instanceof Error ? error.message : "Your report session could not be verified.",
-          );
-        }
-      }
-    })();
-    return () => controller.abort();
-  }, [clearInspection, initialFrom, initialTo, initialRouteKey, invalidatePrint, signInAgain]);
+    const controller = loadSession();
+    return () => controller?.abort();
+  }, [initialFrom, initialTo, initialRouteKey, loadSession]);
 
   useEffect(() => {
     if (!session || !range) return;
@@ -461,6 +467,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       closePrintGate();
       sessionGeneration.current += 1;
       reportGeneration.current += 1;
+      sessionController.current?.abort();
       reportController.current?.abort();
     };
   }, [closePrintGate]);
@@ -540,6 +547,27 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       return { previous: null, next: null };
     }
   }, [report]);
+
+  function canRetrySession() {
+    return (
+      !privateUiClosed.current &&
+      !diaryNavigationPending.current &&
+      routeReadyRef.current &&
+      routeRef.current === routeContext &&
+      sessionVerifying &&
+      state === "error" &&
+      !logoutBusy &&
+      sessionController.current === null &&
+      sessionRef.current === session &&
+      sessionGeneration.current === sessionContext &&
+      controlGeneration.current === controlContext
+    );
+  }
+
+  function retrySession() {
+    if (!canRetrySession()) return;
+    loadSession();
+  }
 
   function canUseRangeControls() {
     return (
@@ -997,7 +1025,17 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         <p className="workspaceStatus" data-state={state} role="status" aria-live="polite">
           {message}
         </p>
-        {state === "error" && session && range ? (
+        {state === "error" && sessionVerifying ? (
+          <button
+            className="buttonSecondary"
+            disabled={!canRetrySession()}
+            onClick={retrySession}
+            type="button"
+          >
+            Retry session
+          </button>
+        ) : null}
+        {state === "error" && !sessionVerifying && session && range ? (
           <button
             className="buttonSecondary"
             onClick={() => {
@@ -1038,7 +1076,11 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           </p>
         </div>
 
-        {report && selectedSeries ? (
+        {!sessionVerifying &&
+        routeReadyRef.current &&
+        !privateUiClosed.current &&
+        report &&
+        selectedSeries ? (
           <div className="reportWorkspace">
             <section className="reportOverview" aria-labelledby="report-overview-heading">
               <div>

@@ -216,6 +216,7 @@ beforeEach(() => {
 afterEach(() => {
   hooks.unmount();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -976,11 +977,16 @@ describe("actual adjacent report periods", () => {
     expect(button("Previous period").props.disabled).toBe(true);
     expect(button("Next period").props.disabled).toBe(true);
     invoke(oldPrevious);
+    const authReads = fetcher.mock.calls.filter(([url]) => url === "/api/auth/me").length;
+    expect(
+      elements().some((node) => node.type === "button" && text(node) === "Retry session"),
+    ).toBe(false);
     const retry = button("Retry report");
     invoke(retry);
     invoke(retry);
     await hooks.settle();
     expect(targets).toBe(2);
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(authReads);
     expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
     expect(elements().find((node) => node.type === "select")?.props.value).toBe("9");
   });
@@ -1777,4 +1783,390 @@ describe("web report day inspector evidence and lifecycle", () => {
     expect(router.push).toHaveBeenCalledExactlyOnceWith("/dashboard?date=2026-08-31");
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+});
+
+describe("Reports session recovery", () => {
+  it.each([
+    ["503", "explicit"],
+    ["network", "explicit"],
+    ["malformed", "explicit"],
+    ["503", "default"],
+    ["network", "default"],
+    ["malformed", "default"],
+  ])("recovers initial %s authentication using the %s date range", async (failure, rangeMode) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-14T03:00:00.000Z"));
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== "/api/auth/me") return reportResponse(url);
+      authReads += 1;
+      if (authReads !== 1) return session();
+      if (failure === "network") throw new TypeError("Session network unavailable");
+      return failure === "503"
+        ? Response.json({ error: "Session temporarily unavailable" }, { status: 503 })
+        : Response.json({ data: { malformed: true } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const props =
+      rangeMode === "explicit" ? { initialFrom: "2026-09-01", initialTo: "2026-09-07" } : {};
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(["/api/auth/me"]);
+    expect(text()).not.toContain("Exact daily evidence");
+    expect(button("Print current report").props.disabled).toBe(true);
+    expect(elements().some((node) => node.type === "button" && text(node) === "Retry report")).toBe(
+      false,
+    );
+    const retry = button("Retry session");
+    expect(retry.props.disabled).not.toBe(true);
+    invoke(retry);
+    invoke(retry);
+    await hooks.settle();
+    const dates =
+      rangeMode === "explicit" ? ["2026-09-01", "2026-09-07"] : ["2026-08-31", "2026-09-13"];
+    expect(currentDates()).toEqual(dates);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "/api/auth/me",
+      "/api/auth/me",
+      `/api/reports/nutrition?from=${dates[0]}&to=${dates[1]}`,
+    ]);
+    expect(text()).toContain("Exact daily evidence");
+    expect(button("Print current report").props.disabled).toBe(false);
+    expect(router.replace).not.toHaveBeenCalled();
+    const before = fetcher.mock.calls.length;
+    invoke(retry);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+
+  it("recovers an external-route auth failure with Retry session and no inert Retry report", async () => {
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== "/api/auth/me") return reportResponse(url);
+      return ++authReads === 2
+        ? Response.json({ error: "New route session unavailable" }, { status: 503 })
+        : session();
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    expect(text()).toContain("Exact daily evidence");
+    props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+    hooks.renderWithoutEffects();
+    expect(text()).not.toContain("Exact daily evidence");
+    expect(diaryButtons()).toHaveLength(0);
+    expect(inspections()).toHaveLength(0);
+    expect(printedComponent()).toBeUndefined();
+    expect(button("Print current report").props.disabled).toBe(true);
+    hooks.render();
+    await hooks.settle();
+    expect(text()).toContain("New route session unavailable");
+    expect(text()).not.toContain("Exact daily evidence");
+    expect(diaryButtons()).toHaveLength(0);
+    expect(inspections()).toHaveLength(0);
+    expect(button("Print current report").props.disabled).toBe(true);
+    expect(elements().some((node) => node.type === "button" && text(node) === "Retry report")).toBe(
+      false,
+    );
+    await click("Retry session");
+    expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+    expect(
+      fetcher.mock.calls
+        .filter(([url]) => url.startsWith("/api/reports/nutrition?"))
+        .map(([url]) => url),
+    ).toEqual([
+      "/api/reports/nutrition?from=2026-09-01&to=2026-09-07",
+      "/api/reports/nutrition?from=2026-09-15&to=2026-09-21",
+    ]);
+    expect(authReads).toBe(3);
+    expect(text()).toContain("Exact daily evidence");
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+});
+
+function sessionRetryAvailable() {
+  return elements().some((node) => node.type === "button" && text(node) === "Retry session");
+}
+function expectReportUnavailable() {
+  expect(text()).not.toContain("Exact daily evidence");
+  expect(diaryButtons()).toHaveLength(0);
+  expect(inspections()).toHaveLength(0);
+  expect(printedComponent()).toBeUndefined();
+  expect(button("Print current report").props.disabled).toBe(true);
+  expect(printGate()).toBe("false");
+}
+
+describe("Reports session retry lifecycle", () => {
+  it("keeps pending verification private, rejects duplicate and old controls, and offers a fresh retry after another failure", async () => {
+    let authReads = 0;
+    const pending = deferred<Response>();
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== "/api/auth/me") return reportResponse(url);
+      authReads += 1;
+      if (authReads === 1)
+        return Response.json({ error: "First session failure" }, { status: 503 });
+      return authReads === 2 ? pending.promise : session();
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    const from = required(dateFields()[0]),
+      to = required(dateFields()[1]);
+    const update = required(elements().find((node) => node.type === "form"));
+    const next = button("Next period"),
+      preset = button("30 days"),
+      print = button("Print current report");
+    invoke(retry);
+    invoke(retry);
+    invoke(from, "onChange", { target: { value: "2026-08-01" } });
+    invoke(to, "onChange", { target: { value: "2026-08-31" } });
+    invoke(update, "onSubmit", { preventDefault() {} });
+    invoke(next);
+    invoke(preset);
+    invoke(print);
+    hooks.renderWithoutEffects();
+    expectReportUnavailable();
+    expect(button("Update report").props.disabled).toBe(true);
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(fetcher.mock.calls.every(([url]) => url === "/api/auth/me")).toBe(true);
+    pending.resolve(Response.json({ error: "Retry session still unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(text()).toContain("Retry session still unavailable");
+    expectReportUnavailable();
+    const before = fetcher.mock.calls.length;
+    invoke(retry);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await click("Retry session");
+    expect(authReads).toBe(3);
+    expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+    ).toHaveLength(1);
+    expect(text()).toContain("Exact daily evidence");
+  });
+
+  it("rejects retained Retry during a route render and after returning to the original route", async () => {
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    let fail = true;
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me"
+        ? fail
+          ? Response.json({ error: "Session unavailable" }, { status: 503 })
+          : session()
+        : reportResponse(url),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    const stale = button("Retry session"),
+      before = fetcher.mock.calls.length;
+    props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+    hooks.renderWithoutEffects();
+    invoke(stale);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expectReportUnavailable();
+    hooks.render();
+    await hooks.settle();
+    props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    hooks.render();
+    await hooks.settle();
+    const restored = fetcher.mock.calls.length;
+    invoke(stale);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(restored);
+    fail = false;
+    await click("Retry session");
+    expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+    expect(text()).toContain("Exact daily evidence");
+  });
+
+  it("resolves default dates only from the profile returned by the successful retry", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-14T03:00:00.000Z"));
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me"
+        ? ++authReads === 1
+          ? Response.json({ error: "Unavailable" }, { status: 503 })
+          : session(owner, "4", "UTC")
+        : utcReportResponse(url),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient({}));
+    await hooks.settle();
+    await click("Retry session");
+    expect(currentDates()).toEqual(["2026-09-01", "2026-09-14"]);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "/api/auth/me",
+      "/api/auth/me",
+      "/api/reports/nutrition?from=2026-09-01&to=2026-09-14",
+    ]);
+    expect(text()).toContain("Exact daily evidence");
+  });
+
+  it("closes private content when route recovery verifies a different owner", async () => {
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url !== "/api/auth/me") return reportResponse(url);
+      authReads += 1;
+      return authReads === 1
+        ? session()
+        : authReads === 2
+          ? Response.json({ error: "Cannot verify new route" }, { status: 503 })
+          : session(anotherOwner);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+    hooks.render();
+    await hooks.settle();
+    const stale = button("Retry session");
+    await click("Retry session");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expectReportUnavailable();
+    expect(text()).not.toContain("owner@example.test");
+    expect(sessionRetryAvailable()).toBe(false);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+    ).toHaveLength(1);
+    const before = fetcher.mock.calls.length;
+    invoke(stale);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+
+  it.each(["initial", "retry"])(
+    "closes a current %s authentication 401 before reading its body",
+    async (phase) => {
+      let authReads = 0;
+      const unauthorized = Response.json({ error: "Expired" }, { status: 401 });
+      const readBody = vi.spyOn(unauthorized, "json");
+      const fetcher = vi.fn(async (url: string) => {
+        if (url !== "/api/auth/me") return reportResponse(url);
+        return ++authReads === 1 && phase === "retry"
+          ? Response.json({ error: "Unavailable" }, { status: 503 })
+          : unauthorized;
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+      await hooks.settle();
+      if (phase === "retry") await click("Retry session");
+      expect(readBody).not.toHaveBeenCalled();
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expectReportUnavailable();
+      expect(sessionRetryAvailable()).toBe(false);
+      expect(fetcher.mock.calls.every(([url]) => url === "/api/auth/me")).toBe(true);
+    },
+  );
+
+  it.each(["success", "503", "401", "network"])(
+    "ignores late retry %s across route replacement, unmount, logout and private closure",
+    async (outcome) => {
+      for (const ending of ["route", "unmount", "logout", "closure"]) {
+        let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+        let authReads = 0;
+        const pending = deferred<Response | Error>();
+        const fetcher = vi.fn(async (url: string) => {
+          if (url === "/api/auth/logout") return new Response(null, { status: 204 });
+          if (url !== "/api/auth/me") return reportResponse(url);
+          authReads += 1;
+          if (authReads === 1) return Response.json({ error: "Unavailable" }, { status: 503 });
+          if (authReads === 2) {
+            const result = await pending.promise;
+            if (result instanceof Error) throw result;
+            return result;
+          }
+          return ending === "closure"
+            ? Response.json({ error: "Expired current route" }, { status: 401 })
+            : session();
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(() => ReportsClient(props));
+        await hooks.settle();
+        const retained = button("Retry session");
+        await click("Retry session");
+        expectReportUnavailable();
+        if (ending === "unmount") hooks.unmount();
+        else if (ending === "logout") await click("Sign out");
+        else {
+          props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+          hooks.render();
+          await hooks.settle();
+          if (ending === "route") expect(text()).toContain("2026-09-15 through 2026-09-21");
+        }
+        const before = fetcher.mock.calls.length,
+          result = text(),
+          updates = hooks.afterClose();
+        const redirects = router.replace.mock.calls.length;
+        const response =
+          outcome === "success"
+            ? session(anotherOwner)
+            : outcome === "network"
+              ? new TypeError("Late network failure")
+              : Response.json({ error: "Late obsolete session" }, { status: Number(outcome) });
+        const readBody = response instanceof Response ? vi.spyOn(response, "json") : null;
+        pending.resolve(response);
+        await hooks.settle();
+        invoke(retained);
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(before);
+        expect(text()).toBe(result);
+        expect(hooks.afterClose()).toBe(updates);
+        expect(router.replace).toHaveBeenCalledTimes(redirects);
+        expect(readBody?.mock.calls ?? []).toHaveLength(0);
+        hooks.unmount();
+        vi.clearAllMocks();
+      }
+    },
+  );
+
+  it.each(["route", "unmount", "logout"])(
+    "ignores late parsed retry JSON after %s",
+    async (ending) => {
+      let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+      let authReads = 0;
+      const body = deferred<unknown>();
+      const fetcher = vi.fn(async (url: string) => {
+        if (url === "/api/auth/logout") return new Response(null, { status: 204 });
+        if (url !== "/api/auth/me") return reportResponse(url);
+        authReads += 1;
+        if (authReads === 1) return Response.json({ error: "Unavailable" }, { status: 503 });
+        if (authReads === 2) {
+          const response = session();
+          vi.spyOn(response, "json").mockImplementation(() => body.promise);
+          return response;
+        }
+        return session();
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient(props));
+      await hooks.settle();
+      await click("Retry session");
+      if (ending === "unmount") hooks.unmount();
+      else if (ending === "logout") await click("Sign out");
+      else {
+        props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+        hooks.renderWithoutEffects();
+      }
+      const before = fetcher.mock.calls.length,
+        updates = hooks.afterClose();
+      body.resolve(await session(anotherOwner).json());
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(hooks.afterClose()).toBe(updates);
+      expect(router.replace.mock.calls.some(([url]) => url === "/login")).toBe(ending === "logout");
+      if (ending === "route") {
+        hooks.render();
+        await hooks.settle();
+        expect(text()).toContain("2026-09-15 through 2026-09-21");
+        expect(text()).toContain("owner@example.test");
+      }
+    },
+  );
 });
