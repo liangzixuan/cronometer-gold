@@ -94,10 +94,18 @@ function emptyFoodSearch(): IngredientFoodSearch {
   };
 }
 
-interface CopyConfirmation {
+type DraftChoice = {
   readonly selectionGeneration: number;
   readonly builderGeneration: number;
-}
+} & (
+  | { readonly action: "new" }
+  | { readonly action: "copy" }
+  | {
+      readonly action: "open";
+      readonly target: RecipeSummaryView;
+      readonly recipes: readonly RecipeSummaryView[];
+    }
+);
 
 function sameEditableBuilder(left: BuilderState, right: BuilderState): boolean {
   const editable = (builder: BuilderState) => ({
@@ -360,8 +368,9 @@ export function RecipesClient() {
   const [nutritionBasis, setNutritionBasis] = useState<NutritionBasis>("per100Grams");
   const selectionGeneration = useRef(0);
   const [builder, setBuilderState] = useState<BuilderState>(emptyBuilder);
-  const [copyConfirmation, setCopyConfirmation] = useState<CopyConfirmation | null>(null);
-  const copyConfirmationRef = useRef<CopyConfirmation | null>(null);
+  const [draftChoice, setDraftChoice] = useState<DraftChoice | null>(null);
+  const draftChoiceRef = useRef<DraftChoice | null>(null);
+  const draftKeepButton = useRef<HTMLButtonElement | null>(null);
   const createDraftGeneration = useRef(0);
   const [state, setLoadState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Loading your private recipes…");
@@ -439,9 +448,9 @@ export function RecipesClient() {
     installFoodSearch(emptyFoodSearch());
   }, [installFoodSearch]);
 
-  const clearCopyConfirmation = useCallback(() => {
-    copyConfirmationRef.current = null;
-    setCopyConfirmation(null);
+  const clearDraftChoice = useCallback(() => {
+    draftChoiceRef.current = null;
+    setDraftChoice(null);
   }, []);
 
   const setSelected = useCallback(
@@ -452,21 +461,21 @@ export function RecipesClient() {
       activeLog.current = null;
       logDraftGeneration.current += 1;
       setLogTime("");
-      clearCopyConfirmation();
+      clearDraftChoice();
       setSelectedState(next);
       setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
     },
-    [clearCopyConfirmation, resetFoodSearch],
+    [clearDraftChoice, resetFoodSearch],
   );
 
   const replaceBuilder = useCallback(
     (next: BuilderState) => {
       builderRef.current = next;
       builderGeneration.current += 1;
-      clearCopyConfirmation();
+      clearDraftChoice();
       setBuilderState(next);
     },
-    [clearCopyConfirmation],
+    [clearDraftChoice],
   );
   const builderScope = reviewGeneration.current;
   const renderedBuilderGeneration = builderGeneration.current;
@@ -497,17 +506,43 @@ export function RecipesClient() {
   const nutritionContext = selectionGeneration.current;
   const builderContext = builderGeneration.current;
 
-  function canCopySelected() {
+  function canUseBuilderContext() {
     return (
       mounted.current &&
       !privateUiClosed.current &&
       reviewOwner !== null &&
       ownerUserId.current === reviewOwner &&
-      selected !== null &&
+      reviewGeneration.current === reviewContext &&
       selectionGeneration.current === nutritionContext &&
       builderGeneration.current === builderContext &&
-      stateRef.current === "ready" &&
-      busyRef.current === null
+      builderRef.current === builder &&
+      filterScopeRef.current === filterScope &&
+      filterVerifiedScope === filterScope &&
+      stateRef.current === "ready"
+    );
+  }
+
+  function canStartNewRecipe() {
+    return (
+      canUseBuilderContext() &&
+      busyRef.current !== "save" &&
+      busyRef.current !== "log" &&
+      activeLog.current === null
+    );
+  }
+
+  function canOpenRecipe() {
+    return canUseBuilderContext() && busyRef.current === null && activeLog.current === null;
+  }
+
+  function canCopySelected() {
+    return canOpenRecipe() && selected !== null;
+  }
+
+  function builderHasEdits() {
+    return !sameEditableBuilder(
+      builderRef.current,
+      selected ? draftFromRecipe(selected) : emptyBuilder(),
     );
   }
 
@@ -528,31 +563,70 @@ export function RecipesClient() {
   }
 
   function requestCopySelected() {
-    if (!canCopySelected() || !selected) return;
-    if (sameEditableBuilder(builderRef.current, draftFromRecipe(selected))) {
+    if (!canCopySelected() || !selected || draftChoiceRef.current !== draftChoice) return;
+    if (!builderHasEdits()) {
       copySelectedToNewDraft();
       return;
     }
-    const confirmation = {
+    const choice: DraftChoice = {
+      action: "copy",
       selectionGeneration: nutritionContext,
       builderGeneration: builderContext,
     };
-    copyConfirmationRef.current = confirmation;
-    setCopyConfirmation(confirmation);
+    draftChoiceRef.current = choice;
+    setDraftChoice(choice);
   }
 
-  function resolveCopyConfirmation(discard: boolean) {
+  function requestOpenRecipe(target: RecipeSummaryView) {
     if (
-      !canCopySelected() ||
-      !copyConfirmation ||
-      copyConfirmationRef.current !== copyConfirmation ||
-      copyConfirmation.selectionGeneration !== nutritionContext ||
-      copyConfirmation.builderGeneration !== builderContext
+      !canOpenRecipe() ||
+      recipesRef.current !== recipes ||
+      draftChoiceRef.current !== draftChoice
     )
       return;
-    if (discard) copySelectedToNewDraft();
-    else clearCopyConfirmation();
+    if (!builderHasEdits()) {
+      void openRecipe(target.id);
+      return;
+    }
+    const choice: DraftChoice = {
+      action: "open",
+      target,
+      recipes,
+      selectionGeneration: nutritionContext,
+      builderGeneration: builderContext,
+    };
+    draftChoiceRef.current = choice;
+    setDraftChoice(choice);
   }
+
+  function resolveDraftChoice(discard: boolean) {
+    if (
+      !draftChoice ||
+      !(draftChoice.action === "new" ? canStartNewRecipe() : canOpenRecipe()) ||
+      draftChoiceRef.current !== draftChoice ||
+      draftChoice.selectionGeneration !== nutritionContext ||
+      draftChoice.builderGeneration !== builderContext ||
+      (draftChoice.action === "open" && recipesRef.current !== draftChoice.recipes) ||
+      (draftChoice.action === "copy" && !selected)
+    )
+      return;
+    clearDraftChoice();
+    if (!discard) return;
+    if (draftChoice.action === "copy") copySelectedToNewDraft();
+    else if (draftChoice.action === "new") installNewRecipe();
+    else void openRecipe(draftChoice.target.id);
+  }
+
+  useEffect(() => {
+    if (
+      draftChoice &&
+      draftChoiceRef.current === draftChoice &&
+      mounted.current &&
+      !privateUiClosed.current
+    ) {
+      draftKeepButton.current?.focus();
+    }
+  }, [draftChoice]);
 
   function selectNutritionBasis(next: NutritionBasis) {
     if (
@@ -603,15 +677,22 @@ export function RecipesClient() {
   }
 
   function startNewRecipe() {
-    if (
-      !mounted.current ||
-      privateUiClosed.current ||
-      !reviewOwner ||
-      ownerUserId.current !== reviewOwner ||
-      reviewGeneration.current !== reviewContext ||
-      busyRef.current === "log"
-    )
+    if (!canStartNewRecipe() || draftChoiceRef.current !== draftChoice) return;
+    if (builderHasEdits()) {
+      const choice: DraftChoice = {
+        action: "new",
+        selectionGeneration: nutritionContext,
+        builderGeneration: builderContext,
+      };
+      draftChoiceRef.current = choice;
+      setDraftChoice(choice);
       return;
+    }
+    installNewRecipe();
+  }
+
+  function installNewRecipe() {
+    if (!canStartNewRecipe()) return;
     builderRequest.current?.abort();
     builderRequest.current = null;
     reviewGeneration.current += 1;
@@ -707,6 +788,7 @@ export function RecipesClient() {
             }
             const merged = mergeRecipePage(recipesRef.current, page.data, cursor !== null);
             recipesRef.current = merged;
+            if (draftChoiceRef.current?.action === "open") clearDraftChoice();
             setRecipes(merged);
             setMessage(
               merged.length === 0 && page.nextCursor === null
@@ -727,7 +809,7 @@ export function RecipesClient() {
         privateReadControllers.current.delete(controller);
       }
     },
-    [revalidateRecipeSession, signInAgain, setState],
+    [clearDraftChoice, revalidateRecipeSession, signInAgain, setState],
   );
 
   async function refreshRecipeProfileAfterTimeZoneChange(
@@ -849,7 +931,7 @@ export function RecipesClient() {
     return () => {
       mounted.current = false;
       filterScopeRef.current = { requestedDate: filterScopeRef.current.requestedDate };
-      copyConfirmationRef.current = null;
+      draftChoiceRef.current = null;
       selectionGeneration.current += 1;
       builderGeneration.current += 1;
       reviewGeneration.current += 1;
@@ -871,17 +953,10 @@ export function RecipesClient() {
     setState,
   ]);
 
-  async function openRecipe(recipeId: string, successMessage?: string) {
+  async function openRecipe(recipeId: string) {
     const initiatingOwnerUserId = ownerUserId.current;
-    if (
-      initiatingOwnerUserId === null ||
-      privateUiClosed.current ||
-      !mounted.current ||
-      initiatingOwnerUserId !== reviewOwner ||
-      reviewGeneration.current !== reviewContext
-    )
-      return;
-    clearCopyConfirmation();
+    if (!canOpenRecipe() || initiatingOwnerUserId === null) return;
+    clearDraftChoice();
     builderRequest.current?.abort();
     const controller = new AbortController();
     builderRequest.current = controller;
@@ -920,7 +995,7 @@ export function RecipesClient() {
           replaceBuilder(draftFromRecipe(recipe));
           setLogKind(recipeLogKindFor(recipe));
           setLogAmount("1");
-          setMessage(successMessage ?? `Version ${recipe.versionNumber} loaded.`);
+          setMessage(`Version ${recipe.versionNumber} loaded.`);
         },
       });
     } catch (caught) {
@@ -1253,7 +1328,7 @@ export function RecipesClient() {
       busyRef.current !== null
     )
       return;
-    clearCopyConfirmation();
+    clearDraftChoice();
     const savingBuilder = builderRef.current;
     let body: ReturnType<typeof recipeBodyFromBuilder>;
     try {
@@ -1310,11 +1385,9 @@ export function RecipesClient() {
       if (!isCurrent()) return;
       if (response.status === 412) {
         pendingSaves.current.delete(intentKey);
-        if (savingBuilder.recipeId)
-          await openRecipe(
-            savingBuilder.recipeId,
-            "This recipe changed elsewhere. Fresh values were loaded; review before saving again.",
-          );
+        setMessage(
+          "This recipe changed elsewhere. Your edits are still here. Open the saved recipe and choose to discard edits to load its latest values, or keep this draft for reference.",
+        );
         return;
       }
       if (!response.ok)
@@ -1628,7 +1701,7 @@ export function RecipesClient() {
           <aside className="recipeRail" aria-label="Your recipes">
             <button
               className="buttonPrimary"
-              disabled={busy === "log" || state !== "ready"}
+              disabled={!canStartNewRecipe()}
               onClick={startNewRecipe}
               type="button"
             >
@@ -1682,8 +1755,8 @@ export function RecipesClient() {
                 <li key={recipe.id}>
                   <button
                     aria-current={selected?.id === recipe.id}
-                    disabled={busy === `open:${recipe.id}`}
-                    onClick={() => void openRecipe(recipe.id)}
+                    disabled={!canOpenRecipe()}
+                    onClick={() => requestOpenRecipe(recipe)}
                     type="button"
                   >
                     <strong>{recipe.name}</strong>
@@ -1730,33 +1803,42 @@ export function RecipesClient() {
                 >
                   Copy to new draft
                 </button>
-                {copyConfirmation && copyConfirmationRef.current === copyConfirmation ? (
-                  <fieldset
-                    aria-labelledby="copy-recipe-confirmation"
-                    disabled={busy !== null || state !== "ready"}
-                    style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
-                  >
-                    <p id="copy-recipe-confirmation" className="coverageCopy" aria-live="polite">
-                      This editor has unsaved changes. Keep editing, or discard them and copy{" "}
-                      {selected.name} saved version {selected.versionNumber}.
-                    </p>
-                    <button
-                      className="buttonQuiet"
-                      onClick={() => resolveCopyConfirmation(false)}
-                      type="button"
-                    >
-                      Keep editing
-                    </button>{" "}
-                    <button
-                      className="buttonSecondary"
-                      onClick={() => resolveCopyConfirmation(true)}
-                      type="button"
-                    >
-                      Discard edits and copy saved version
-                    </button>
-                  </fieldset>
-                ) : null}
               </section>
+            ) : null}
+            {draftChoice && draftChoiceRef.current === draftChoice ? (
+              <fieldset
+                aria-labelledby="recipe-draft-choice"
+                disabled={draftChoice.action === "new" ? !canStartNewRecipe() : !canOpenRecipe()}
+                style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+              >
+                <p id="recipe-draft-choice" className="coverageCopy" aria-live="polite">
+                  This editor has unsaved changes. Keep editing, or discard them and{" "}
+                  {draftChoice.action === "copy"
+                    ? `copy ${selected?.name} saved version ${selected?.versionNumber}.`
+                    : draftChoice.action === "open"
+                      ? `open saved ${draftChoice.target.name}.`
+                      : "start a new recipe."}
+                </p>
+                <button
+                  className="buttonQuiet"
+                  onClick={() => resolveDraftChoice(false)}
+                  ref={draftKeepButton}
+                  type="button"
+                >
+                  Keep editing
+                </button>{" "}
+                <button
+                  className="buttonSecondary"
+                  onClick={() => resolveDraftChoice(true)}
+                  type="button"
+                >
+                  {draftChoice.action === "copy"
+                    ? "Discard edits and copy saved version"
+                    : draftChoice.action === "open"
+                      ? "Discard edits and open saved recipe"
+                      : "Discard edits and start new recipe"}
+                </button>
+              </fieldset>
             ) : null}
             {builder.recipeId === null && reviewOwner && !privateUiClosed.current ? (
               <PastedIngredientReview

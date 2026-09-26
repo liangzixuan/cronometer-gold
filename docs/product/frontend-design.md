@@ -57,6 +57,21 @@ opened log. Changing that route date does not overwrite an open logging draft.
 Owner checks, draft choices and exact retries apply on the dedicated page as they
 do elsewhere in the app. Revising a food never rewrites past diary entries.
 
+## Recipe drafts
+
+New recipe, opening a saved recipe and copying a saved version use the same
+inline replacement choice when the builder has unsaved edits. Keep editing
+leaves the builder, ingredient order and notes, selected nutrition and diary-log
+draft intact. Discarding edits starts a blank recipe, copies the loaded saved
+version, or opens the named saved recipe. Opening replaces the builder only after
+that recipe loads successfully.
+
+A revision conflict preserves the rejected draft and its expected revision.
+Loading current saved values requires an explicit replacement choice. Active
+saves and logs cannot be interrupted by New or Open, and an old choice cannot
+replace newer edits. These protections cover the current recipe page; they do
+not add persistent autosave or protection from every navigation or browser close.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

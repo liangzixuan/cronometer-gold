@@ -1595,8 +1595,20 @@ button:disabled {
 }
 
 .ingredientRow {
-  grid-template-columns: minmax(0, 1fr) minmax(90px, 0.22fr) auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
   padding: 15px 0;
+}
+
+.ingredientRow > div:first-child {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ingredientRow > .formField {
+  flex: 0 1 7.5rem;
 }
 
 .goalTargetRow {
@@ -2517,10 +2529,6 @@ button:disabled {
   .diaryEntry {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .ingredientRow {
-    grid-template-columns: 1fr;
   }
 
   .hydrationEditor,

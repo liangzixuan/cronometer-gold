@@ -545,7 +545,7 @@ describe("actual recipe builder pasted-review integration", () => {
     },
   );
 
-  it("cannot install a delayed save receipt into a new workspace", async () => {
+  it("keeps a pending save in its current workspace when a retained New callback is invoked", async () => {
     const pendingJson = deferred<unknown>();
     const fetcher = readyFetcher();
     const original = required(fetcher.getMockImplementation());
@@ -566,11 +566,12 @@ describe("actual recipe builder pasted-review integration", () => {
     await hooks.settle();
     invoke(button("New recipe"), "onClick");
     await hooks.settle();
-    await change("Name", "Second draft survives");
-    pendingJson.resolve(await mutation("Stale saved receipt").json());
+    expect(field("Name").props.value).toBe("First draft");
+    expect(button("New recipe").props.disabled).toBe(true);
+    pendingJson.resolve(await mutation("Accepted current save").json());
     await hooks.settle();
-    expect(field("Name").props.value).toBe("Second draft survives");
-    expect(reviewPresent()).toBe(true);
+    expect(field("Name").props.value).toBe("Accepted current save");
+    expect(reviewPresent()).toBe(false);
   });
 
   it.each(["closed", "unmounted"] as const)(
@@ -1378,6 +1379,7 @@ describe("actual saved recipe copy to a new draft", () => {
     expect(fetcher.mock.calls).toHaveLength(requests);
     openSaved();
     await hooks.settle();
+    await click(confirmOpenLabel);
     retainedChanges();
     await hooks.settle();
     expect(field("Portion").props.value).toBe("serving");
@@ -1404,6 +1406,7 @@ describe("actual saved recipe copy to a new draft", () => {
     await hooks.settle();
     openSaved();
     await hooks.settle();
+    await click(confirmOpenLabel);
     await click("Copy to new draft");
     save();
     await hooks.settle();
@@ -1494,6 +1497,7 @@ describe("actual saved recipe copy to a new draft", () => {
         );
         openSaved();
         await hooks.settle();
+        await click(confirmOpenLabel);
         expect(router.replace).toHaveBeenCalledWith("/login");
       }
       if (transition === "unmounted") hooks.unmount();
@@ -1539,7 +1543,7 @@ describe("actual saved recipe copy to a new draft", () => {
     ).toBe(false);
   });
 
-  it("ignores an original delayed save receipt after New, reopening and copying the saved recipe", async () => {
+  it("blocks New, Open and Copy during a pending revision, then permits an explicit replacement after failure", async () => {
     const pending = deferred<Response>();
     const fetcher = nutritionFetcher();
     const original = required(fetcher.getMockImplementation());
@@ -1550,18 +1554,26 @@ describe("actual saved recipe copy to a new draft", () => {
     openSaved();
     await hooks.settle();
     await change("Name", "Original pending revision");
+    const replace = [button("New recipe"), savedOpener(), button("Copy to new draft")];
     save();
     await hooks.settle();
+    const requests = fetcher.mock.calls.length,
+      before = editorValues();
+    for (const control of replace) invoke(control, "onClick");
+    await hooks.settle();
+    expect(editorValues()).toEqual(before);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    pending.resolve(Response.json({ error: "Ambiguous original revision" }, { status: 503 }));
+    await hooks.settle();
+    expect(editorValues()).toEqual(before);
     await click("New recipe");
+    await click(confirmNewLabel);
     openSaved();
     await hooks.settle();
     await click("Copy to new draft");
     await change("Name", "Independent copied draft");
-    pending.resolve(mutation("Late original revision"));
-    await hooks.settle();
     expect(field("Name").props.value).toBe("Independent copied draft");
     expect(hasButton("Create recipe")).toBe(true);
-    expect(text()).not.toContain("Late original revision");
   });
 });
 
@@ -2231,6 +2243,8 @@ describe("actual loaded saved-recipe name filtering", () => {
     expect(field(savedFilterLabel).props.value).toBe("not loaded");
     expect(fetcher.mock.calls).toHaveLength(requests);
     await click("New recipe");
+    expect(field("Name").props.value).toBe("Reviewed draft");
+    await click(confirmNewLabel);
     expect(field(savedFilterLabel).props.value).toBe("not loaded");
   });
 
@@ -2990,6 +3004,7 @@ describe("actual optional recipe log time", () => {
       if (transition === "New" || transition === "copy") {
         openSaved();
         await hooks.settle();
+        if (transition === "copy") await click(confirmOpenLabel);
       }
       expect(field(optionalTimeLabel).props.value).toBe("");
     },
@@ -3954,4 +3969,517 @@ describe("ingredient continuation across live context changes", () => {
     expect(router.replace).not.toHaveBeenCalled();
     expect(button("Confirm 2026-09-09 at 07:30 in UTC").props.disabled).toBe(false);
   });
+});
+
+const confirmNewLabel = "Discard edits and start new recipe";
+const confirmOpenLabel = "Discard edits and open saved recipe";
+function savedOpener() {
+  return required(
+    elements().find((node) => node.type === "button" && text(node).startsWith("Saved recipe")),
+  );
+}
+function replacementSnapshot() {
+  return {
+    editor: editorValues(),
+    ingredients: ingredientValues(),
+    nutrition: nutritionRows(),
+    log: ["Portion", "Amount", "Local diary date", optionalTimeLabel, "Meal"].map(
+      (label) => field(label).props.value,
+    ),
+  };
+}
+async function dirtyRecipe() {
+  await change("Name", "  Unsaved name  ");
+  await change("Description", "  Exact description  ");
+  await change("Instructions (optional)", "  Instructions\nunchanged  ");
+  await change("Final yield grams", "999.000001");
+  await change("Yield source", "measured");
+  await change("Serving count (optional)", "4.000001");
+  await change("Serving label", "plate");
+  await change("Private sauce quantity in grams", "7.000001");
+  await change("Private sauce note", "  Raw ingredient note  ");
+  await moveRow(0, "down");
+  await change("Portion", "grams");
+  await change("Amount", "12.000001");
+  await change("Local diary date", "2026-09-08");
+  await change(optionalTimeLabel, "07:34");
+  await click("Per 100 g");
+}
+
+describe("recipe draft replacement regressions", () => {
+  it.each(["new", "open"])(
+    "keeps a dirty builder intact and makes no request when choosing %s until explicit discard",
+    async (action) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await dirtyRecipe();
+      const before = replacementSnapshot(),
+        requests = fetcher.mock.calls.length;
+      const choose = async () => {
+        if (action === "new") await click("New recipe");
+        else {
+          openSaved();
+          await hooks.settle();
+        }
+      };
+      await choose();
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      expect(replacementSnapshot()).toEqual(before);
+      expect(hasButton(action === "new" ? confirmNewLabel : confirmOpenLabel)).toBe(true);
+      await click("Keep editing");
+      expect(replacementSnapshot()).toEqual(before);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      await choose();
+      await click(action === "new" ? confirmNewLabel : confirmOpenLabel);
+      if (action === "new") {
+        expect(field("Name").props.value).toBe("");
+        expect(ingredientValues()).toEqual([]);
+        expect(reviewPresent()).toBe(true);
+        expect(fetcher.mock.calls).toHaveLength(requests);
+      } else {
+        expect(field("Name").props.value).toBe("Saved recipe");
+        expect(
+          fetcher.mock.calls.filter(([url]) => url === `/api/recipes/${recipeId}`),
+        ).toHaveLength(2);
+      }
+    },
+  );
+
+  it.each(["503", "malformed"])(
+    "retains the rejected builder through a pending and %s explicit Open",
+    async (failure) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await dirtyRecipe();
+      const before = replacementSnapshot();
+      const original = required(fetcher.getMockImplementation()),
+        pending = deferred<Response>();
+      fetcher.mockImplementation((url, init) =>
+        url === `/api/recipes/${recipeId}` ? pending.promise : original(url, init),
+      );
+      openSaved();
+      await hooks.settle();
+      await click(confirmOpenLabel);
+      expect(replacementSnapshot()).toEqual(before);
+      pending.resolve(
+        failure === "503"
+          ? Response.json({ error: "Saved recipe unavailable" }, { status: 503 })
+          : Response.json({ data: "invalid saved recipe" }),
+      );
+      await hooks.settle();
+      expect(replacementSnapshot()).toEqual(before);
+      expect(button("Publish new revision").props.disabled).toBe(false);
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves a 412 rejected revision and expected revision without automatically loading server values", async () => {
+    const { fetcher, source } = copyFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await dirtyRecipe();
+    const before = replacementSnapshot();
+    const reads = fetcher.mock.calls.filter(([url]) => url === `/api/recipes/${recipeId}`).length;
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) => {
+      if (init?.method === "POST")
+        return Promise.resolve(
+          Response.json({ error: "Recipe changed on another device" }, { status: 412 }),
+        );
+      if (url === `/api/recipes/${recipeId}`)
+        return Promise.resolve(
+          Response.json({
+            data: {
+              recipe: {
+                ...source,
+                revision: "2",
+                currentVersion: {
+                  ...source.currentVersion,
+                  id: "07853b24-a267-4588-ad7d-a66f21d6fdfc",
+                  versionNumber: 2,
+                  name: "New server version",
+                },
+              },
+            },
+          }),
+        );
+      return original(url, init);
+    });
+    save();
+    await hooks.settle();
+    expect(replacementSnapshot()).toEqual(before);
+    expect(fetcher.mock.calls.filter(([url]) => url === `/api/recipes/${recipeId}`)).toHaveLength(
+      reads,
+    );
+    expect(text()).toContain("Your edits are still here");
+    save();
+    await hooks.settle();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+    expect(new Headers(posts[0]?.[1]?.headers).get("if-match")).toBe('"1"');
+    expect(new Headers(posts[1]?.[1]?.headers).get("if-match")).toBe('"1"');
+    expect(replacementSnapshot()).toEqual(before);
+    openSaved();
+    await hooks.settle();
+    expect(fetcher.mock.calls.filter(([url]) => url === `/api/recipes/${recipeId}`)).toHaveLength(
+      reads,
+    );
+    await click("Keep editing");
+    expect(replacementSnapshot()).toEqual(before);
+    openSaved();
+    await hooks.settle();
+    await click(confirmOpenLabel);
+    expect(field("Name").props.value).toBe("New server version");
+  });
+
+  it.each([
+    ["save", "new"],
+    ["save", "open"],
+    ["log", "new"],
+    ["log", "open"],
+  ])(
+    "blocks retained %s-time %s actions without interrupting the current request",
+    async (write, replacement) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      const target = replacement === "new" ? button("New recipe") : savedOpener();
+      const original = required(fetcher.getMockImplementation()),
+        pending = deferred<Response>();
+      fetcher.mockImplementation((url, init) =>
+        init?.method === "POST" ? pending.promise : original(url, init),
+      );
+      if (write === "save") save();
+      else invoke(button("Log recipe"), "onClick");
+      await hooks.settle();
+      const before = replacementSnapshot(),
+        requests = fetcher.mock.calls.length;
+      expect((replacement === "new" ? button("New recipe") : savedOpener()).props.disabled).toBe(
+        true,
+      );
+      invoke(target, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      expect(replacementSnapshot()).toEqual(before);
+      expect(hasButton(confirmNewLabel)).toBe(false);
+      expect(hasButton(confirmOpenLabel)).toBe(false);
+      pending.resolve(Response.json({ error: "Ambiguous response" }, { status: 503 }));
+      await hooks.settle();
+      if (write === "save") save();
+      else invoke(button("Log recipe"), "onClick");
+      await hooks.settle();
+      const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(posts).toHaveLength(2);
+      expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+      expect(new Headers(posts[1]?.[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(posts[0]?.[1]?.headers).get("idempotency-key"),
+      );
+    },
+  );
+});
+
+async function chooseReplacement(action: "new" | "open") {
+  if (action === "new") await click("New recipe");
+  else {
+    openSaved();
+    await hooks.settle();
+  }
+}
+function replacementLabel(action: "new" | "open") {
+  return action === "new" ? confirmNewLabel : confirmOpenLabel;
+}
+
+describe("recipe replacement choice lifecycle", () => {
+  it.each(["new", "open"] as const)(
+    "protects populated new drafts before %s and retires their transfer callbacks only on explicit discard",
+    async (action) => {
+      const fetcher = readyFetcher();
+      await mountReady();
+      const child = review();
+      expect(child.onConfirm([ingredient("draft", "0.000001")])).toBe(true);
+      await hooks.settle();
+      await change("Name", "  New draft  ");
+      await change("Final yield grams", "1.000001");
+      const before = editorValues(),
+        requests = fetcher.mock.calls.length;
+      await chooseReplacement(action);
+      expect(editorValues()).toEqual(before);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      await click("Keep editing");
+      expect(editorValues()).toEqual(before);
+      expect(review().ownerUserId).toBe(child.ownerUserId);
+      await chooseReplacement(action);
+      await click(replacementLabel(action));
+      expect(child.onConfirm([ingredient("obsolete")])).toBe(false);
+      await hooks.settle();
+      expect(field("Name").props.value).toBe(action === "new" ? "" : "Saved recipe");
+    },
+  );
+
+  it.each(["new", "open"] as const)(
+    "detects each editable field independently for %s and restores direct actions when the exact baseline returns",
+    async (action) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      const requests = fetcher.mock.calls.length;
+      for (const label of [
+        "Name",
+        "Description",
+        "Instructions (optional)",
+        "Final yield grams",
+        "Serving count (optional)",
+        "Serving label",
+        "Private sauce quantity in grams",
+        "Private sauce note",
+      ]) {
+        const original = String(field(label).props.value);
+        await change(label, `${original} `);
+        const before = replacementSnapshot();
+        await chooseReplacement(action);
+        expect(hasButton(replacementLabel(action))).toBe(true);
+        await click("Keep editing");
+        expect(replacementSnapshot()).toEqual(before);
+        await change(label, original);
+      }
+      await change("Yield source", "measured");
+      await chooseReplacement(action);
+      expect(hasButton(replacementLabel(action))).toBe(true);
+      await click("Keep editing");
+      await change("Yield source", "estimated");
+      await moveRow(0, "down");
+      const reordered = ingredientValues();
+      await chooseReplacement(action);
+      expect(hasButton(replacementLabel(action))).toBe(true);
+      await click("Keep editing");
+      expect(ingredientValues()).toEqual(reordered);
+      await moveRow(1, "up");
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      await chooseReplacement(action);
+      expect(hasButton(confirmNewLabel)).toBe(false);
+      expect(hasButton(confirmOpenLabel)).toBe(false);
+      expect(field("Name").props.value).toBe(action === "new" ? "" : "Saved recipe");
+    },
+  );
+
+  it.each([
+    ["new", "edit-restore"],
+    ["open", "edit-restore"],
+    ["new", "competing-target"],
+    ["open", "competing-target"],
+    ["new", "save"],
+    ["open", "save"],
+    ["new", "owner"],
+    ["open", "owner"],
+    ["new", "route"],
+    ["open", "route"],
+    ["new", "unmount"],
+    ["open", "unmount"],
+  ] as const)(
+    "rejects retained %s discard and Keep after %s replaces the choice scope",
+    async (action, transition) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Name", "Protected draft");
+      await chooseReplacement(action);
+      const discard = button(replacementLabel(action)),
+        keep = button("Keep editing");
+      let currentChoice: string | null = null;
+      if (transition === "edit-restore") {
+        await change("Name", "Later raw draft");
+        await change("Name", "Protected draft");
+        await chooseReplacement(action);
+        currentChoice = replacementLabel(action);
+      } else if (transition === "competing-target") {
+        const other = action === "new" ? "open" : "new";
+        await chooseReplacement(other);
+        currentChoice = replacementLabel(other);
+      } else if (transition === "save") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation((url, init) =>
+          init?.method === "POST"
+            ? Promise.resolve(Response.json({ error: "Ambiguous revision" }, { status: 503 }))
+            : original(url, init),
+        );
+        save();
+        invoke(discard, "onClick");
+        invoke(keep, "onClick");
+        await hooks.settle();
+        expect(field("Name").props.value).toBe("Protected draft");
+      } else if (transition === "owner") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation((url, init) =>
+          url === "/api/auth/me"
+            ? Promise.resolve(session("a3fd8855-90c8-42df-8f21-2f5a4060fa08"))
+            : original(url, init),
+        );
+        hooks.replayEffects();
+        await hooks.settle();
+        expect(router.replace).toHaveBeenCalledWith("/login");
+      } else if (transition === "route") {
+        navigation.query = "date=2026-09-10";
+        hooks.render();
+        await hooks.settle();
+      } else hooks.unmount();
+      const before = editorValues(),
+        rendered = text(),
+        requests = fetcher.mock.calls.length,
+        updates = hooks.afterClose();
+      invoke(discard, "onClick");
+      invoke(keep, "onClick");
+      await hooks.settle();
+      expect(editorValues()).toEqual(before);
+      expect(text()).toBe(rendered);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      expect(hooks.afterClose()).toBe(updates);
+      if (currentChoice) expect(hasButton(currentChoice)).toBe(true);
+    },
+  );
+
+  it.each(["new", "open"] as const)(
+    "accepts a %s discard only once before paint and never revives the old choice",
+    async (action) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Name", "Protected draft");
+      await chooseReplacement(action);
+      const discard = button(replacementLabel(action)),
+        keep = button("Keep editing");
+      const original = required(fetcher.getMockImplementation()),
+        pending = deferred<Response>();
+      const reads = fetcher.mock.calls.filter(([url]) => url === `/api/recipes/${recipeId}`).length;
+      if (action === "open")
+        fetcher.mockImplementation((url, init) =>
+          url === `/api/recipes/${recipeId}` ? pending.promise : original(url, init),
+        );
+      invoke(discard, "onClick");
+      invoke(discard, "onClick");
+      invoke(keep, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls.filter(([url]) => url === `/api/recipes/${recipeId}`)).toHaveLength(
+        reads + (action === "open" ? 1 : 0),
+      );
+      if (action === "open") {
+        pending.resolve(detail());
+        await hooks.settle();
+      }
+      await change("Name", "Later draft survives old choice");
+      const requests = fetcher.mock.calls.length;
+      invoke(discard, "onClick");
+      invoke(keep, "onClick");
+      await hooks.settle();
+      expect(field("Name").props.value).toBe("Later draft survives old choice");
+      expect(fetcher.mock.calls).toHaveLength(requests);
+    },
+  );
+
+  it.each(["save", "log"] as const)(
+    "preserves exact ambiguous %s bodies and operation IDs across opened and declined New/Open choices",
+    async (action) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await dirtyRecipe();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) =>
+        init?.method === "POST"
+          ? Promise.resolve(Response.json({ error: "Ambiguous write" }, { status: 503 }))
+          : original(url, init),
+      );
+      const submit = async () => {
+        if (action === "save") save();
+        else invoke(button("Log recipe"), "onClick");
+        await hooks.settle();
+      };
+      await submit();
+      const before = replacementSnapshot(),
+        requests = fetcher.mock.calls.length;
+      for (const replacement of ["new", "open"] as const) {
+        await chooseReplacement(replacement);
+        expect(replacementSnapshot()).toEqual(before);
+        await click("Keep editing");
+        expect(replacementSnapshot()).toEqual(before);
+      }
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      await submit();
+      const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(posts).toHaveLength(2);
+      expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+      expect(new Headers(posts[1]?.[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(posts[0]?.[1]?.headers).get("idempotency-key"),
+      );
+      expect(new Headers(posts[1]?.[1]?.headers).get("if-match")).toBe(
+        action === "save" ? '"1"' : null,
+      );
+    },
+  );
+
+  it("retires an Open choice when its target is replaced by a refreshed saved list", async () => {
+    const { fetcher } = copyFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      url.startsWith("/api/recipes?")
+        ? Promise.resolve(
+            filterCollection(
+              [nutritionRecipe({ version: url.includes("cursor=next") ? 2 : 1 })],
+              url.includes("cursor=next") ? null : "next",
+            ),
+          )
+        : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Protected old selection");
+    await chooseReplacement("open");
+    const discard = button(confirmOpenLabel),
+      keep = button("Keep editing");
+    await click("Load more recipes");
+    const requests = fetcher.mock.calls.length,
+      before = replacementSnapshot();
+    invoke(discard, "onClick");
+    invoke(keep, "onClick");
+    await hooks.settle();
+    expect(hasButton(confirmOpenLabel)).toBe(false);
+    expect(replacementSnapshot()).toEqual(before);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+});
+
+it("focuses Keep editing for each new replacement choice without refocusing ordinary renders", async () => {
+  copyFetcher();
+  await mountReady();
+  openSaved();
+  await hooks.settle();
+  await change("Name", "Retained draft");
+  invoke(button("New recipe"), "onClick");
+  hooks.renderWithoutEffects();
+  const focus = vi.fn();
+  (button("Keep editing").props.ref as { current: unknown }).current = { focus };
+  await hooks.settle();
+  hooks.render();
+  expect(focus).toHaveBeenCalledOnce();
+  await change("Amount", "2");
+  await click("Per 100 g");
+  hooks.render();
+  expect(focus).toHaveBeenCalledOnce();
+  openSaved();
+  await hooks.settle();
+  expect(focus).toHaveBeenCalledTimes(2);
+  await click("Keep editing");
+  expect(focus).toHaveBeenCalledTimes(2);
+  expect(field("Name").props.value).toBe("Retained draft");
 });
