@@ -287,8 +287,26 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
 
   it("persists explainable recipe history and logs a pinned recipe version", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
-    const fixture = await createFixture(databaseUrl, "recipes");
+    const startedAt = performance.now();
+    let phaseStartedAt = startedAt;
+    let phase = "test.start";
+    const markPhase = (nextPhase: string) => {
+      const now = performance.now();
+      console.info(
+        "[recipe-history-phase]",
+        JSON.stringify({
+          completedPhase: phase,
+          durationMs: Math.round(now - phaseStartedAt),
+          elapsedMs: Math.round(now - startedAt),
+          nextPhase,
+        }),
+      );
+      phase = nextPhase;
+      phaseStartedAt = now;
+    };
+    const fixture = await createFixture(databaseUrl, "recipes", markPhase);
     try {
+      markPhase("recipe.create");
       const draft = foodRecipeDraft(fixture.catalogue.foodVersionId, fixture.catalogue.servingId, {
         servingCount: "3",
         servingLabel: "bowl",
@@ -339,6 +357,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         created.recipe.currentVersion.nutrients.find((row) => row.code === "sodium"),
       ).toMatchObject({ completeness: "unknown", knownAmount: "0", unknownCount: 1 });
       expect(created.recipe.currentVersion.sources).toHaveLength(1);
+      markPhase("recipe.tamper");
       for (const invalidClone of [
         { versionNumber: 99 },
         { recipeStatus: "archived" as const },
@@ -410,6 +429,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
             .execute();
         }),
       ).rejects.toMatchObject({ code: "23514" });
+      markPhase("recipe.replay-concurrency");
       expect(await createRecipe(fixture.database, createInput)).toMatchObject({ replayed: true });
       const concurrentInput = {
         ...createInput,
@@ -449,6 +469,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         }),
       ).rejects.toBeInstanceOf(RecipeNotFoundError);
 
+      markPhase("recipe.revision");
       const revised = await reviseRecipe(fixture.database, {
         clientOperationId: randomUUID(),
         expectedRevision: "1",
@@ -472,6 +493,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         }),
       ).rejects.toBeInstanceOf(RecipeRevisionConflictError);
 
+      markPhase("recipe.nested-tamper");
       const noServingChild = await createRecipe(fixture.database, {
         clientOperationId: randomUUID(),
         recipe: foodRecipeDraft(fixture.catalogue.foodVersionId, fixture.catalogue.servingId, {
@@ -516,6 +538,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
           }),
         ),
       ).rejects.toMatchObject({ code: "23514" });
+      markPhase("recipe.fan-out");
       let fanOutVersionId = noServingChild.recipe.currentVersion.id;
       for (let level = 1; level <= 5; level += 1) {
         const fanOut = await createRecipe(fixture.database, {
@@ -585,6 +608,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         }),
       ).rejects.toBeInstanceOf(RecipeValidationError);
 
+      markPhase("recipe.depth");
       let chainVersionId = nested.recipe.currentVersion.id;
       let unreferencedRootId = nested.recipe.id;
       for (let depth = 3; depth <= 10; depth += 1) {
@@ -606,10 +630,12 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         }),
       ).rejects.toThrow(/depth exceeds 10/u);
 
+      markPhase("recipe.cascade-account");
       const cascadeOwner = await registerPasswordAccount(
         fixture.database,
         accountInput("recipe-cascade"),
       );
+      markPhase("diary.pinned-version");
       const cascadeRecipe = await createRecipe(fixture.database, {
         clientOperationId: randomUUID(),
         recipe: draft,
@@ -670,6 +696,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         unknownCount: 1,
         unknownReasons: { not_reported: 1 },
       });
+      markPhase("diary.revision-tamper");
       for (const corruptRevision of [
         { corruptRecipeName: true },
         { corruptEngineVersion: true },
@@ -685,6 +712,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         ).rejects.toMatchObject({ code: "23514" });
       }
 
+      markPhase("diary.revision-and-pagination");
       const moved = await updateDiaryEntry(fixture.database, {
         clientOperationId: randomUUID(),
         entryId: logged.entry.id,
@@ -775,6 +803,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
           .executeTakeFirst(),
       ).rejects.toMatchObject({ code: "55000" });
 
+      markPhase("lock.revocation.acquire");
       let markRevocationLocked: (() => void) | undefined;
       const revocationLocked = new Promise<void>((resolve) => {
         markRevocationLocked = resolve;
@@ -793,6 +822,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         await revocationMayCommit;
       });
       await revocationLocked;
+      markPhase("lock.revocation.probe");
       let blockedCreateSettled = false;
       const blockedCreate = createRecipe(fixture.database, {
         ...createInput,
@@ -811,10 +841,12 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(blockedCreateSettled).toBe(false);
       commitRevocation?.();
+      markPhase("lock.revocation.settle");
       await revocation;
       const blockedOutcome = await blockedCreate;
       expect(blockedOutcome.value).toBeNull();
       expect(blockedOutcome.error).toBeInstanceOf(RecipeValidationError);
+      markPhase("diary.revoked-source-history");
       await expect(
         fixture.database.transaction().execute((transaction) =>
           cloneRecipeVersionForInvariantTest(transaction, {
@@ -867,6 +899,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         .where("id", "=", fixture.catalogue.sourceId)
         .executeTakeFirstOrThrow();
 
+      markPhase("lock.activation.acquire");
       let markActivationLocked: (() => void) | undefined;
       const activationLocked = new Promise<void>((resolve) => {
         markActivationLocked = resolve;
@@ -893,6 +926,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         await activationMayCommit;
       });
       await activationLocked;
+      markPhase("lock.activation.probe");
       let activationCreateSettled = false;
       const createDuringActivation = createRecipe(fixture.database, {
         ...createInput,
@@ -905,6 +939,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(activationCreateSettled).toBe(false);
       commitActivation?.();
+      markPhase("lock.activation.settle");
       await activation;
       const postActivation = await createDuringActivation;
       expect(
@@ -913,6 +948,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         ),
       ).toMatchObject({ completeness: "unknown", unknownCount: 1 });
 
+      markPhase("lock.deactivation.acquire");
       let markDeactivationLocked: (() => void) | undefined;
       const deactivationLocked = new Promise<void>((resolve) => {
         markDeactivationLocked = resolve;
@@ -932,6 +968,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         await deactivationMayCommit;
       });
       await deactivationLocked;
+      markPhase("lock.deactivation.probe");
       let deactivationCreateSettled = false;
       const createDuringDeactivation = createRecipe(fixture.database, {
         ...createInput,
@@ -944,6 +981,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
       await new Promise((resolve) => setTimeout(resolve, 25));
       expect(deactivationCreateSettled).toBe(false);
       commitDeactivation?.();
+      markPhase("lock.deactivation.settle");
       await deactivation;
       const postDeactivation = await createDuringDeactivation;
       expect(
@@ -952,6 +990,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         ),
       ).toBe(false);
 
+      markPhase("diary.successor-source-history");
       const successorRelease = await fixture.database
         .insertInto("food_source_release")
         .values({
@@ -1002,6 +1041,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         ).entry.recipe.recipeVersionId,
       ).toBe(revised.recipe.currentVersion.id);
 
+      markPhase("recipe.deletion-invariants");
       await expect(
         fixture.database
           .deleteFrom("recipe")
@@ -2480,24 +2520,38 @@ async function cloneRecipeDiaryRevisionForInvariantTest(
   }
 }
 
-async function createFixture(databaseUrl: string, label: string) {
+async function createFixture(
+  databaseUrl: string,
+  label: string,
+  onPhase?: (phase: string) => void,
+) {
+  onPhase?.("fixture.schema");
   const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
   const schemaName = `${label}_${randomBytes(6).toString("hex")}`;
   await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
   const scopedUrl = new URL(databaseUrl);
   scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
   const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 8 });
+  onPhase?.("fixture.migrations");
   await runMigrations(database);
+  onPhase?.("fixture.catalogue");
   const catalogue = await seedCatalogue(database);
+  onPhase?.("fixture.owner-account");
   const owner = await registerPasswordAccount(database, accountInput(`${label}-owner`));
+  onPhase?.("fixture.other-account");
   const other = await registerPasswordAccount(database, accountInput(`${label}-other`));
+  onPhase?.("fixture.ready");
   return {
     bootstrap,
     catalogue,
     close: async () => {
+      onPhase?.("teardown.database");
       await database.destroy();
+      onPhase?.("teardown.schema");
       await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      onPhase?.("teardown.bootstrap");
       await bootstrap.destroy();
+      onPhase?.("teardown.complete");
     },
     database,
     other,
