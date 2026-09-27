@@ -1,4 +1,7 @@
+import type { ReactElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GoalProgressView } from "../../lib/recipes-goals";
 
 // Runs the actual component and its effects with deterministic synchronous hooks.
 // This observes request/state transitions; browser layout and concurrent React are
@@ -2240,5 +2243,140 @@ describe("goal read retry and accepted save status", () => {
     expect(calls.filter((call) => call.path.startsWith("/api/goals/current?"))).toHaveLength(3);
     expect(text()).toContain("GOAL REVISION 4");
     expect(field("Daily energy (kcal)").props.value).toBe("2200.000001");
+  });
+});
+
+describe("goal progress limit labels", () => {
+  type Row = GoalProgressView["nutrients"][number];
+  const calcium: Row = {
+    nutrientId: "1087",
+    code: "CALCIUM",
+    name: "Calcium",
+    unit: "mg",
+    knownAmount: "10.000000",
+    completeness: "complete",
+    amountInterpretation: "exact",
+    minimum: { amount: "2.345000", state: "met" },
+    target: null,
+    maximum: { amount: "12.345000", state: "within" },
+  };
+
+  async function renderRow(row: Row) {
+    const original = structuredClone(row);
+    const goal = savedGoal();
+    const { calls } = await workspace({
+      goal,
+      intercept: ({ path }) =>
+        path.startsWith("/api/goals/progress?")
+          ? Response.json({
+              data: {
+                ...progress().data,
+                goal: { id: goal.id, versionId: goal.currentVersion.id, revision: goal.revision },
+                nutrients: [row],
+              },
+            })
+          : undefined,
+    });
+    const child = required(
+      elements().find(
+        (node) =>
+          typeof node.type === "function" &&
+          (node.props.row as Row | undefined)?.nutrientId === row.nutrientId,
+      ),
+    );
+    // Render the real nested ProgressRow, which the state harness leaves unevaluated.
+    const markup = renderToStaticMarkup(child as unknown as ReactElement);
+    const visible = markup.replace(/<[^>]+>/gu, "").replaceAll("&lt;", "<");
+    const label = required(/aria-label="([^"]+)"/u.exec(markup)?.[1]).replaceAll("&lt;", "<");
+    expect(row).toEqual(original);
+    expect(writes(calls)).toHaveLength(0);
+    return { markup, visible, label };
+  }
+
+  it("shows formatted limits and exact accessible thresholds without inventing a daily target", async () => {
+    const { markup, visible, label } = await renderRow(calcium);
+    expect(visible).toContain("minimum 2.3 mg (met)");
+    expect(visible).toContain("maximum 12.3 mg (within)");
+    expect(visible).toContain("No daily target · Complete quantified coverage");
+    expect(visible).not.toContain("2.345000");
+    expect(visible).not.toContain("12.345000");
+    expect(label).toBe(
+      "Calcium: 10 mg. No daily target. Complete quantified coverage. Minimum 2.345000 mg: met. Maximum 12.345000 mg: within.",
+    );
+    expect(markup).not.toContain("progressTrack");
+  });
+
+  it.each([
+    ["minimum", "0.000000", "met", "0 mg (met)"],
+    ["maximum", "0.000000", "within", "0 mg (within)"],
+    ["minimum", "0.000000000001", "below", "<0.1 mg (below)"],
+    ["maximum", "0.000000000001", "within", "<0.1 mg (within)"],
+  ] as const)(
+    "retains a %s-only zero or tiny saved limit %s",
+    async (kind, amount, state, formatted) => {
+      const { markup, visible, label } = await renderRow({
+        ...calcium,
+        knownAmount: "0",
+        minimum: kind === "minimum" ? { amount, state } : null,
+        maximum: kind === "maximum" ? { amount, state } : null,
+      });
+      expect(visible).toContain(`${kind} ${formatted}`);
+      expect(label).toContain(
+        `${kind === "minimum" ? "Minimum" : "Maximum"} ${amount} mg: ${state}.`,
+      );
+      expect(visible).not.toContain(kind === "minimum" ? "maximum" : "minimum");
+      expect(markup).not.toContain("progressTrack");
+    },
+  );
+
+  it("preserves partial lower bounds and server comparisons when rounded amounts look equal", async () => {
+    const { markup, visible, label } = await renderRow({
+      ...calcium,
+      knownAmount: "4.299999",
+      completeness: "partial",
+      amountInterpretation: "lower_bound",
+      minimum: { amount: "4.299998", state: "met" },
+      target: { amount: "10", lowerBoundPercent: "42.99999", percentIsExact: false },
+      maximum: { amount: "4.299998", state: "exceeded" },
+    });
+    expect(visible).toContain("at least 4.2 mg");
+    expect(visible).toContain("Target 10 mg · Partial coverage");
+    expect(visible).toContain("minimum 4.3 mg (met)");
+    expect(visible).toContain("maximum 4.3 mg (exceeded)");
+    expect(label).toContain("shown amount is a quantified lower bound.");
+    expect(label).toContain("Minimum 4.299998 mg: met. Maximum 4.299998 mg: exceeded.");
+    expect(markup).toContain('style="width:42.99999%"');
+  });
+
+  it("keeps unknown intake separate from saved limits and an unavailable comparison", async () => {
+    const { markup, visible, label } = await renderRow({
+      ...calcium,
+      knownAmount: "0",
+      completeness: "unknown",
+      amountInterpretation: "lower_bound",
+      minimum: { amount: "8.000000", state: "indeterminate" },
+      maximum: { amount: "45.000000", state: "indeterminate" },
+    });
+    expect(visible).toContain("CalciumUnknown");
+    expect(visible).toContain("Unknown coverage — zero is not a measured zero");
+    expect(visible).toContain("minimum 8 mg (indeterminate)");
+    expect(visible).toContain("maximum 45 mg (indeterminate)");
+    expect(label).toContain("Calcium: Unknown. No daily target. Unknown coverage");
+    expect(label).toContain(
+      "Minimum 8.000000 mg: indeterminate. Maximum 45.000000 mg: indeterminate.",
+    );
+    expect(markup).not.toContain("progressTrack");
+  });
+
+  it("leaves a target-only row and its accessibility and progress intact", async () => {
+    const { markup, visible, label } = await renderRow({
+      ...calcium,
+      minimum: null,
+      maximum: null,
+      target: { amount: "20.000000", lowerBoundPercent: "50", percentIsExact: true },
+    });
+    expect(visible).toBe("Calcium10 mgTarget 20 mg · Complete quantified coverage");
+    expect(label).toBe("Calcium: 10 mg. Target 20 mg. Complete quantified coverage.");
+    expect(markup).toContain('style="width:50%"');
   });
 });

@@ -2234,7 +2234,9 @@ function ProgressRow({ row }: { readonly row: GoalProgressView["nutrients"][numb
     percentIsExact: row.target?.percentIsExact ?? row.amountInterpretation === "exact",
   });
   return (
-    <section aria-label={view.accessibilityLabel}>
+    <section
+      aria-label={`${view.accessibilityLabel}${row.minimum ? ` Minimum ${row.minimum.amount} ${row.unit}: ${row.minimum.state}.` : ""}${row.maximum ? ` Maximum ${row.maximum.amount} ${row.unit}: ${row.maximum.state}.` : ""}`}
+    >
       <div className="progressHeader">
         <strong>{row.name}</strong>
         <span>{view.valueText}</span>
@@ -2246,8 +2248,12 @@ function ProgressRow({ row }: { readonly row: GoalProgressView["nutrients"][numb
       ) : null}
       <p className="coverageCopy">
         {view.targetText} · {view.coverageText}
-        {row.minimum ? ` · minimum ${row.minimum.state}` : ""}
-        {row.maximum ? ` · maximum ${row.maximum.state}` : ""}
+        {row.minimum
+          ? ` · minimum ${formatNutrientAmount(row.minimum.amount, row.unit)} (${row.minimum.state})`
+          : ""}
+        {row.maximum
+          ? ` · maximum ${formatNutrientAmount(row.maximum.amount, row.unit)} (${row.maximum.state})`
+          : ""}
       </p>
     </section>
   );
