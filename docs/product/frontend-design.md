@@ -53,6 +53,33 @@ Reject an invalid password before submitting the account request, explain the
 length requirement and focus the field. Keep the entered value available for
 correction. Existing email, origin, session-cookie and response checks still apply.
 
+## Diary session recovery
+
+Dashboard and Diary verify the session before loading a private day. A temporary
+session failure offers Retry session without presenting an empty day or zero
+nutrition. Keep a valid selected date; otherwise use the recovered profile's local
+day. Once the session is verified, a failed day read uses its own Retry action.
+A successful day read must not hide a session error.
+
+Repeated or outdated retry actions must not create extra requests, disturb a
+ready editor or replay a save. Session closure, route replacement and leaving the
+screen invalidate pending reads. An expired or replaced account requires signing
+in again; a failed sign-out attempt must leave a usable recovery path.
+
+## Diary entry saves
+
+Keep the submitted quantity, meal, local date, local time and private note visible
+while a save is pending. Disable those fields and Clear, Save and Cancel until
+the request settles. Other entries cannot be opened for editing during the save;
+saved nutrient details remain available. Old callbacks must not change a newer
+editor or start a duplicate save.
+
+An unconfirmed save keeps the raw draft available. Retrying it unchanged reuses
+the original request, operation identity and revision/time-zone preconditions.
+Fresh controls allow editing again after the failure. A confirmed matching receipt
+closes the editor and refreshes the affected day. Existing conflict recovery,
+owner checks, private-session closure and immutable entry history remain intact.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the

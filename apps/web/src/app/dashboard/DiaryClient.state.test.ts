@@ -2408,3 +2408,890 @@ describe("dashboard overview composition", () => {
     expect(router.replace).toHaveBeenCalledWith("/login");
   });
 });
+
+const saveLockFields = ["Quantity", "Meal", "Local date", "Local time", "Private note"] as const;
+function editorField(label: string): ElementNode {
+  const editor = elements().find((node) => node.props.className === "entryEditor");
+  const labelled = elements(editor).find(
+    (node) => node.type === "label" && text(node).trim().startsWith(label),
+  );
+  const input = elements(labelled).find((node) =>
+    ["input", "select", "textarea"].includes(String(node.type)),
+  );
+  if (!input) throw new Error(`Missing editor field: ${label}`);
+  return input;
+}
+async function changeEditorField(label: string, value: string) {
+  invoke(editorField(label), "onChange", { target: { value } });
+  await hooks.settle();
+}
+function editorValues() {
+  return saveLockFields.map((label) => editorField(label).props.value);
+}
+async function prepareSaveLockDraft() {
+  await click("Edit Apple 0");
+  await changeEditorField("Quantity", "2.125000");
+  await changeEditorField("Meal", "dinner");
+  await changeEditorField("Local time", "09:45");
+  await changeEditorField("Private note", "  Keep this exact draft\nincluding spacing  ");
+}
+function retainedEditorControls() {
+  return {
+    fields: saveLockFields.map((label) => editorField(label)),
+    clear: button("Clear note field for Apple 0"),
+    cancel: button("Cancel editing Apple 0"),
+    save: button("Save changes to Apple 0"),
+    open: button("Edit Apple 1"),
+  };
+}
+function invokeEditorControls(controls: ReturnType<typeof retainedEditorControls>) {
+  const replacements = ["8.5000", "lunch", "2026-08-20", "11:22", "stale replacement"];
+  controls.fields.forEach((node, index) => {
+    invoke(node, "onChange", { target: { value: replacements[index] } });
+  });
+  invoke(controls.clear);
+  invoke(controls.cancel);
+  invoke(controls.save);
+  invoke(controls.open);
+}
+
+function captureEditorSave(url: string, init: RequestInit) {
+  if (typeof init.body !== "string") throw new Error("Expected a serialized editor save.");
+  return { url, body: init.body, headers: Object.fromEntries(new Headers(init.headers)) };
+}
+function editorSaveReceipt(request: ReturnType<typeof captureEditorSave>) {
+  const body = JSON.parse(request.body) as {
+    portion: { kind: "serving"; servingId: string; amount: string };
+    mealSlot: MealSlot;
+    note?: string;
+    occurredAt?: string;
+  };
+  const original = entry(0);
+  const occurredAt = body.occurredAt ?? original.occurredAt;
+  const zone = request.headers["x-expected-profile-time-zone"] ?? original.timeZone;
+  const instant = new Date(occurredAt);
+  const localDate = localDateInTimeZone(instant, zone);
+  const result = {
+    ...original,
+    revision: "4",
+    portion: { ...original.portion, ...body.portion },
+    mealSlot: body.mealSlot,
+    note: body.note === undefined ? original.note : body.note,
+    occurredAt,
+    localDate,
+    localTime: localTimeInTimeZone(instant, zone),
+    timeZone: zone,
+  };
+  const affectedDays = [{ localDate, revision: "9" }];
+  const payload = {
+    data: {
+      replayed: false,
+      entry: result,
+      affectedDays,
+      receipt: {
+        protocol: "v1",
+        operationId: request.headers["idempotency-key"],
+        kind: "update",
+        expectedSubjects: [{ entryId: original.id, revision: "3" }],
+        resultSubjects: [{ entryId: original.id, revision: "4", state: "active" }],
+        affectedDays,
+      },
+    },
+  };
+  expect(() => parseDiaryCorrectionMutation(payload)).not.toThrow();
+  return payload;
+}
+describe("Diary save lock", () => {
+  it.each([...saveLockFields, "Clear", "Cancel", "Save"] as const)(
+    "rejects the retained %s callback synchronously once saving starts",
+    async (action) => {
+      const pending = deferred<Response>();
+      const writes: RequestInit[] = [];
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH") {
+          writes.push(init);
+          return pending.promise;
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await prepareSaveLockDraft();
+      const raw = editorValues();
+      const control = saveLockFields.includes(action as (typeof saveLockFields)[number])
+        ? editorField(action)
+        : button(
+            action === "Clear"
+              ? "Clear note field for Apple 0"
+              : action === "Cancel"
+                ? "Cancel editing Apple 0"
+                : "Save changes to Apple 0",
+          );
+      invoke(button("Save changes to Apple 0"));
+      if (action === "Clear" || action === "Cancel" || action === "Save") invoke(control);
+      else invoke(control, "onChange", { target: { value: "stale replacement" } });
+      await hooks.settle();
+      expect(writes).toHaveLength(1);
+      expect(editorValues()).toEqual(raw);
+      pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+    },
+  );
+
+  it("disables the pending editor and other Edit controls while keeping saved nutrients available", async () => {
+    const pending = deferred<Response>();
+    const writes: RequestInit[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        writes.push(init);
+        return pending.promise;
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const raw = editorValues();
+    const oldOpen = button("Edit Apple 1");
+    invoke(button("Save changes to Apple 0"));
+    invoke(oldOpen);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(editorValues()).toEqual(raw);
+    const pendingControls = retainedEditorControls();
+    for (const node of [
+      ...pendingControls.fields,
+      pendingControls.clear,
+      pendingControls.cancel,
+      pendingControls.save,
+      pendingControls.open,
+    ]) {
+      expect(node.props.disabled).toBe(true);
+    }
+    invokeEditorControls(pendingControls);
+    await hooks.settle();
+    expect(editorValues()).toEqual(raw);
+    expect(writes).toHaveLength(1);
+    await toggleNutrients(0);
+    expect(nutrientDetailText(0)).toContain("1.250000 × medium apple");
+    expect(nutrientDetailText(0)).toContain("Unsaved edits are not included.");
+    expect(editorValues()).toEqual(raw);
+    pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+    await hooks.settle();
+  });
+
+  it("accepts the submitted draft and closes normally after its verified receipt and readback", async () => {
+    const pending = deferred<Response>();
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    const base = fetcher();
+    let saved: ReturnType<typeof editorSaveReceipt> | null = null;
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        writes.push(captureEditorSave(url, init));
+        return pending.promise;
+      }
+      if (saved && url.startsWith("/api/diary?")) {
+        return Response.json(
+          page([saved.data.entry, entry(1, "lunch")], null, 2, "2026-08-15", "9"),
+        );
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const raw = editorValues();
+    const retained = retainedEditorControls();
+    invoke(retained.save);
+    invokeEditorControls(retained);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(editorValues()).toEqual(raw);
+    const request = writes[0];
+    if (!request) throw new Error("Missing save request.");
+    saved = editorSaveReceipt(request);
+    pending.resolve(Response.json(saved));
+    await hooks.settle();
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    expect(text()).toContain("Diary entry saved in Dinner with fresh totals.");
+    expect(text(group("dinner"))).toContain("2.125000 × medium apple");
+    expect(text(group("dinner"))).toContain("Keep this exact draft");
+    const requests = fetch.mock.calls.length;
+    invokeEditorControls(retained);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    await click("Edit Apple 0");
+    expect(editorValues()).toEqual(raw);
+  });
+
+  it.each(["newer edit", "edit-restore", "cancel-reopen", "another editor"] as const)(
+    "rejects the old editor callbacks after %s even when raw values return",
+    async (transition) => {
+      const fetch = await mount();
+      await prepareSaveLockDraft();
+      const old = retainedEditorControls();
+      if (transition === "newer edit") await changeEditorField("Quantity", "4.000001");
+      if (transition === "edit-restore") {
+        await changeEditorField("Quantity", "4.000001");
+        await changeEditorField("Quantity", "2.125000");
+      }
+      if (transition === "cancel-reopen") {
+        await click("Cancel editing Apple 0");
+        await prepareSaveLockDraft();
+      }
+      if (transition === "another editor") await click("Edit Apple 1");
+      const raw = editorValues();
+      const before = text();
+      const requests = fetch.mock.calls.length;
+      invokeEditorControls(old);
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+      expect(text()).toBe(before);
+      expect(fetch.mock.calls).toHaveLength(requests);
+    },
+  );
+
+  it.each([
+    "route-before-effects",
+    "route-return",
+    "owner",
+    "logout",
+    "unmount",
+    "effect-replay",
+  ] as const)("rejects retained editor fields and actions after %s", async (transition) => {
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/auth/logout"
+        ? Promise.resolve(new Response(null, { status: 204 }))
+        : base(url, init),
+    );
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const old = retainedEditorControls();
+    if (transition === "route-before-effects") {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+    }
+    if (transition === "route-return") {
+      await visitDiaryDate("2026-08-16");
+      await visitDiaryDate("2026-08-15");
+      await prepareSaveLockDraft();
+    }
+    if (transition === "owner")
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    if (transition === "logout") await click("Sign out");
+    if (transition === "unmount") hooks.unmount();
+    if (transition === "effect-replay") {
+      hooks.replayEffects();
+      await hooks.settle();
+    }
+    const requests = fetch.mock.calls.length;
+    const before = text();
+    invokeEditorControls(old);
+    if (transition === "route-before-effects" || transition === "owner")
+      hooks.renderWithoutEffects();
+    else await hooks.settle();
+    expect(text()).toBe(before);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+  });
+
+  it.each(["503", "network", "malformed receipt", "mismatched receipt"] as const)(
+    "retains the exact timestamp-changing request after %s and fences both earlier generations during retry",
+    async (failure) => {
+      const firstReady = deferred<void>();
+      const retry = deferred<Response>();
+      const writes: ReturnType<typeof captureEditorSave>[] = [];
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method !== "PATCH") return base(url, init);
+        const request = captureEditorSave(url, init);
+        writes.push(request);
+        if (writes.length === 1) {
+          await firstReady.promise;
+          if (failure === "network") throw new Error("Connection lost.");
+          if (failure === "malformed receipt") return Response.json({ data: {} });
+          if (failure === "mismatched receipt") {
+            const receipt = editorSaveReceipt(request);
+            receipt.data.receipt.operationId = "07e634de-cd94-4f81-b290-e708901e217f";
+            return Response.json(receipt);
+          }
+          return Response.json({ error: "Response unavailable." }, { status: 503 });
+        }
+        if (writes.length === 2) return retry.promise;
+        return Response.json({ error: "Response unavailable." }, { status: 503 });
+      });
+      await mount(fetch);
+      await prepareSaveLockDraft();
+      const raw = editorValues();
+      const preSave = retainedEditorControls();
+      invoke(preSave.save);
+      await hooks.settle();
+      const whilePending = retainedEditorControls();
+      firstReady.resolve();
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+      for (const label of saveLockFields) expect(editorField(label).props.disabled).not.toBe(true);
+      const failedStatus = text();
+      invokeEditorControls(preSave);
+      invokeEditorControls(whilePending);
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+      expect(text()).toBe(failedStatus);
+      expect(writes).toHaveLength(1);
+      invoke(button("Save changes to Apple 0"));
+      invokeEditorControls(preSave);
+      invokeEditorControls(whilePending);
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(writes[0]?.url).toBe(
+        `/api/diary/entries/${entry(0).id}?date=2026-08-15&profileTimeZonePrecondition=v1`,
+      );
+      expect(writes[0]?.body).toBe(
+        JSON.stringify({
+          portion: { kind: "serving", servingId: "303", amount: "2.125000" },
+          mealSlot: "dinner",
+          note: "  Keep this exact draft\nincluding spacing  ",
+          occurredAt: "2026-08-15T14:45:00.000Z",
+        }),
+      );
+      expect(writes[0]?.headers["if-match"]).toBe('"3"');
+      expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+      expect(writes[0]?.headers["idempotency-key"]).toBeTruthy();
+      expect(button("Save changes to Apple 0").props.disabled).toBe(true);
+      expect(button("Edit Apple 1").props.disabled).toBe(true);
+      retry.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+      await click("Save changes to Apple 0");
+      expect(writes).toHaveLength(3);
+      expect(writes[2]).toEqual(writes[0]);
+    },
+  );
+
+  it("allows fresh editing, Clear, Cancel and Open after failure while old controls stay inert", async () => {
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) =>
+      init?.method === "PATCH"
+        ? Response.json({ error: "Response unavailable." }, { status: 503 })
+        : base(url, init),
+    );
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const old = retainedEditorControls();
+    await click("Save changes to Apple 0");
+    const requests = fetch.mock.calls.length;
+    await changeEditorField("Quantity", "3.500000");
+    await changeEditorField("Meal", "lunch");
+    await changeEditorField("Local date", "2026-08-16");
+    await changeEditorField("Local time", "17:01");
+    await changeEditorField("Private note", "A fresh draft");
+    const raw = editorValues();
+    invokeEditorControls(old);
+    await hooks.settle();
+    expect(editorValues()).toEqual(raw);
+    await click("Clear note field for Apple 0");
+    expect(editorField("Private note").props.value).toBe("");
+    await click("Cancel editing Apple 0");
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    await click("Edit Apple 1");
+    expect(editorField("Private note").props.value).toBe("Exact private note 1");
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+
+  it("does not let a superseded failed save unlock or replace the newer pending editor", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        writes.push(captureEditorSave(url, init));
+        return writes.length === 1 ? first.promise : second.promise;
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const old = retainedEditorControls();
+    invoke(old.save);
+    await hooks.settle();
+    await visitDiaryDate("2026-08-16");
+    await visitDiaryDate("2026-08-15");
+    await prepareSaveLockDraft();
+    await changeEditorField("Quantity", "4.000001");
+    const raw = editorValues();
+    invoke(button("Save changes to Apple 0"));
+    await hooks.settle();
+    const pendingStatus = text();
+    const requests = fetch.mock.calls.length;
+    first.resolve(Response.json({ error: "Old response unavailable." }, { status: 503 }));
+    await hooks.settle();
+    invokeEditorControls(old);
+    await hooks.settle();
+    expect(editorValues()).toEqual(raw);
+    expect(text()).toBe(pendingStatus);
+    expect(button("Save changes to Apple 0").props.disabled).toBe(true);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+    second.resolve(Response.json({ error: "Current response unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(editorValues()).toEqual(raw);
+    expect(button("Save changes to Apple 0").props.disabled).toBe(false);
+  });
+
+  it("keeps a locked diary entry unavailable even when its disabled Edit callback is invoked", async () => {
+    const locked = page();
+    locked.data.status = "locked";
+    const fetch = await mount(fetcher(locked));
+    const requests = fetch.mock.calls.length;
+    const edit = button("Edit Apple 0");
+    expect(edit.props.disabled).toBe(true);
+    invoke(edit);
+    await hooks.settle();
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+});
+
+describe("Diary session recovery", () => {
+  for (const view of ["diary", "overview"] as const) {
+    for (const dateKind of ["explicit", "absent", "invalid"] as const) {
+      it.each(["503", "network", "malformed"] as const)(
+        `recovers ${view} with ${dateKind} date after initial %s without reading an unverified day`,
+        async (failure) => {
+          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.setSystemTime(new Date("2026-08-16T01:30:00.000Z"));
+          route.date =
+            dateKind === "explicit" ? "2026-08-14" : dateKind === "invalid" ? "2026-02-30" : null;
+          let healthy = false;
+          const base = fetcher();
+          const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+            if (url === "/api/auth/me" && !healthy) {
+              if (failure === "network") throw new Error("Connection unavailable.");
+              if (failure === "malformed") return Response.json({ data: {} });
+              return Response.json({ error: "Session unavailable." }, { status: 503 });
+            }
+            return base(url, init);
+          });
+          await mount(fetch, view);
+          expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(0);
+          expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+          expect(text()).not.toContain("Apple 0");
+          expect(text()).not.toContain("No entries");
+          expect(button("Retry session").props.disabled).not.toBe(true);
+          healthy = true;
+          vi.setSystemTime(new Date("2026-08-17T01:30:00.000Z"));
+          await click("Retry session");
+          const expectedDate = dateKind === "explicit" ? "2026-08-14" : "2026-08-16";
+          expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(2);
+          const dayReads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+          expect(dayReads).toHaveLength(1);
+          expect(
+            new URL(String(dayReads[0]?.[0]), "https://app.example.test").searchParams.get("date"),
+          ).toBe(expectedDate);
+          expect(field("Local date").props.value).toBe(expectedDate);
+          expect(
+            elements().some((node) => node.type === "button" && text(node) === "Retry session"),
+          ).toBe(false);
+          if (view === "overview") {
+            const summary = elements().find((node) => node.type === CalmOverview);
+            expect(summary?.props.day).toMatchObject({ localDate: expectedDate });
+            expect(summary?.props.totalEntries).toBe(1);
+          } else expect(text()).toContain("Apple 2");
+        },
+      );
+    }
+  }
+});
+
+describe("Diary session retry lifecycle", () => {
+  it("keeps repeated failures retryable and rejects duplicate and obsolete retry callbacks", async () => {
+    const pending = deferred<Response>();
+    let authCalls = 0;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        authCalls += 1;
+        if (authCalls === 1) return Response.json({}, { status: 503 });
+        if (authCalls === 2) return pending.promise;
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const old = button("Retry session");
+    invoke(old);
+    invoke(old);
+    await hooks.settle();
+    expect(authCalls).toBe(2);
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(0);
+    pending.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    expect(button("Retry session").props.disabled).not.toBe(true);
+    invoke(old);
+    await hooks.settle();
+    expect(authCalls).toBe(2);
+    await click("Retry session");
+    expect(authCalls).toBe(3);
+    expect(text()).toContain("Apple 0");
+    const count = fetch.mock.calls.length;
+    invoke(old);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+  });
+
+  it.each(["success", "error", "401", "JSON"] as const)(
+    "rejects an old %s response after a route change before effects and loads only the latest day",
+    async (outcome) => {
+      const oldResponse = deferred<Response>();
+      const oldJson = deferred<unknown>();
+      const json = vi.fn(() => oldJson.promise);
+      let authCalls = 0;
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          if (authCalls === 1) return Response.json({}, { status: 503 });
+          if (authCalls === 2)
+            return outcome === "JSON"
+              ? ({ ok: true, status: 200, json } as unknown as Response)
+              : oldResponse.promise;
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      const oldRetry = button("Retry session");
+      invoke(oldRetry);
+      await hooks.settle();
+      if (outcome === "JSON") expect(json).toHaveBeenCalledOnce();
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+      invoke(oldRetry);
+      expect(authCalls).toBe(2);
+      if (outcome === "JSON") oldJson.resolve(session(anotherOwner));
+      else
+        oldResponse.resolve({
+          ok: outcome === "success",
+          status: outcome === "success" ? 200 : outcome === "401" ? 401 : 503,
+          json: vi.fn(async () =>
+            outcome === "success" ? session(anotherOwner) : { error: "Old auth error." },
+          ),
+        } as unknown as Response);
+      hooks.render();
+      await hooks.settle();
+      expect(authCalls).toBe(3);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+      expect(text()).not.toContain("Old auth error");
+      expect(text()).toContain("Apple 2");
+      const reads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+      expect(reads).toHaveLength(1);
+      expect(reads[0]?.[0]).toContain("date=2026-08-16");
+    },
+  );
+
+  it("does not let an old finally release a newer retry, including a restored route", async () => {
+    const old = deferred<Response>();
+    const newest = deferred<Response>();
+    let authCalls = 0;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        authCalls += 1;
+        if (authCalls === 1 || authCalls === 3) return Response.json({}, { status: 503 });
+        if (authCalls === 2) return old.promise;
+        if (authCalls === 4) return newest.promise;
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    invoke(button("Retry session"));
+    await hooks.settle();
+    route.date = "2026-08-16";
+    hooks.renderWithoutEffects();
+    route.date = "2026-08-15";
+    hooks.renderWithoutEffects();
+    hooks.render();
+    await hooks.settle();
+    expect(authCalls).toBe(3);
+    const currentRetry = button("Retry session");
+    invoke(currentRetry);
+    await hooks.settle();
+    const json = vi.fn();
+    old.resolve({ status: 401, ok: false, json } as unknown as Response);
+    await hooks.settle();
+    invoke(currentRetry);
+    await hooks.settle();
+    expect(authCalls).toBe(4);
+    expect(json).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+    newest.resolve(Response.json(session()));
+    await hooks.settle();
+    expect(text()).toContain("Apple 0");
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(1);
+  });
+
+  it.each(["success", "error", "401", "JSON"] as const)(
+    "ignores late %s and retained retry after unmount",
+    async (outcome) => {
+      const pending = deferred<Response>();
+      const pendingJson = deferred<unknown>();
+      const json = vi.fn(() => pendingJson.promise);
+      let authCalls = 0;
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          if (authCalls === 1) return Response.json({}, { status: 503 });
+          return outcome === "JSON"
+            ? ({ status: 200, ok: true, json } as unknown as Response)
+            : pending.promise;
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      const oldRetry = button("Retry session");
+      invoke(oldRetry);
+      await hooks.settle();
+      hooks.unmount();
+      const count = fetch.mock.calls.length;
+      invoke(oldRetry);
+      if (outcome === "JSON") pendingJson.resolve(session());
+      else
+        pending.resolve({
+          status: outcome === "success" ? 200 : outcome === "401" ? 401 : 503,
+          ok: outcome === "success",
+          json,
+        } as unknown as Response);
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(count);
+      expect(json).toHaveBeenCalledTimes(outcome === "JSON" ? 1 : 0);
+      expect(hooks.afterClose()).toBe(0);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+
+  it("handles a current401 before JSON and keeps explicit closure closed through effect replay", async () => {
+    const json = vi.fn(async () => {
+      throw new Error("Unauthorized body must not be consumed.");
+    });
+    let authCalls = 0;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        authCalls += 1;
+        return authCalls === 1
+          ? Response.json({}, { status: 503 })
+          : ({ status: 401, ok: false, json } as unknown as Response);
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const retry = button("Retry session");
+    await click("Retry session");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(json).not.toHaveBeenCalled();
+    const count = fetch.mock.calls.length;
+    invoke(retry);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+    expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+  });
+
+  it("replays an in-progress bootstrap without letting its aborted401 close the current session", async () => {
+    const old = deferred<Response>();
+    const current = deferred<Response>();
+    let authCalls = 0;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return ++authCalls === 1 ? old.promise : current.promise;
+      return base(url, init);
+    });
+    await mount(fetch);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(authCalls).toBe(2);
+    const json = vi.fn();
+    old.resolve({ status: 401, ok: false, json } as unknown as Response);
+    await hooks.settle();
+    expect(json).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+    current.resolve(Response.json(session()));
+    await hooks.settle();
+    expect(text()).toContain("Apple 0");
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(1);
+  });
+
+  it.each(["confirmed", "503", "network"] as const)(
+    "invalidates pending bootstrap on %s logout and leaves a fresh retry only when logout is unconfirmed",
+    async (outcome) => {
+      const old = deferred<Response>();
+      let authCalls = 0;
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          if (authCalls === 1) return Response.json({}, { status: 503 });
+          if (authCalls === 2) return old.promise;
+        }
+        if (url === "/api/auth/logout") {
+          if (outcome === "network") throw new Error("Connection unavailable.");
+          return new Response(null, { status: outcome === "confirmed" ? 204 : 503 });
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      const oldRetry = button("Retry session");
+      invoke(oldRetry);
+      await hooks.settle();
+      await click("Sign out");
+      const json = vi.fn(async () => session());
+      old.resolve({ status: 200, ok: true, json } as unknown as Response);
+      await hooks.settle();
+      invoke(oldRetry);
+      await hooks.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(authCalls).toBe(2);
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(0);
+      if (outcome === "confirmed") {
+        expect(router.replace).toHaveBeenCalledWith("/login");
+        hooks.replayEffects();
+        await hooks.settle();
+        expect(authCalls).toBe(2);
+      } else {
+        expect(router.replace).not.toHaveBeenCalledWith("/login");
+        expect(button("Retry session").props.disabled).not.toBe(true);
+        await click("Retry session");
+        expect(authCalls).toBe(3);
+        expect(text()).toContain("Apple 0");
+      }
+    },
+  );
+});
+
+describe("Diary recovery preserves day and save ownership", () => {
+  it.each(["diary", "overview"] as const)(
+    "retries only the failed %s day and accepts a genuinely empty result after verified auth",
+    async (view) => {
+      let healthy = false;
+      const base = fetcher(page([], null, 0));
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/diary?") && !healthy)
+          return Response.json({ error: "Day unavailable." }, { status: 503 });
+        return base(url, init);
+      });
+      await mount(fetch, view);
+      expect(text()).toContain("Day unavailable.");
+      expect(text()).not.toContain("No foods logged");
+      expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+      expect(
+        elements().some((node) => node.type === "button" && text(node) === "Retry session"),
+      ).toBe(false);
+      healthy = true;
+      await click("Retry");
+      expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(2);
+      if (view === "overview")
+        expect(elements().find((node) => node.type === CalmOverview)?.props.totalEntries).toBe(0);
+      else expect(text()).toContain("No foods logged for this local day.");
+      expect(text()).not.toContain("Day unavailable.");
+    },
+  );
+
+  it("keeps a retained session retry inert during and after an ambiguous Save without rebinding its exact retry", async () => {
+    const pending = deferred<Response>();
+    let authCalls = 0;
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me" && ++authCalls === 1) return Response.json({}, { status: 503 });
+      if (init?.method === "PATCH") {
+        writes.push(captureEditorSave(url, init));
+        return writes.length === 1 ? pending.promise : Response.json({}, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const staleRetry = button("Retry session");
+    await click("Retry session");
+    await prepareSaveLockDraft();
+    const raw = editorValues();
+    invoke(button("Save changes to Apple 0"));
+    await hooks.settle();
+    const count = fetch.mock.calls.length;
+    invoke(staleRetry);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+    expect(editorValues()).toEqual(raw);
+    expect(button("Save changes to Apple 0").props.disabled).toBe(true);
+    pending.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    const failedStatus = text();
+    invoke(staleRetry);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+    expect(text()).toBe(failedStatus);
+    expect(editorValues()).toEqual(raw);
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(authCalls).toBe(2);
+  });
+
+  it("repairs a failed readback after an accepted Save with GET only and keeps the accepted status distinct", async () => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    let saved: ReturnType<typeof editorSaveReceipt> | null = null;
+    let repairAllowed = false;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        const request = captureEditorSave(url, init);
+        writes.push(request);
+        saved = editorSaveReceipt(request);
+        return Response.json(saved);
+      }
+      if (saved && url.startsWith("/api/diary?")) {
+        return repairAllowed
+          ? Response.json(page([saved.data.entry, entry(1, "lunch")], null, 2, "2026-08-15", "9"))
+          : Response.json({ error: "Readback unavailable." }, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(1);
+    expect(text()).toContain(
+      "The entry was saved, but fresh diary data could not be confirmed. Choose Retry.",
+    );
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    repairAllowed = true;
+    await click("Retry");
+    expect(writes).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(3);
+    expect(text(group("dinner"))).toContain("2.125000 × medium apple");
+    expect(text(group("dinner"))).toContain("Keep this exact draft");
+  });
+});
+
+it("rejects a retained day-only Retry after unmount without requests or state publication", async () => {
+  const base = fetcher();
+  const fetch = vi.fn(async (url: string, init?: RequestInit) =>
+    url.startsWith("/api/diary?")
+      ? Response.json({ error: "Day unavailable." }, { status: 503 })
+      : base(url, init),
+  );
+  await mount(fetch);
+  const retry = button("Retry");
+  hooks.unmount();
+  const count = fetch.mock.calls.length;
+  invoke(retry);
+  await hooks.settle();
+  expect(fetch.mock.calls).toHaveLength(count);
+  expect(hooks.afterClose()).toBe(0);
+});

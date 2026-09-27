@@ -212,6 +212,17 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const searchParams = useSearchParams();
   const explicitDate = searchParams.get("date");
   const [session, setSession] = useState<SessionSummary | null>(null);
+  const [sessionState, setSessionState] = useState<LoadState>("loading");
+  const [sessionMessage, setSessionMessage] = useState("Opening your private diary…");
+  const sessionRouteRef = useRef({ explicitDate, viewRoute });
+  if (
+    sessionRouteRef.current.explicitDate !== explicitDate ||
+    sessionRouteRef.current.viewRoute !== viewRoute
+  ) {
+    sessionRouteRef.current = { explicitDate, viewRoute };
+  }
+  const sessionRoute = sessionRouteRef.current;
+  const sessionOwnerId = session?.user.id ?? null;
   const [date, setDate] = useState(() => resolveDiaryRouteDate(explicitDate, null) ?? "");
   const [diaryPage, setDiaryPage] = useState<DiaryPage | null>(null);
   const [state, setState] = useState<LoadState>("loading");
@@ -262,6 +273,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const repeatOperations = useRef(new Map<string, RepeatOperation>());
   const renderedRepeatOperations = new Map(repeatOperations.current);
   const loadController = useRef<AbortController | null>(null);
+  const sessionController = useRef<AbortController | null>(null);
+  const sessionRequestGeneration = useRef(0);
+  const sessionActive = useRef(false);
+  const renderedSessionRequestGeneration = sessionRequestGeneration.current;
   const hydrationOverviewController = useRef<AbortController | null>(null);
   const activityOverviewController = useRef<AbortController | null>(null);
   const profileController = useRef<AbortController | null>(null);
@@ -282,12 +297,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   dateRef.current = date;
   const diaryPageRef = useRef(diaryPage);
   diaryPageRef.current = diaryPage;
-  const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
+  const diary = session && diaryPage?.data.localDate === date ? diaryPage.data : null;
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
   const mealViewEpoch = viewEpoch.current;
   const mealRequestGeneration = requestGeneration.current;
   const mealPrivateGeneration = privateUiGeneration.current;
   const renderedMealVisibilityGeneration = mealVisibilityGeneration.current;
+  const renderedEditorMutationSequence = mutationSequence.current;
   const mealViewScope = JSON.stringify([
     session?.user.id ?? null,
     date,
@@ -299,11 +315,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   const installedNutrientScope = entryNutrientInstalledScope.current;
   if (session && installedNutrientScope && !installedNutrientScope.closed) {
-    if (installedNutrientScope.ownerUserId === null) {
-      // The initial diary and session reads can finish in either order.
-      installedNutrientScope.ownerUserId = session.user.id;
-      installedNutrientScope.timeZone = session.profile.timeZone;
-    } else if (
+    if (
       installedNutrientScope.ownerUserId !== session.user.id ||
       installedNutrientScope.timeZone !== session.profile.timeZone
     ) {
@@ -441,6 +453,21 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     );
   }
 
+  function canUseEntryEditorControls() {
+    return (
+      canUseMealControls() &&
+      editorRef.current === editor &&
+      sessionRef.current === session &&
+      mutationSequence.current === renderedEditorMutationSequence &&
+      mutationBusy === null
+    );
+  }
+
+  function changeEntryEditor(next: EntryEditor | null) {
+    if (!editor || !canUseEntryEditorControls()) return;
+    setEditor(next);
+  }
+
   function toggleMeal(mealSlot: MealSlot) {
     if (!canUseMealControls()) return;
     if (
@@ -468,7 +495,14 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   function beginEntryEdit(entry: DiaryEntry) {
-    if (!canUseMealControls() || !session || !diary?.entries.includes(entry)) return;
+    if (
+      !canUseEntryEditorControls() ||
+      !session ||
+      !diary ||
+      diary.status === "locked" ||
+      !diary.entries.includes(entry)
+    )
+      return;
     setEditor(editState(entry, diary, session.profile.timeZone));
   }
 
@@ -480,6 +514,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     viewEpoch.current += 1;
     mutationSequence.current += 1;
     activeMutation.current = null;
+    sessionController.current?.abort();
+    sessionController.current = null;
+    sessionRequestGeneration.current += 1;
     loadController.current?.abort();
     hydrationOverviewGeneration.current += 1;
     activityOverviewGeneration.current += 1;
@@ -549,7 +586,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const loadDiary = useCallback(
     async (requestedDate: string, refreshedAfterStalePage = false) => {
       if (
+        !sessionActive.current ||
         privateUiClosed.current ||
+        !sessionRef.current ||
         !isLocalDate(requestedDate) ||
         dateRef.current !== requestedDate
       ) {
@@ -558,8 +597,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       closeEntryNutrients();
       entryNutrientInstalledScope.current = null;
       const nutrientRequestScope = {
-        ownerUserId: sessionRef.current?.user.id ?? null,
-        timeZone: sessionRef.current?.profile.timeZone ?? null,
+        ownerUserId: sessionRef.current.user.id,
+        timeZone: sessionRef.current.profile.timeZone,
         closed: false,
       };
       const generation = requestGeneration.current + 1;
@@ -572,6 +611,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         requestGeneration.current === generation &&
         loadController.current === controller &&
         !controller.signal.aborted &&
+        sessionActive.current &&
+        !privateUiClosed.current &&
+        sessionRef.current?.user.id === nutrientRequestScope.ownerUserId &&
         dateRef.current === requestedDate;
       setEditor(null);
       setDiaryPage(null);
@@ -767,44 +809,96 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     [signInAgain],
   );
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const generation = privateUiGeneration.current;
-    void (async () => {
+  const bootstrapSession = useCallback(
+    async (route: typeof sessionRoute) => {
+      const installedSession = sessionRef.current;
+      if (
+        !sessionActive.current ||
+        privateUiClosed.current ||
+        installedSession !== null ||
+        sessionRouteRef.current !== route ||
+        activeMutation.current !== null ||
+        profileController.current !== null
+      )
+        return;
+      sessionController.current?.abort();
+      const controller = new AbortController();
+      sessionController.current = controller;
+      const request = ++sessionRequestGeneration.current;
+      const generation = privateUiGeneration.current;
+      const isCurrent = () =>
+        sessionActive.current &&
+        !privateUiClosed.current &&
+        privateUiGeneration.current === generation &&
+        sessionRequestGeneration.current === request &&
+        sessionController.current === controller &&
+        sessionRouteRef.current === route &&
+        !controller.signal.aborted;
+      setSessionState("loading");
+      setSessionMessage("Verifying your session…");
       try {
         const response = await fetch("/api/auth/me", {
           headers: { accept: "application/json" },
           cache: "no-store",
           signal: controller.signal,
         });
+        if (!isCurrent()) return;
         if (response.status === 401) return signInAgain();
         const body = await json(response);
+        if (!isCurrent()) return;
         if (!response.ok)
           throw new Error(responseError(body, "Your session could not be verified."));
         const nextSession = parseSession(body);
-        if (
-          !controller.signal.aborted &&
-          !privateUiClosed.current &&
-          privateUiGeneration.current === generation
-        ) {
-          setSession(nextSession);
-          setDiaryGroupDraft(createDiaryGroupDraft(nextSession));
+        if (!isCurrent()) return;
+        if (sessionRef.current && sessionRef.current.user.id !== nextSession.user.id) {
+          signInAgain();
+          return;
         }
+        const nextDate = resolveDiaryRouteDate(route.explicitDate, nextSession.profile.timeZone);
+        if (nextDate) transitionCommittedDate(nextDate, false);
+        sessionRef.current = nextSession;
+        setSession(nextSession);
+        setDiaryGroupDraft(createDiaryGroupDraft(nextSession));
+        setSessionState("ready");
       } catch (error) {
-        if (
-          !controller.signal.aborted &&
-          !privateUiClosed.current &&
-          privateUiGeneration.current === generation
-        ) {
-          setState("error");
-          setMessage(
-            error instanceof Error ? error.message : "Your session could not be verified.",
-          );
-        }
+        if (!isCurrent()) return;
+        setSessionState("error");
+        setSessionMessage(
+          error instanceof Error ? error.message : "Your session could not be verified.",
+        );
+      } finally {
+        if (sessionController.current === controller) sessionController.current = null;
       }
-    })();
-    return () => controller.abort();
-  }, [signInAgain]);
+    },
+    [signInAgain, transitionCommittedDate],
+  );
+
+  function retrySession() {
+    if (
+      sessionState !== "error" ||
+      session !== null ||
+      sessionRef.current !== null ||
+      sessionRouteRef.current !== sessionRoute ||
+      privateUiGeneration.current !== mealPrivateGeneration ||
+      sessionRequestGeneration.current !== renderedSessionRequestGeneration ||
+      mutationSequence.current !== renderedEditorMutationSequence ||
+      sessionController.current !== null ||
+      mutationBusy !== null ||
+      profileBusy
+    )
+      return;
+    void bootstrapSession(sessionRoute);
+  }
+
+  useEffect(() => {
+    sessionActive.current = true;
+    void bootstrapSession(sessionRoute);
+    return () => {
+      sessionActive.current = false;
+      sessionController.current?.abort();
+      sessionController.current = null;
+    };
+  }, [bootstrapSession, sessionRoute]);
 
   useEffect(() => {
     const routeDate = resolveDiaryRouteDate(explicitDate, session?.profile.timeZone ?? null);
@@ -812,13 +906,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }, [explicitDate, session, transitionCommittedDate]);
 
   useEffect(() => {
-    if (isLocalDate(date)) void loadDiary(date);
+    if (sessionOwnerId && isLocalDate(date)) void loadDiary(date);
     return () => {
       requestGeneration.current += 1;
       loadController.current?.abort();
       pageRequestBusy.current = false;
     };
-  }, [date, loadDiary]);
+  }, [date, loadDiary, sessionOwnerId]);
 
   useEffect(() => {
     if (session && isLocalDate(date)) {
@@ -1010,7 +1104,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   async function saveEntry() {
-    if (!editor || !diary) return;
+    if (!editor || !diary || !canUseEntryEditorControls() || diary.status === "locked") return;
     const entry = diary.entries.find((candidate) => candidate.id === editor.entryId);
     if (!entry) {
       setEditor(null);
@@ -1678,6 +1772,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   async function signOut() {
+    sessionController.current?.abort();
+    sessionController.current = null;
+    sessionRequestGeneration.current += 1;
     const token = mutationSequence.current + 1;
     mutationSequence.current = token;
     activeMutation.current = token;
@@ -1688,7 +1785,12 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     );
     if (!confirmed && activeMutation.current === token && !privateUiClosed.current) {
       activeMutation.current = null;
-      setMessage("Sign out could not be confirmed. Your diary remains open; please retry.");
+      const failure = "Sign out could not be confirmed. Your diary remains open; please retry.";
+      setMessage(failure);
+      if (sessionRef.current === null) {
+        setSessionState("error");
+        setSessionMessage("Sign out could not be confirmed. Retry your session or sign out again.");
+      }
       setMutationBusy(null);
     }
   }
@@ -1702,6 +1804,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       })
     : false;
   const controlsBusy = mutationBusy !== null || profileBusy;
+  const needsSession = session === null && !privateUiClosed.current;
+  const visibleState = needsSession ? sessionState : pageState === "error" ? "error" : state;
+  const entryEditorControlsDisabled = !canUseEntryEditorControls();
   const completeDayLoaded =
     diaryPage !== null &&
     diaryPage.data.localDate === date &&
@@ -1930,15 +2035,25 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         ) : null}
 
         <p
-          className={`diaryStatus diaryStatus--${pageState === "error" ? "error" : state}`}
+          className={`diaryStatus diaryStatus--${visibleState}`}
           role="status"
           aria-live="polite"
           ref={statusRef}
           tabIndex={-1}
         >
-          {message}
+          {needsSession ? sessionMessage : message}
         </p>
-        {state === "error" ? (
+        {needsSession && sessionState === "error" ? (
+          <button
+            className="secondaryAction"
+            disabled={controlsBusy}
+            onClick={retrySession}
+            type="button"
+          >
+            Retry session
+          </button>
+        ) : null}
+        {session && state === "error" ? (
           <button
             className="secondaryAction"
             disabled={!hasCommittedDate || mutationBusy !== null}
@@ -2091,10 +2206,11 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           <label>
                                             Quantity
                                             <input
+                                              disabled={entryEditorControlsDisabled}
                                               inputMode="decimal"
                                               maxLength={18}
                                               onChange={(event) =>
-                                                setEditor({
+                                                changeEntryEditor({
                                                   ...editor,
                                                   quantity: event.target.value,
                                                 })
@@ -2105,8 +2221,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           <label>
                                             Meal
                                             <select
+                                              disabled={entryEditorControlsDisabled}
                                               onChange={(event) =>
-                                                setEditor({
+                                                changeEntryEditor({
                                                   ...editor,
                                                   mealSlot: event.target.value as MealSlot,
                                                 })
@@ -2126,8 +2243,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           <label>
                                             Local date
                                             <input
+                                              disabled={entryEditorControlsDisabled}
                                               onChange={(event) =>
-                                                setEditor({
+                                                changeEntryEditor({
                                                   ...editor,
                                                   localDate: event.target.value,
                                                 })
@@ -2139,8 +2257,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           <label>
                                             Local time
                                             <input
+                                              disabled={entryEditorControlsDisabled}
                                               onChange={(event) =>
-                                                setEditor({
+                                                changeEntryEditor({
                                                   ...editor,
                                                   localTime: event.target.value,
                                                 })
@@ -2155,11 +2274,15 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           >
                                             Private note
                                             <textarea
+                                              disabled={entryEditorControlsDisabled}
                                               aria-describedby={`entry-note-help-${entry.id}`}
                                               id={`entry-note-${entry.id}`}
                                               maxLength={4_000}
                                               onChange={(event) =>
-                                                setEditor({ ...editor, note: event.target.value })
+                                                changeEntryEditor({
+                                                  ...editor,
+                                                  note: event.target.value,
+                                                })
                                               }
                                               rows={4}
                                               value={editor.note}
@@ -2184,9 +2307,12 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                             <button
                                               aria-label={`Clear note field for ${entryName(entry)}`}
                                               disabled={
-                                                mutationBusy !== null || editor.note.length === 0
+                                                entryEditorControlsDisabled ||
+                                                editor.note.length === 0
                                               }
-                                              onClick={() => setEditor({ ...editor, note: "" })}
+                                              onClick={() =>
+                                                changeEntryEditor({ ...editor, note: "" })
+                                              }
                                               type="button"
                                             >
                                               Clear field
@@ -2194,7 +2320,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                             <button
                                               aria-label={`Save changes to ${entryName(entry)}`}
                                               disabled={
-                                                mutationBusy !== null || diary.status === "locked"
+                                                entryEditorControlsDisabled ||
+                                                diary.status === "locked"
                                               }
                                               onClick={() => void saveEntry()}
                                               type="button"
@@ -2203,8 +2330,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                             </button>
                                             <button
                                               aria-label={`Cancel editing ${entryName(entry)}`}
-                                              disabled={mutationBusy !== null}
-                                              onClick={() => setEditor(null)}
+                                              disabled={entryEditorControlsDisabled}
+                                              onClick={() => changeEntryEditor(null)}
                                               type="button"
                                             >
                                               Cancel
@@ -2228,9 +2355,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                             <button
                                               aria-label={`Edit ${entryName(entry)}`}
                                               disabled={
-                                                mutationBusy !== null ||
-                                                diary.status === "locked" ||
-                                                session === null
+                                                entryEditorControlsDisabled ||
+                                                diary.status === "locked"
                                               }
                                               onClick={() => beginEntryEdit(entry)}
                                               type="button"
