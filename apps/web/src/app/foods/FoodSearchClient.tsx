@@ -47,6 +47,7 @@ import {
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type BarcodeState = LoadState | "not-found";
+type SessionState = "loading" | "ready" | "unauthenticated" | "error";
 
 const intentLabels: Readonly<Record<FoodSearchIntent, string>> = {
   all: "All foods",
@@ -201,13 +202,29 @@ export function FoodSearchClient() {
       ? (requestedMeal as MealSlot)
       : defaultMealForTime(),
   );
+  const [sessionState, setSessionState] = useState<SessionState>("loading");
+  const sessionStateRef = useRef<SessionState>("loading");
+  const mounted = useRef(false);
+  const sessionController = useRef<AbortController | null>(null);
+  const sessionGeneration = useRef(0);
+  const sessionRoute = useRef({ context: confirmationContext, revision: 0 });
+  if (sessionRoute.current.context !== confirmationContext) {
+    sessionRoute.current = {
+      context: confirmationContext,
+      revision: sessionRoute.current.revision + 1,
+    };
+  }
+  const sessionRouteRevision = sessionRoute.current.revision;
+  const appliedSessionRoute = useRef<number | null>(null);
+  const sessionViewGeneration = sessionGeneration.current;
+  const dateEdited = useRef(false);
+  const mealEdited = useRef(false);
+  const appliedDestination = useRef({ date: requestedDate, meal: requestedMeal });
   const [timeZone, setTimeZone] = useState<string | null>(null);
   const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
   const [addState, setAddState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
-  const [addMessage, setAddMessage] = useState(
-    "Sign in to choose a quantity and add it to your diary.",
-  );
+  const [addMessage, setAddMessage] = useState("");
   const [quickAddDrafts, setQuickAddDrafts] = useState<Readonly<Record<string, QuickAddDraft>>>({});
   const pendingAdds = useRef(new Map<string, QuickAddOperation>());
   const activeAddOperation = useRef<string | null>(null);
@@ -287,54 +304,133 @@ export function FoodSearchClient() {
     };
   }, [query, intent]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      sessionGeneration.current += 1;
+      sessionController.current?.abort();
+      sessionController.current = null;
       autocompleteController.current?.abort();
       searchController.current?.abort();
       barcodeController.current?.abort();
       profileRefreshController.current?.abort();
-    },
-    [],
-  );
+    };
+  }, []);
+
+  const discoverInitialSession = useCallback(async () => {
+    if (
+      !mounted.current ||
+      sessionRoute.current.revision !== sessionRouteRevision ||
+      appliedSessionRoute.current !== sessionRouteRevision ||
+      sessionController.current !== null ||
+      sessionStateRef.current === "ready" ||
+      sessionStateRef.current === "unauthenticated" ||
+      activeAddOperation.current !== null ||
+      pendingAdds.current.size > 0
+    ) {
+      return;
+    }
+    const controller = new AbortController();
+    const generation = ++sessionGeneration.current;
+    sessionController.current = controller;
+    sessionStateRef.current = "loading";
+    setSessionState("loading");
+    const isCurrent = () =>
+      mounted.current &&
+      !controller.signal.aborted &&
+      sessionController.current === controller &&
+      sessionGeneration.current === generation &&
+      sessionRoute.current.revision === sessionRouteRevision &&
+      appliedSessionRoute.current === sessionRouteRevision;
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!isCurrent()) return;
+      if (response.status === 401) {
+        sessionStateRef.current = "unauthenticated";
+        setSessionState("unauthenticated");
+        return;
+      }
+      if (!response.ok) throw new Error("session-unavailable");
+      const session = parseSession(await responseJson(response));
+      if (!isCurrent()) return;
+      setTimeZone(session.profile.timeZone);
+      setDiaryGroups(session.profile.diaryGroups);
+      const now = new Date();
+      if (!(requestedDate && isLocalDate(requestedDate)) && !dateEdited.current) {
+        setDiaryDate(localDateInTimeZone(now, session.profile.timeZone));
+      }
+      if (!mealSlots.some((meal) => meal === requestedMeal) && !mealEdited.current) {
+        setMealSlot(
+          defaultMealForHour(
+            Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
+          ),
+        );
+      }
+      // Initial discovery stays closed while add retries retain their original request.
+      sessionStateRef.current = "ready";
+      setSessionState("ready");
+      setAddMessage("Choose a local day, meal, serving type, and positive quantity.");
+    } catch {
+      if (isCurrent()) {
+        sessionStateRef.current = "error";
+        setSessionState("error");
+      }
+    } finally {
+      if (sessionController.current === controller) sessionController.current = null;
+    }
+  }, [requestedDate, requestedMeal, sessionRouteRevision]);
 
   useEffect(() => {
+    appliedSessionRoute.current = sessionRouteRevision;
     confirmationGeneration.current += 1;
     setConfirmation(null);
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const response = await fetch("/api/auth/me", {
-          headers: { accept: "application/json" },
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) return;
-        const session = parseSession(await responseJson(response));
-        if (!controller.signal.aborted) {
-          setTimeZone(session.profile.timeZone);
-          setDiaryGroups(session.profile.diaryGroups);
-          const now = new Date();
-          if (!(requestedDate && isLocalDate(requestedDate))) {
-            setDiaryDate(localDateInTimeZone(now, session.profile.timeZone));
-          }
-          if (!mealSlots.some((meal) => meal === requestedMeal)) {
-            setMealSlot(
-              defaultMealForHour(
-                Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
-              ),
-            );
-          }
-          setAddMessage("Choose a local day, meal, serving type, and positive quantity.");
-        }
-      } catch {
-        // Catalogue search remains public if session discovery is unavailable.
-      }
-    })();
+    if (
+      requestedDate !== appliedDestination.current.date &&
+      requestedDate &&
+      isLocalDate(requestedDate)
+    ) {
+      dateEdited.current = false;
+      setDiaryDate(requestedDate);
+    }
+    if (
+      requestedMeal !== appliedDestination.current.meal &&
+      mealSlots.some((meal) => meal === requestedMeal)
+    ) {
+      mealEdited.current = false;
+      setMealSlot(requestedMeal as MealSlot);
+    }
+    appliedDestination.current = { date: requestedDate, meal: requestedMeal };
+    void discoverInitialSession();
     return () => {
-      controller.abort();
+      sessionController.current?.abort();
+      sessionController.current = null;
+      sessionGeneration.current += 1;
       confirmationGeneration.current += 1;
     };
-  }, [requestedDate, requestedMeal]);
+  }, [requestedDate, requestedMeal, sessionRouteRevision, discoverInitialSession]);
+
+  function canRetrySession() {
+    return (
+      mounted.current &&
+      sessionStateRef.current === "error" &&
+      sessionController.current === null &&
+      sessionGeneration.current === sessionViewGeneration &&
+      sessionRoute.current.revision === sessionRouteRevision &&
+      appliedSessionRoute.current === sessionRouteRevision &&
+      activeAddOperation.current === null &&
+      pendingAdds.current.size === 0 &&
+      !dateReviewRequired
+    );
+  }
+
+  function retrySession() {
+    if (canRetrySession()) void discoverInitialSession();
+  }
 
   const runSearch = useCallback(
     async (requestedQuery: string, cursor?: string) => {
@@ -717,7 +813,7 @@ export function FoodSearchClient() {
           <button
             aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
             className="quickAddButton"
-            disabled={busy || dateReviewRequired || !amountIsValid}
+            disabled={busy || sessionState !== "ready" || dateReviewRequired || !amountIsValid}
             onClick={() => void addFood(food, draft, instance)}
             type="button"
           >
@@ -831,9 +927,12 @@ export function FoodSearchClient() {
             Local day
             <input
               id="quick-add-date"
-              onChange={(event) =>
-                isLocalDate(event.target.value) && setDiaryDate(event.target.value)
-              }
+              onChange={(event) => {
+                if (isLocalDate(event.target.value)) {
+                  dateEdited.current = true;
+                  setDiaryDate(event.target.value);
+                }
+              }}
               type="date"
               value={diaryDate}
             />
@@ -842,7 +941,10 @@ export function FoodSearchClient() {
             Meal
             <select
               id="quick-add-meal"
-              onChange={(event) => setMealSlot(event.target.value as MealSlot)}
+              onChange={(event) => {
+                mealEdited.current = true;
+                setMealSlot(event.target.value as MealSlot);
+              }}
               value={mealSlot}
             >
               {diaryGroups.map((group) => (
@@ -864,9 +966,31 @@ export function FoodSearchClient() {
             </button>
           ) : null}
         </fieldset>
-        <p className={`addStatus addStatus--${addState}`} role="status" aria-live="polite">
-          {addMessage}
+        <p
+          className={`addStatus addStatus--${sessionState === "error" ? "error" : addState}`}
+          role="status"
+          aria-live="polite"
+        >
+          {sessionState === "loading"
+            ? "Checking your session before diary additions…"
+            : sessionState === "error"
+              ? "Your session could not be verified. Retry session to enable diary additions."
+              : sessionState === "unauthenticated"
+                ? "Sign in to choose a quantity and add it to your diary."
+                : addMessage}
         </p>
+        {sessionState === "error" ? (
+          <div className="entryActions">
+            <button
+              className="buttonQuiet"
+              disabled={!canRetrySession()}
+              onClick={retrySession}
+              type="button"
+            >
+              Retry session
+            </button>
+          </div>
+        ) : null}
 
         <p className={`searchStatus searchStatus--${searchState}`} role="status" aria-live="polite">
           {searchMessage}

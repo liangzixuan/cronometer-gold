@@ -182,6 +182,20 @@ retry; session recovery must never replay it or discard its retry information.
 Hydration sign-out remains available during session verification and prevents a
 late response from reopening private content.
 
+## Foods session recovery
+
+Foods keeps public search, suggestions and barcode lookup available while it
+checks the initial session. A failed session read offers Retry session; a
+confirmed signed-out response asks the person to sign in before adding food.
+Recovery preserves the selected day, meal and exact quantity. Untouched defaults
+use the recovered profile's local date and time.
+
+Session retry ignores duplicate clicks, stale responses and closed pages. Once
+initial discovery succeeds, changing the destination updates it locally without
+reopening session recovery. Recovery never repeats an add or changes an
+unconfirmed add's exact retry. Existing timezone conflicts still require an
+explicit review of the local diary day.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not
