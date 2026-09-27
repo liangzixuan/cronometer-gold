@@ -69,6 +69,8 @@ def selected_ports(arguments):
 def free_ports(ports):
     for value in ports:
         with socket.socket() as listener:
+            # Closed connections in TIME_WAIT are reusable; active listeners still conflict.
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(("127.0.0.1", value))
 
 
@@ -335,6 +337,7 @@ def prepare(arguments):
         "nodeVersion": read_command([node, "--version"]).strip()})
     shutil.copytree(ROOT / "apps/web/.next/standalone", path / "web", symlinks=True)
     shutil.copytree(ROOT / "apps/web/.next/static", path / "web/apps/web/.next/static", symlinks=True)
+    shutil.copytree(ROOT / "apps/web/public", path / "web/apps/web/public", symlinks=True)
     for entry in (path / "web").rglob("*"):
         require(not entry.is_symlink() or entry.resolve().is_relative_to(path / "web"),
                 "Standalone export contains an escaping symlink.")

@@ -1,8 +1,10 @@
-"""Offline regressions. No Docker, network, process signals or application writes."""
+"""Offline regressions. No Docker, external network, process signals or application writes."""
 from copy import deepcopy
+import errno
 import json
 import os
 from pathlib import Path
+import socket
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -131,6 +133,98 @@ class OwnershipTests(unittest.TestCase):
             changed = {**expected, field: "unrelated"}
             with self.subTest(field=field), self.assertRaises(ownership.WalkthroughError):
                 ownership.assert_container_identity(expected, changed, "demo")
+
+
+class PortProbeTests(unittest.TestCase):
+    def test_probe_accepts_a_closed_reusable_connection_in_time_wait(self):
+        with socket.socket() as listener, socket.socket() as client:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.settimeout(2)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            client.settimeout(2)
+            client.connect(("127.0.0.1", port))
+            with listener.accept()[0] as connection:
+                connection.settimeout(2)
+                connection.shutdown(socket.SHUT_WR)
+                self.assertEqual(client.recv(1), b"")
+                client.shutdown(socket.SHUT_WR)
+                self.assertEqual(connection.recv(1), b"")
+        states = [fields[3] for line in Path("/proc/net/tcp").read_text().splitlines()[1:]
+                  if (fields := line.split())[1] == f"0100007F:{port:04X}"]
+        self.assertIn("06", states)  # TCP_TIME_WAIT proves the connection is still retained.
+        self.assertNotIn("0A", states)  # No TCP_LISTEN socket remains.
+        run.free_ports([port])
+
+    def test_probe_rejects_an_active_reusable_listener(self):
+        with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            with self.assertRaises(OSError) as rejected:
+                run.free_ports([listener.getsockname()[1]])
+            self.assertEqual(rejected.exception.errno, errno.EADDRINUSE)
+
+
+class PreparationTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.directory = Path(self.temporary.name)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = self.directory / "checkout"
+        self.parent = self.directory / "runtimes"
+        self.root.mkdir()
+        self.parent.mkdir()
+        self.assets = {name: (run.ROOT / "apps/web/public" / name).read_bytes() for name in (
+            "fonts/fa-solid-900.woff2", "images/nutrients/protein.png")}
+        files = {"apps/api/dist/server.js": b"offline-api",
+                 "apps/web/.next/standalone/apps/web/server.js": b"offline-web",
+                 "apps/web/.next/static/chunks/app.js": b"offline-static",
+                 "apps/web/.next/BUILD_ID": b"offline-build",
+                 "packages/db/dist/cli.js": b"offline-migrator",
+                 "node_modules/tsx/dist/cli.mjs": b"offline-tsx",
+                 "pnpm-lock.yaml": b"offline-lock",
+                 **{"apps/web/public/" + name: data for name, data in self.assets.items()}}
+        for name, data in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        self.arguments = run.parser().parse_args([
+            "create", "--runtime-parent", str(self.parent)])
+
+    def prepare(self):
+        def prerequisite(arguments, **kwargs):
+            return '[{"Id":"sha256:offline"}]' if arguments[1:3] == ["image", "inspect"] else ""
+
+        with patch.object(run, "ROOT", self.root), \
+                patch.object(run, "free_ports"), \
+                patch.object(run, "executable", side_effect=lambda name: "/offline/" + name), \
+                patch.object(run, "read_command", side_effect=prerequisite), \
+                patch.object(run.subprocess, "run", side_effect=AssertionError("No external commands")):
+            return run.prepare(self.arguments)
+
+    def test_prepare_exports_public_assets_with_standalone_and_static(self):
+        (self.root / "apps/web/public/font.woff2").symlink_to("fonts/fa-solid-900.woff2")
+        runtime = self.prepare()
+        web = runtime.path / "web/apps/web"
+        self.assertEqual((web / "server.js").read_bytes(), b"offline-web")
+        self.assertEqual((web / ".next/static/chunks/app.js").read_bytes(), b"offline-static")
+        for name, data in self.assets.items():
+            with self.subTest(asset=name):
+                self.assertTrue((web / "public" / name).is_file())
+                self.assertEqual((web / "public" / name).read_bytes(), data)
+        alias = web / "public/font.woff2"
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(alias.read_bytes(), self.assets["fonts/fa-solid-900.woff2"])
+
+    def test_prepare_rejects_public_symlink_outside_export(self):
+        outside = self.directory / "outside-asset"
+        outside.write_bytes(b"outside-export")
+        (self.root / "apps/web/public/escape").symlink_to(outside)
+        with self.assertRaisesRegex(ownership.WalkthroughError, "escaping symlink"):
+            self.prepare()
+        self.assertEqual(outside.read_bytes(), b"outside-export")
 
 
 class InterfaceTests(unittest.TestCase):
