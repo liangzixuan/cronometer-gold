@@ -117,6 +117,10 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
   );
 
   const ingredientIds = new Set<string>();
+  const portionsByProfile = new Map<
+    NutrientProfile,
+    Map<DecimalString, readonly NutrientAggregate[]>
+  >();
   const resolvedIngredients = input.ingredients.map((ingredient) => {
     domainInvariant(
       ingredient.id.trim().length > 0 && ingredient.name.trim().length > 0,
@@ -140,11 +144,17 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
       );
     }
 
-    const nutrition = calculatePortionNutrition(
-      ingredient.nutrientProfile,
-      grams,
-      input.nutrients,
-    ).map((aggregate) => {
+    let profilePortions = portionsByProfile.get(ingredient.nutrientProfile);
+    if (!profilePortions) {
+      profilePortions = new Map();
+      portionsByProfile.set(ingredient.nutrientProfile, profilePortions);
+    }
+    let portion = profilePortions.get(grams);
+    if (!portion) {
+      portion = calculatePortionNutrition(ingredient.nutrientProfile, grams, input.nutrients);
+      profilePortions.set(grams, portion);
+    }
+    const nutrition = portion.map((aggregate) => {
       const rawFactor = ingredient.retentionFactors?.[aggregate.nutrientId] ?? "1";
       const factor = canonicalNonNegativeDecimal(
         rawFactor,
@@ -156,7 +166,7 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
         "Nutrient retention factors must be between zero and one",
         { ingredientId: ingredient.id, nutrientId: aggregate.nutrientId, factor },
       );
-      return scaleNutrientAggregate(aggregate, factor);
+      return factor === "1" ? aggregate : scaleNutrientAggregate(aggregate, factor);
     });
 
     return { grams, nutrition };
