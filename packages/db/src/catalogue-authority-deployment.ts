@@ -801,7 +801,7 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   {
     ...TRIGGER_FUNCTION_POLICY,
     name: "reconcile_recipe_components_v2",
-    sourceSha256: "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+    sourceSha256: "bd19e74f953196ffeb733c466bdf6f3a46a903d5a86f0121b5ba0af588af7128",
   },
   {
     ...TRIGGER_FUNCTION_POLICY,

@@ -1,4 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { type Kysely, sql } from "kysely";
 import { describe, expect, it } from "vitest";
@@ -2476,6 +2479,171 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             }
           } finally {
             await bootstrap.destroy();
+          }
+        }
+      }
+    }
+  });
+  it("0033 rejects reconciler drift and changes only coverage while preserving exact hardened metadata and deferred bindings", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const schemaName = `recipe_grouping_upgrade_${randomBytes(6).toString("hex")}`;
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 1 });
+    const directory = await mkdtemp(join(tmpdir(), "recipe-coverage-migrations-"));
+    let schemaCreated = false;
+    try {
+      await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+      schemaCreated = true;
+      const migrations = await discoverMigrations();
+      const migrationIndex = migrations.findIndex(
+        (migration) => migration.name === "0033_recipe_coverage_reference_grouping.sql",
+      );
+      expect(migrationIndex).toBe(32);
+      const migration = migrations[migrationIndex];
+      if (!migration) throw new Error("0033 recipe coverage migration was not discovered");
+      for (const prior of migrations.slice(0, migrationIndex)) {
+        await writeFile(join(directory, prior.name), prior.sql, { flag: "wx" });
+      }
+      expect((await runMigrations(database, { directory })).applied).toEqual(
+        migrations.slice(0, migrationIndex).map((row) => row.name),
+      );
+
+      const readFunction = async () =>
+        (
+          await sql<{
+            source_sha256: string;
+            metadata: Record<string, unknown>;
+          }>`
+        select pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8')), 'hex') as source_sha256,
+          pg_catalog.to_jsonb(p) - 'prosrc' as metadata
+        from pg_catalog.pg_proc p join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = ${schemaName} and p.proname = 'reconcile_recipe_components_v2'
+          and pg_catalog.pg_get_function_identity_arguments(p.oid) = ''
+      `.execute(database)
+        ).rows;
+      const readTriggers = async () =>
+        (
+          await sql<{
+            trigger_name: string;
+            table_schema: string;
+            table_name: string;
+            function_schema: string;
+            enabled: string;
+            deferrable: boolean;
+            initially_deferred: boolean;
+            trigger_definition: string;
+          }>`
+        select t.tgname as trigger_name, tn.nspname as table_schema, c.relname as table_name,
+          pn.nspname as function_schema, t.tgenabled as enabled,
+          t.tgdeferrable as deferrable, t.tginitdeferred as initially_deferred,
+          pg_catalog.pg_get_triggerdef(t.oid, true) as trigger_definition
+        from pg_catalog.pg_trigger t
+        join pg_catalog.pg_class c on c.oid = t.tgrelid
+        join pg_catalog.pg_namespace tn on tn.oid = c.relnamespace
+        join pg_catalog.pg_proc p on p.oid = t.tgfoid
+        join pg_catalog.pg_namespace pn on pn.oid = p.pronamespace
+        where not t.tgisinternal and pn.nspname = ${schemaName}
+          and p.proname = 'reconcile_recipe_components_v2'
+        order by table_schema, trigger_name
+      `.execute(database)
+        ).rows;
+      const beforeFunction = await readFunction();
+      const beforeTriggers = await readTriggers();
+      expect(beforeFunction).toHaveLength(1);
+      expect(beforeFunction[0]).toMatchObject({
+        source_sha256: "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+        metadata: {
+          proacl: null,
+          proconfig: [`search_path=pg_catalog, ${schemaName}, pg_temp`],
+          prosecdef: false,
+          provolatile: "v",
+          proisstrict: false,
+          proparallel: "u",
+        },
+      });
+      expect(beforeTriggers.map((row) => row.trigger_name)).toEqual([
+        "recipe_ingredient_reconcile_v2",
+        "recipe_nutrient_reconcile_v2",
+        "recipe_source_reconcile_v2",
+        "recipe_version_components_reconcile_v2",
+      ]);
+      expect(
+        beforeTriggers.every(
+          (row) =>
+            row.table_schema === schemaName &&
+            row.function_schema === schemaName &&
+            row.enabled === "O" &&
+            row.deferrable &&
+            row.initially_deferred,
+        ),
+      ).toBe(true);
+
+      for (const mutation of [
+        `create or replace function ${schemaName}.reconcile_recipe_components_v2() returns trigger language plpgsql set search_path = pg_catalog, ${schemaName}, pg_temp as $body$ begin return null; end; $body$`,
+        `alter function ${schemaName}.reconcile_recipe_components_v2() security definer`,
+        `alter function ${schemaName}.reconcile_recipe_components_v2() stable`,
+        `alter function ${schemaName}.reconcile_recipe_components_v2() strict`,
+        `alter function ${schemaName}.reconcile_recipe_components_v2() parallel safe`,
+        `alter function ${schemaName}.reconcile_recipe_components_v2() set search_path = public`,
+        `grant execute on function ${schemaName}.reconcile_recipe_components_v2() to nutrition_catalogue_stage`,
+        `alter function ${schemaName}.reconcile_recipe_components_v2() owner to nutrition_catalogue_stage`,
+        `alter table ${schemaName}.recipe_ingredient disable trigger recipe_ingredient_reconcile_v2`,
+        `drop trigger recipe_nutrient_reconcile_v2 on ${schemaName}.recipe_version_nutrient;
+         create constraint trigger recipe_nutrient_reconcile_v2 after insert or delete on ${schemaName}.recipe_version_nutrient deferrable initially immediate for each row execute function ${schemaName}.reconcile_recipe_components_v2()`,
+        `create table ${schemaName}.unexpected_recipe_binding (recipe_version_id uuid);
+         create constraint trigger unexpected_recipe_binding after insert on ${schemaName}.unexpected_recipe_binding deferrable initially deferred for each row execute function ${schemaName}.reconcile_recipe_components_v2()`,
+      ]) {
+        await sql`begin`.execute(database);
+        try {
+          await sql.raw(mutation).execute(database);
+          const driftedFunction = await readFunction();
+          const driftedTriggers = await readTriggers();
+          await sql`savepoint migration_attempt`.execute(database);
+          await expectPostgresCode(
+            sql.raw(migration.sql).execute(database),
+            "55000",
+            "recipe coverage",
+          );
+          await sql`rollback to savepoint migration_attempt`.execute(database);
+          expect(await readFunction()).toEqual(driftedFunction);
+          expect(await readTriggers()).toEqual(driftedTriggers);
+        } finally {
+          await sql`rollback`.execute(database);
+        }
+        expect(await readFunction()).toEqual(beforeFunction);
+        expect(await readTriggers()).toEqual(beforeTriggers);
+      }
+
+      expect(await runMigrations(database)).toEqual({
+        applied: [migration.name],
+        alreadyApplied: migrations.slice(0, migrationIndex).map((row) => row.name),
+      });
+      expect(await readFunction()).toEqual([
+        {
+          ...beforeFunction[0],
+          source_sha256: "bd19e74f953196ffeb733c466bdf6f3a46a903d5a86f0121b5ba0af588af7128",
+        },
+      ]);
+      expect(await readTriggers()).toEqual(beforeTriggers);
+      expect(await runMigrations(database)).toEqual({
+        applied: [],
+        alreadyApplied: migrations.map((row) => row.name),
+      });
+      expect(await readTriggers()).toEqual(beforeTriggers);
+    } finally {
+      try {
+        await database.destroy();
+      } finally {
+        try {
+          if (schemaCreated)
+            await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+        } finally {
+          try {
+            await bootstrap.destroy();
+          } finally {
+            await rm(directory, { recursive: true, force: true });
           }
         }
       }

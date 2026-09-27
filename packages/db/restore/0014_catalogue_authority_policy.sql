@@ -1365,7 +1365,7 @@ where food.kind in ('generic', 'branded')
         ('guard_source_barcode_delete', '', 'd4bea8e773166f82f291f1d89b20a7cfb52e2d8416ba80bb455642058d23e3cf', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('lock_active_nutrient_registry_before_write', '', 'c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('lock_active_nutrient_registry_for_read', '', '22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5', 'void', 'sql', 'v', false, false, 'u', false),
-        ('reconcile_recipe_components_v2', '', 'c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('reconcile_recipe_components_v2', '', 'bd19e74f953196ffeb733c466bdf6f3a46a903d5a86f0121b5ba0af588af7128', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('reject_immutable_row_update', '', '631a42e27de6543bc09fd6b8d0f1b0fd336250270b47f13849a2483fd0786e6e', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('reject_new_legacy_unbound_catalogue_evidence', '', 'f972295c68b0774f901ce592801a0c8d25ddf6384194a702ca576844f088b14e', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('set_row_updated_at', '', '92fa7c305a8b856faea0575b27eaa33c1e39952cf9fe87b4c0cbf7d7eab556bd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),

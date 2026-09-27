@@ -234,6 +234,16 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
       }
 
       for (const functionDrift of [
+        `create or replace function public.reconcile_recipe_components_v2()
+        returns trigger
+        language plpgsql
+        security invoker
+        set search_path = pg_catalog, public, pg_temp
+        as $function$
+        begin
+          return null;
+        end;
+        $function$`,
         `create or replace function public.catalogue_record_import_approval(
           p_batch_id uuid,
           p_requested_approval_role text,

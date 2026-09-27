@@ -392,10 +392,14 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migrations through the four paged preparation migrations in the exact restore ledger", () => {
+test("tracks migrations through recipe coverage grouping in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 32);
+  assert.equal(migrationLedger.length, 33);
+  assert.deepEqual(migrationLedger.at(-1), {
+    name: "0033_recipe_coverage_reference_grouping.sql",
+    checksum: "a9a817a1d65283dea2469d76912052c460e28afe06239e2d8a77316607dafa4c",
+  });
   assert.equal(
     migrationLedger.find((entry) => entry.name === "0025_manual_activity_ledger.sql")?.name,
     "0025_manual_activity_ledger.sql",
@@ -1969,7 +1973,7 @@ function validAuthorityFunctions() {
     ],
     [
       "reconcile_recipe_components_v2",
-      "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+      "bd19e74f953196ffeb733c466bdf6f3a46a903d5a86f0121b5ba0af588af7128",
     ],
     [
       "reject_new_legacy_unbound_catalogue_evidence",

@@ -29,7 +29,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "444f53f4900b403d7378dd2b29258a1c41f7f32e88b09b37cf55282c3302e0b8";
+  "36a171d19a95ba183dc99269694fe7c48f7b13826499850b01a82492905ec3dc";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -925,7 +925,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     "reconcile_recipe_components_v2",
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
-      sourceSha256: "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+      sourceSha256: "bd19e74f953196ffeb733c466bdf6f3a46a903d5a86f0121b5ba0af588af7128",
     },
   ],
   [

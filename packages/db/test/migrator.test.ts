@@ -952,3 +952,74 @@ describe("forward migration discovery", () => {
     expect(migrationSql).toContain("lexicographically first participating entry");
   });
 });
+
+describe("recipe coverage reference grouping migration", () => {
+  it("discovers the forward recipe coverage migration after all existing migrations", async () => {
+    const migrations = await discoverMigrations();
+    const index = migrations.findIndex(
+      (migration) => migration.name === "0033_recipe_coverage_reference_grouping.sql",
+    );
+    expect(index).toBeGreaterThan(0);
+    expect(migrations[index - 1]?.name).toBe("0032_catalogue_publication_consumers.sql");
+  });
+
+  it("changes only the coverage projection of the exact hardened historical function", async () => {
+    const historical = await readFile(
+      resolve(import.meta.dirname, "../migrations/0006_retention_features.sql"),
+      "utf8",
+    );
+    const migration = await readFile(
+      resolve(import.meta.dirname, "../migrations/0033_recipe_coverage_reference_grouping.sql"),
+      "utf8",
+    );
+    const historicalParts = historical.split(
+      "create or replace function reconcile_recipe_components_v2()\nreturns trigger language plpgsql as $$",
+    );
+    expect(historicalParts).toHaveLength(2);
+    const original = historicalParts[1]
+      ?.split("$$;", 1)[0]
+      ?.replace(
+        "  lock table nutrient in share mode;",
+        "  perform lock_active_nutrient_registry_for_read();",
+      );
+    expect(original).toBeDefined();
+    if (original === undefined) throw new Error("Historical recipe function is missing");
+    const digest = (value: string) => createHash("sha256").update(value).digest("hex");
+    expect(digest(original)).toBe(
+      "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+    );
+    const changes = [1, 2, 3, 4].map((index) => {
+      const before = migration.split(`$before_${index}$`);
+      const after = migration.split(`$after_${index}$`);
+      expect(before).toHaveLength(3);
+      expect(after).toHaveLength(3);
+      return { before: before[1] ?? "", after: after[1] ?? "" };
+    });
+    let grouped = original;
+    for (const [index, change] of changes.entries()) {
+      expect(grouped.split(change.before).length - 1).toBe(index === 1 ? 7 : 1);
+      grouped = grouped.replaceAll(change.before, change.after);
+    }
+    expect(digest(grouped)).toBe(
+      "bd19e74f953196ffeb733c466bdf6f3a46a903d5a86f0121b5ba0af588af7128",
+    );
+    expect(migration).toContain(`<> '${digest(grouped)}'`);
+    expect(grouped.match(/sum\(ingredient\.reference_count \* case/gu)).toHaveLength(7);
+    expect(grouped).toContain("count(*) as reference_count");
+    expect(grouped).toContain(
+      "group by ingredient_kind, food_version_id, custom_food_id, nested_recipe_version_id",
+    );
+    for (const change of [...changes].reverse()) {
+      grouped = grouped.replaceAll(change.after, change.before);
+    }
+    expect(grouped).toBe(original);
+    expect(migration).toContain("recipe coverage function body or hardened policy differs");
+    expect(migration).toContain("recipe coverage trigger identity or deferred semantics differ");
+    expect(migration).toContain("original_trigger_state is distinct from");
+    // Pretty deparsing preserves the visible-schema trigger definitions pinned by0018.
+    expect(migration).toContain("pg_catalog.pg_get_triggerdef(trigger_row.oid, true)");
+    expect(migration).not.toContain("pg_catalog.pg_get_triggerdef(trigger_row.oid, false)");
+    expect(migration).not.toMatch(/\b(?:create|drop|alter)\s+trigger\b/iu);
+    expect(migration).not.toMatch(/\b(?:grant|revoke)\b/iu);
+  });
+});
