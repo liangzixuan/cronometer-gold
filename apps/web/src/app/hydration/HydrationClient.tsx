@@ -170,6 +170,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const writeGeneration = useRef(0);
   const inFlight = useRef(false);
   const mutationController = useRef<AbortController | null>(null);
+  const sessionController = useRef<AbortController | null>(null);
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
@@ -188,6 +189,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     viewGeneration.current += 1;
     writeGeneration.current += 1;
     loadGeneration.current += 1;
+    sessionController.current?.abort();
+    sessionController.current = null;
     loadController.current?.abort();
     mutationController.current?.abort();
     pendingRef.current = null;
@@ -288,13 +291,11 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     [signInAgain],
   );
 
-  useEffect(() => {
-    mounted.current = true;
-    if (privateClosed.current)
-      return () => {
-        mounted.current = false;
-      };
+  const loadSession = useCallback(() => {
+    if (!mounted.current || privateClosed.current || routeRef.current !== routeContext) return;
+    sessionController.current?.abort();
     const controller = new AbortController();
+    sessionController.current = controller;
     const view = ++viewGeneration.current;
     const route = routeRef.current;
     handledRouteRef.current = route;
@@ -315,6 +316,13 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     setMessage("Opening your private hydration log…");
     setMessageIsError(false);
     setState("loading");
+    const current = () =>
+      mounted.current &&
+      !privateClosed.current &&
+      !controller.signal.aborted &&
+      sessionController.current === controller &&
+      viewGeneration.current === view &&
+      routeRef.current === route;
     void (async () => {
       try {
         const response = await fetch("/api/auth/me", {
@@ -322,21 +330,12 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
-        if (
-          controller.signal.aborted ||
-          viewGeneration.current !== view ||
-          routeRef.current !== route
-        )
-          return;
+        if (!current()) return;
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Your session could not be verified.");
-        const nextSession = parseSession(await json(response));
-        if (
-          controller.signal.aborted ||
-          viewGeneration.current !== view ||
-          routeRef.current !== route
-        )
-          return;
+        const body = await json(response);
+        if (!current()) return;
+        const nextSession = parseSession(body);
         const today = localDateInTimeZone(new Date(), nextSession.profile.timeZone);
         const nextDate = initialDate && isLocalDate(initialDate) ? initialDate : today;
         ownerRef.current = nextSession.user.id;
@@ -345,27 +344,34 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         setDate(nextDate);
         setLocalTime(localTimeInTimeZone(new Date(), nextSession.profile.timeZone));
       } catch (error) {
-        if (
-          controller.signal.aborted ||
-          viewGeneration.current !== view ||
-          routeRef.current !== route
-        )
-          return;
+        if (!current()) return;
         setState("error");
         setMessageIsError(true);
         setMessage(error instanceof Error ? error.message : "Your session could not be verified.");
+      } finally {
+        if (sessionController.current === controller) sessionController.current = null;
       }
     })();
+  }, [initialDate, routeContext, signInAgain]);
+
+  useEffect(() => {
+    mounted.current = true;
+    if (privateClosed.current)
+      return () => {
+        mounted.current = false;
+      };
+    loadSession();
     return () => {
       mounted.current = false;
       viewGeneration.current += 1;
       writeGeneration.current += 1;
-      controller.abort();
+      sessionController.current?.abort();
+      sessionController.current = null;
       loadController.current?.abort();
       mutationController.current?.abort();
       inFlight.current = false;
     };
-  }, [initialDate, signInAgain]);
+  }, [loadSession]);
 
   useEffect(() => {
     if (session && date) void loadDay(date);
@@ -374,6 +380,26 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
 
   const renderedView = viewGeneration.current;
   const renderedLoad = loadGeneration.current;
+  function canRetrySession() {
+    return (
+      mounted.current &&
+      !privateClosed.current &&
+      routeRef.current === routeContext &&
+      handledRouteRef.current === routeContext &&
+      viewGeneration.current === renderedView &&
+      pendingRef.current === null &&
+      acceptedRead.current === null &&
+      session === null &&
+      ownerRef.current === null &&
+      state === "error" &&
+      sessionController.current === null &&
+      busy === null &&
+      !inFlight.current
+    );
+  }
+  function retrySession() {
+    if (canRetrySession()) loadSession();
+  }
   function canUseControls() {
     return (
       mounted.current &&
@@ -671,6 +697,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     inFlight.current = true;
     const view = ++viewGeneration.current;
     loadGeneration.current += 1;
+    sessionController.current?.abort();
+    sessionController.current = null;
     loadController.current?.abort();
     const owner = ownerRef.current;
     const route = routeRef.current;
@@ -794,38 +822,50 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         >
           {message}
         </p>
-        {state === "error" && session && date && !pending ? (
-          <button
-            className="buttonQuiet hydrationRetry"
-            disabled={busy !== null}
-            onClick={() => void retryDayView()}
-            type="button"
-          >
-            {reconcile ? "Reload and review entries" : "Retry day view"}
-          </button>
-        ) : null}
+        <div className="entryActions hydrationActions">
+          {state === "error" && session === null ? (
+            <button
+              className="buttonQuiet"
+              disabled={!canRetrySession()}
+              onClick={retrySession}
+              type="button"
+            >
+              Retry session
+            </button>
+          ) : null}
+          {state === "error" && session && date && !pending ? (
+            <button
+              className="buttonQuiet"
+              disabled={busy !== null}
+              onClick={() => void retryDayView()}
+              type="button"
+            >
+              {reconcile ? "Reload and review entries" : "Retry day view"}
+            </button>
+          ) : null}
 
-        {pending ? (
-          <button
-            className="buttonPrimary"
-            disabled={busy !== null}
-            onClick={() => void mutate(pending)}
-            type="button"
-          >
-            Retry saved change
-          </button>
-        ) : null}
-        {movedToDate ? (
-          <button
-            className="buttonQuiet"
-            disabled={controlsDisabled}
-            onClick={() => selectDate(movedToDate)}
-            type="button"
-          >
-            View destination day {movedToDate}
-          </button>
-        ) : null}
-        <Link href={`/dashboard${dateQuery}`}>Return to diary</Link>
+          {pending ? (
+            <button
+              className="buttonPrimary"
+              disabled={busy !== null}
+              onClick={() => void mutate(pending)}
+              type="button"
+            >
+              Retry saved change
+            </button>
+          ) : null}
+          {movedToDate ? (
+            <button
+              className="buttonQuiet"
+              disabled={controlsDisabled}
+              onClick={() => selectDate(movedToDate)}
+              type="button"
+            >
+              View destination day {movedToDate}
+            </button>
+          ) : null}
+          <Link href={`/dashboard${dateQuery}`}>Return to diary</Link>
+        </div>
 
         <div className="hydrationGrid">
           <section className="retentionSection" aria-labelledby="hydration-total-heading">

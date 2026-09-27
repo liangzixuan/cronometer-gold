@@ -264,6 +264,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   const routeContext = routeRef.current;
   const handledRouteRef = useRef<typeof routeContext | null>(null);
   const operations = useRef(new Map<string, string>());
+  const sessionController = useRef<AbortController | null>(null);
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
@@ -303,6 +304,8 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     dateRef.current = "";
     dayRef.current = null;
     inFlight.current = false;
+    sessionController.current?.abort();
+    sessionController.current = null;
     loadController.current?.abort();
     mutationController.current?.abort();
     operations.current.clear();
@@ -414,13 +417,11 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     [invalidateReuse, replaceDraft, setEdit, signInAgain],
   );
 
-  useEffect(() => {
-    mounted.current = true;
-    if (privateClosed.current)
-      return () => {
-        mounted.current = false;
-      };
+  const loadSession = useCallback(() => {
+    if (!mounted.current || privateClosed.current || routeRef.current !== routeContext) return;
+    sessionController.current?.abort();
     const controller = new AbortController();
+    sessionController.current = controller;
     const scope = ++scopeGeneration.current;
     const route = routeRef.current;
     handledRouteRef.current = route;
@@ -433,10 +434,13 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     setEdit(null);
     setBusy(null);
     setState("loading");
+    setMessageIsError(false);
+    setMessage("Opening your private activity log…");
     const current = () =>
       mounted.current &&
       !privateClosed.current &&
       !controller.signal.aborted &&
+      sessionController.current === controller &&
       scopeGeneration.current === scope &&
       routeRef.current === route;
     void (async () => {
@@ -449,8 +453,9 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         if (!current()) return;
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Your session could not be verified.");
-        const nextSession = parseSession(await json(response));
+        const body = await json(response);
         if (!current()) return;
+        const nextSession = parseSession(body);
         const today = localDateInTimeZone(new Date(), nextSession.profile.timeZone);
         const nextDate = initialDate && isLocalDate(initialDate) ? initialDate : today;
         if (draftOwnerRef.current && draftOwnerRef.current !== nextSession.user.id) {
@@ -477,8 +482,19 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         setState("error");
         setMessageIsError(true);
         setMessage(error instanceof Error ? error.message : "Your session could not be verified.");
+      } finally {
+        if (sessionController.current === controller) sessionController.current = null;
       }
     })();
+  }, [initialDate, invalidateReuse, replaceDraft, routeContext, setEdit, signInAgain]);
+
+  useEffect(() => {
+    mounted.current = true;
+    if (privateClosed.current)
+      return () => {
+        mounted.current = false;
+      };
+    loadSession();
     return () => {
       mounted.current = false;
       scopeGeneration.current += 1;
@@ -486,12 +502,13 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
       loadGeneration.current += 1;
       controlGeneration.current += 1;
       reuseChoiceRef.current = null;
-      controller.abort();
+      sessionController.current?.abort();
+      sessionController.current = null;
       loadController.current?.abort();
       mutationController.current?.abort();
       inFlight.current = false;
     };
-  }, [initialDate, invalidateReuse, replaceDraft, setEdit, signInAgain]);
+  }, [loadSession]);
 
   useEffect(() => {
     if (session && date) void loadDay(date);
@@ -501,6 +518,25 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   const renderedScope = scopeGeneration.current;
   const renderedControl = controlGeneration.current;
   const renderedLoad = loadGeneration.current;
+  function canRetrySession() {
+    return (
+      mounted.current &&
+      !privateClosed.current &&
+      routeRef.current === routeContext &&
+      handledRouteRef.current === routeContext &&
+      scopeGeneration.current === renderedScope &&
+      controlGeneration.current === renderedControl &&
+      session === null &&
+      ownerRef.current === null &&
+      state === "error" &&
+      sessionController.current === null &&
+      busy === null &&
+      !inFlight.current
+    );
+  }
+  function retrySession() {
+    if (canRetrySession()) loadSession();
+  }
   function canUseControls() {
     return (
       mounted.current &&
@@ -1044,6 +1080,16 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         >
           {message}
         </p>
+        {state === "error" && session === null ? (
+          <button
+            className="buttonQuiet activityRetry"
+            disabled={!canRetrySession()}
+            onClick={retrySession}
+            type="button"
+          >
+            Retry session
+          </button>
+        ) : null}
         {state === "error" && session && date ? (
           <button
             className="buttonQuiet activityRetry"

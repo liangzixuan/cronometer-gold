@@ -168,6 +168,20 @@ session. Late responses cannot restore closed private content or replace the
 current route. Existing explicit date ranges and profile-local defaults remain
 intact; a different owner or expired session requires signing in again.
 
+## Activity and Hydration session recovery
+
+A temporary failure to verify the Activity or Hydration session offers Retry
+session. Once verification succeeds, load the selected local day through the
+existing day reader. Keep Retry day view separate: it reloads a failed day read
+without restarting session recovery or repeating a write.
+
+Session retries ignore duplicate clicks and responses from an older route or
+closed workspace. Preserve each tab's existing draft and owner-change behavior.
+An unconfirmed save keeps its exact request for the existing explicit write
+retry; session recovery must never replay it or discard its retry information.
+Hydration sign-out remains available during session verification and prevents a
+late response from reopening private content.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

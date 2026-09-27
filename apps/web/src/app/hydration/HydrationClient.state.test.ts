@@ -1168,3 +1168,565 @@ describe("actual web hydration Add amount presets", () => {
     },
   );
 });
+
+describe("session bootstrap recovery", () => {
+  it.each(
+    (["503", "network", "malformed"] as const).flatMap((failure) =>
+      (["explicit", "absent", "invalid"] as const).map((dateMode) => ({ failure, dateMode })),
+    ),
+  )(
+    "recovers $failure session failure with $dateMode date and exactly one owned day read",
+    async ({ failure, dateMode }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-02T04:59:58.000Z"));
+      let authReads = 0;
+      const dayReads: Array<{ url: string; owner: string | null }> = [];
+      const writes: RequestInit[] = [];
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method) {
+          writes.push(init);
+          throw new Error("Session retry must not write.");
+        }
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) {
+            if (failure === "network") throw new TypeError("Session connection unavailable.");
+            return failure === "503"
+              ? Response.json({ error: "Session unavailable." }, { status: 503 })
+              : Response.json({ data: { user: {} } });
+          }
+          return session();
+        }
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        dayReads.push({ url, owner: new Headers(init?.headers).get("x-expected-owner-user-id") });
+        return day([], requested);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() =>
+        HydrationClient({
+          ...(dateMode === "absent"
+            ? {}
+            : { initialDate: dateMode === "invalid" ? "2026-02-30" : "2026-11-01" }),
+        }),
+      );
+      await hooks.settle();
+      expect(authReads).toBe(1);
+      expect(dayReads).toHaveLength(0);
+      expect(writes).toHaveLength(0);
+      expect(text()).not.toContain("Retry day view");
+      expect(button("Retry session").props.disabled).not.toBe(true);
+      vi.setSystemTime(new Date("2026-11-02T05:00:01.000Z"));
+      await click("Retry session");
+      const expectedDate = dateMode === "explicit" ? "2026-11-01" : "2026-11-02";
+      expect(authReads).toBe(2);
+      expect(dayReads).toEqual([{ url: `/api/hydration?date=${expectedDate}`, owner }]);
+      expect(field("Local date").props.value).toBe(expectedDate);
+      expect(writes).toHaveLength(0);
+      expect(text()).not.toContain("Retry session");
+    },
+  );
+});
+
+describe("session recovery request ownership", () => {
+  it("rejects duplicate and retained retries while allowing a fresh retry after another failure", async () => {
+    const pending = deferred<Response>();
+    let authReads = 0;
+    const days: string[] = [];
+    const fetch = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") {
+        authReads += 1;
+        if (authReads === 1) return Response.json({}, { status: 503 });
+        if (authReads === 2) return pending.promise;
+        return session();
+      }
+      days.push(url);
+      const requested = "2026-11-01";
+      return day([], requested);
+    });
+    vi.stubGlobal("fetch", fetch);
+    hooks.mount(() => HydrationClient({ initialDate: "2026-11-01" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    invoke(retry, "onClick");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(days).toHaveLength(0);
+    pending.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+    await hooks.settle();
+    const failed = text();
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(text()).toBe(failed);
+    await click("Retry session");
+    expect(authReads).toBe(3);
+    expect(days).toEqual(["/api/hydration?date=2026-11-01"]);
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    expect(days).toHaveLength(1);
+  });
+
+  it("keeps an ordinary day failure on its read-only retry without verifying the session again", async () => {
+    let authReads = 0,
+      dayReads = 0,
+      writes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method) writes += 1;
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return session();
+        }
+        dayReads += 1;
+        if (dayReads === 1) return Response.json({ error: "Day unavailable." }, { status: 503 });
+        const requested = "2026-11-01";
+        return day([], requested);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: "2026-11-01" }));
+    await hooks.settle();
+    expect(text()).not.toContain("Retry session");
+    await click("Retry day view");
+    expect({ authReads, dayReads, writes }).toEqual({ authReads: 1, dayReads: 2, writes: 0 });
+    expect(text()).not.toContain("Day unavailable.");
+  });
+
+  it("closes on a current retry401 before parsing and never reopens through retained retry or effect replay", async () => {
+    const unauthorized = Response.json({}, { status: 401 });
+    const readBody = vi.spyOn(unauthorized, "json");
+    let authReads = 0,
+      dayReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads === 1 ? Response.json({}, { status: 503 }) : unauthorized;
+        }
+        dayReads += 1;
+        const requested = "2026-11-01";
+        return day([], requested);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: "2026-11-01" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(readBody).not.toHaveBeenCalled();
+    invoke(retry, "onClick");
+    hooks.replayEffects();
+    await hooks.settle();
+    expect({ authReads, dayReads }).toEqual({ authReads: 2, dayReads: 0 });
+    hooks.unmount();
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+    expect(authReads).toBe(2);
+  });
+
+  it("rejects the old retry before route effects and recovers a failed replacement route", async () => {
+    let initialDate = "2026-11-01";
+    let authReads = 0;
+    const days: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads <= 2 ? Response.json({}, { status: 503 }) : session();
+        }
+        days.push(url);
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return day([], requested);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    initialDate = "2026-11-02";
+    hooks.renderWithoutEffects();
+    invoke(retry, "onClick");
+    expect(authReads).toBe(1);
+    hooks.render();
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(text()).not.toContain("Retry day view");
+    await click("Retry session");
+    expect(authReads).toBe(3);
+    expect(days).toEqual(["/api/hydration?date=2026-11-02"]);
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(3);
+  });
+
+  it.each([
+    ["response", "route", "success"],
+    ["response", "route", "503"],
+    ["response", "route", "401"],
+    ["response", "unmount", "network"],
+    ["JSON", "route", "success"],
+    ["JSON", "unmount", "success"],
+  ] as const)("ignores delayed retry %s after %s with %s", async (stage, transition, outcome) => {
+    const delayed = deferred<void>();
+    let initialDate = "2026-11-01";
+    let authReads = 0;
+    const days: string[] = [];
+    const delayedBody = vi.fn(async () => {
+      await delayed.promise;
+      return await session().json();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) return Response.json({}, { status: 503 });
+          if (authReads === 2) {
+            if (stage === "JSON") {
+              const response = Response.json({});
+              response.json = delayedBody;
+              return response;
+            }
+            await delayed.promise;
+            if (outcome === "network") throw new TypeError("Old connection failed.");
+            return outcome === "success"
+              ? session()
+              : Response.json({}, { status: Number(outcome) });
+          }
+          return session();
+        }
+        days.push(url);
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return day([], requested);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    if (stage === "JSON") expect(delayedBody).toHaveBeenCalledTimes(1);
+    if (transition === "route") {
+      initialDate = "2026-11-02";
+      hooks.renderWithoutEffects();
+    } else hooks.unmount();
+    const before = text();
+    delayed.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    invoke(retry, "onClick");
+    if (transition === "route") hooks.renderWithoutEffects();
+    expect(text()).toBe(before);
+    expect(authReads).toBe(2);
+    expect(days).toHaveLength(0);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(hooks.afterClose()).toBe(0);
+    if (transition === "route") {
+      hooks.render();
+      await hooks.settle();
+      expect(authReads).toBe(3);
+      expect(days).toEqual(["/api/hydration?date=2026-11-02"]);
+    }
+  });
+
+  it("replays bootstrap setup during a pending retry and ignores the cancelled retry401", async () => {
+    const cancelled = deferred<Response>();
+    let authReads = 0;
+    const days: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) return Response.json({}, { status: 503 });
+          if (authReads === 2) return cancelled.promise;
+          return session();
+        }
+        days.push(url);
+        const requested = "2026-11-01";
+        return day([], requested);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: "2026-11-01" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    expect(days).toEqual(["/api/hydration?date=2026-11-01"]);
+    cancelled.resolve(Response.json({}, { status: 401 }));
+    await hooks.settle();
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    expect(days).toHaveLength(1);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("overlapping session recovery", () => {
+  it("does not let an old request finally clear the newer pending retry", async () => {
+    const old = deferred<Response>();
+    const current = deferred<Response>();
+    let initialDate = "2026-11-01";
+    let authReads = 0;
+    const days: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 2) return old.promise;
+          if (authReads === 4) return current.promise;
+          return Response.json({}, { status: 503 });
+        }
+        days.push(url);
+        const requested = "2026-11-02";
+        return day([], requested);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate }));
+    await hooks.settle();
+    await click("Retry session");
+    initialDate = "2026-11-02";
+    hooks.render();
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    const retry = button("Retry session");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(4);
+    old.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(4);
+    expect(days).toHaveLength(0);
+    current.resolve(session());
+    await hooks.settle();
+    expect(days).toEqual(["/api/hydration?date=2026-11-02"]);
+    expect(text()).not.toContain("Retry session");
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("Hydration recovered session preserves existing work boundaries", () => {
+  it.each(["same owner", "replacement owner"] as const)(
+    "keeps the external-route draft reset when retry verifies %s",
+    async (ownerMode) => {
+      let initialDate = original.localDate;
+      let activeOwner = owner;
+      let authReads = 0;
+      const writes: RequestInit[] = [];
+      const dayOwners: string[] = [];
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads === 2 ? Response.json({}, { status: 503 }) : session(activeOwner);
+        }
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json({}, { status: 503 });
+        }
+        dayOwners.push(new Headers(init?.headers).get("x-expected-owner-user-id") ?? "");
+        const date = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return day([], date);
+      });
+      vi.stubGlobal("fetch", fetch);
+      hooks.mount(() => HydrationClient({ initialDate }));
+      await hooks.settle();
+      await change("Local time", "10:15");
+      await click("500 mL");
+      const oldAmount = field("Milliliters");
+      const oldSubmit = addForm();
+      await submit("Add entry");
+      const oldWriteRetry = button("Retry saved change");
+      expect(writes).toHaveLength(1);
+      initialDate = "2026-11-02";
+      hooks.render();
+      await hooks.settle();
+      expect(field("Milliliters").props.value).toBe("");
+      expect(text()).not.toContain("Retry saved change");
+      if (ownerMode === "replacement owner") activeOwner = anotherOwner;
+      await click("Retry session");
+      expect(field("Milliliters").props.value).toBe("");
+      expect(field("Local date").props.value).toBe("2026-11-02");
+      expect(dayOwners).toEqual([owner, activeOwner]);
+      const calls = fetch.mock.calls.length;
+      invoke(oldAmount, "onChange", { target: { value: "1999" } });
+      invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+      invoke(oldWriteRetry, "onClick");
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(calls);
+      expect(writes).toHaveLength(1);
+      expect(field("Milliliters").props.value).toBe("");
+      expect(text()).not.toContain("Retry saved change");
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+
+  it("keeps a retained session retry inert through pending write, exact write replay and accepted-read repair", async () => {
+    const pending = deferred<Response>();
+    let authReads = 0,
+      dayReads = 0;
+    let accepted = false,
+      failRead = true;
+    const writes: Array<{ url: string; body: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads === 1 ? Response.json({}, { status: 503 }) : session();
+        }
+        if (init?.method === "POST") {
+          writes.push({
+            url,
+            body: String(init.body),
+            headers: Object.fromEntries(new Headers(init.headers)),
+          });
+          if (writes.length === 1) return pending.promise;
+          accepted = true;
+          return Response.json(receipt(created(500), true));
+        }
+        dayReads += 1;
+        return accepted && failRead
+          ? Response.json({}, { status: 503 })
+          : day(accepted ? [created(500)] : []);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    await change("Local time", "10:15");
+    await click("500 mL");
+    await submit("Add entry");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect({ authReads, dayReads }).toEqual({ authReads: 2, dayReads: 1 });
+    expect(writes).toHaveLength(1);
+    expect(field("Milliliters").props.value).toBe("500");
+    pending.resolve(Response.json({ error: "Response lost." }, { status: 503 }));
+    await hooks.settle();
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(text()).not.toContain("Retry session");
+    expect(writes).toHaveLength(1);
+    await click("Retry saved change");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(text()).toContain("The entry change was accepted");
+    expect(field("Milliliters").props.value).toBe("");
+    expect(text()).not.toContain("Retry saved change");
+    const readsBefore = dayReads;
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(dayReads).toBe(readsBefore);
+    expect(writes).toHaveLength(2);
+    failRead = false;
+    await click("Retry day view");
+    expect(authReads).toBe(2);
+    expect(dayReads).toBe(readsBefore + 1);
+    expect(writes).toHaveLength(2);
+    expect(button("500 mL").props.disabled).toBe(false);
+  });
+
+  it.each(["success", "503", "401"] as const)(
+    "keeps Sign out usable during session retry and ignores its late %s",
+    async (outcome) => {
+      const pending = deferred<Response>();
+      let authReads = 0,
+        logoutCalls = 0,
+        dayReads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/api/auth/logout") {
+            logoutCalls += 1;
+            return new Response(null, { status: 204 });
+          }
+          if (url === "/api/auth/me") {
+            authReads += 1;
+            return authReads === 1 ? Response.json({}, { status: 503 }) : pending.promise;
+          }
+          dayReads += 1;
+          return day();
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      const retry = button("Retry session");
+      await click("Retry session");
+      expect(button("Sign out").props.disabled).toBe(false);
+      await click("Sign out");
+      const closed = text();
+      pending.resolve(
+        outcome === "success"
+          ? session(anotherOwner)
+          : Response.json({}, { status: Number(outcome) }),
+      );
+      await hooks.settle();
+      invoke(retry, "onClick");
+      hooks.replayEffects();
+      await hooks.settle();
+      expect({ authReads, logoutCalls, dayReads }).toEqual({
+        authReads: 2,
+        logoutCalls: 1,
+        dayReads: 0,
+      });
+      expect(router.replace).toHaveBeenCalledTimes(1);
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(text()).toBe(closed);
+      expect(text()).not.toContain("other@example.test");
+    },
+  );
+
+  it("allows fresh session recovery after unconfirmed logout invalidates a pending auth retry", async () => {
+    const pending = deferred<Response>();
+    let authReads = 0,
+      logoutCalls = 0,
+      dayReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/logout") {
+          logoutCalls += 1;
+          return Response.json({}, { status: 503 });
+        }
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) return Response.json({}, { status: 503 });
+          if (authReads === 2) return pending.promise;
+          return session();
+        }
+        dayReads += 1;
+        return day();
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    await click("Sign out");
+    expect(text()).toContain("Sign out could not be confirmed");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    await click("Retry session");
+    expect({ authReads, logoutCalls, dayReads }).toEqual({
+      authReads: 3,
+      logoutCalls: 1,
+      dayReads: 1,
+    });
+    pending.resolve(Response.json({}, { status: 401 }));
+    await hooks.settle();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(text()).toContain("owner@example.test");
+    expect(text()).not.toContain("Retry session");
+  });
+});

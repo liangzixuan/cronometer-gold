@@ -1437,3 +1437,493 @@ describe("web activity explicit time choices", () => {
     expect(JSON.parse(String(writes[0]?.body)).occurredAt).toBe("2026-11-01T06:30:00.000Z");
   });
 });
+
+describe("session bootstrap recovery", () => {
+  it.each(
+    (["503", "network", "malformed"] as const).flatMap((failure) =>
+      (["explicit", "absent", "invalid"] as const).map((dateMode) => ({ failure, dateMode })),
+    ),
+  )(
+    "recovers $failure session failure with $dateMode date and exactly one owned day read",
+    async ({ failure, dateMode }) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-02T04:59:58.000Z"));
+      let authReads = 0;
+      const dayReads: Array<{ url: string; owner: string | null }> = [];
+      const writes: RequestInit[] = [];
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method) {
+          writes.push(init);
+          throw new Error("Session retry must not write.");
+        }
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) {
+            if (failure === "network") throw new TypeError("Session connection unavailable.");
+            return failure === "503"
+              ? Response.json({ error: "Session unavailable." }, { status: 503 })
+              : Response.json({ data: { user: {} } });
+          }
+          return Response.json(session(owner, "America/New_York"));
+        }
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        dayReads.push({ url, owner: new Headers(init?.headers).get("x-expected-owner-user-id") });
+        return Response.json(day([], requested, "America/New_York"));
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() =>
+        ActivityClient({
+          ...(dateMode === "absent"
+            ? {}
+            : { initialDate: dateMode === "invalid" ? "2026-02-30" : "2026-08-15" }),
+        }),
+      );
+      await hooks.settle();
+      expect(authReads).toBe(1);
+      expect(dayReads).toHaveLength(0);
+      expect(writes).toHaveLength(0);
+      expect(text()).not.toContain("Retry day view");
+      expect(button("Retry session").props.disabled).not.toBe(true);
+      vi.setSystemTime(new Date("2026-11-02T05:00:01.000Z"));
+      await click("Retry session");
+      const expectedDate = dateMode === "explicit" ? "2026-08-15" : "2026-11-02";
+      expect(authReads).toBe(2);
+      expect(dayReads).toEqual([{ url: `/api/activities?date=${expectedDate}`, owner }]);
+      expect(field("Local date", hooks.tree()).props.value).toBe(expectedDate);
+      expect(writes).toHaveLength(0);
+      expect(text()).not.toContain("Retry session");
+    },
+  );
+});
+
+describe("session recovery request ownership", () => {
+  it("rejects duplicate and retained retries while allowing a fresh retry after another failure", async () => {
+    const pending = deferred<Response>();
+    let authReads = 0;
+    const days: string[] = [];
+    const fetch = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") {
+        authReads += 1;
+        if (authReads === 1) return Response.json({}, { status: 503 });
+        if (authReads === 2) return pending.promise;
+        return Response.json(session());
+      }
+      days.push(url);
+      const requested = "2026-08-15";
+      return Response.json(day([], requested));
+    });
+    vi.stubGlobal("fetch", fetch);
+    hooks.mount(() => ActivityClient({ initialDate: "2026-08-15" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    invoke(retry);
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(days).toHaveLength(0);
+    pending.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+    await hooks.settle();
+    const failed = text();
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(text()).toBe(failed);
+    await click("Retry session");
+    expect(authReads).toBe(3);
+    expect(days).toEqual(["/api/activities?date=2026-08-15"]);
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    expect(days).toHaveLength(1);
+  });
+
+  it("keeps an ordinary day failure on its read-only retry without verifying the session again", async () => {
+    let authReads = 0,
+      dayReads = 0,
+      writes = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method) writes += 1;
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return Response.json(session());
+        }
+        dayReads += 1;
+        if (dayReads === 1) return Response.json({ error: "Day unavailable." }, { status: 503 });
+        const requested = "2026-08-15";
+        return Response.json(day([], requested));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate: "2026-08-15" }));
+    await hooks.settle();
+    expect(text()).not.toContain("Retry session");
+    await click("Retry day view");
+    expect({ authReads, dayReads, writes }).toEqual({ authReads: 1, dayReads: 2, writes: 0 });
+    expect(text()).not.toContain("Day unavailable.");
+  });
+
+  it("closes on a current retry401 before parsing and never reopens through retained retry or effect replay", async () => {
+    const unauthorized = Response.json({}, { status: 401 });
+    const readBody = vi.spyOn(unauthorized, "json");
+    let authReads = 0,
+      dayReads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads === 1 ? Response.json({}, { status: 503 }) : unauthorized;
+        }
+        dayReads += 1;
+        const requested = "2026-08-15";
+        return Response.json(day([], requested));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate: "2026-08-15" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(readBody).not.toHaveBeenCalled();
+    invoke(retry);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect({ authReads, dayReads }).toEqual({ authReads: 2, dayReads: 0 });
+    hooks.unmount();
+    invoke(retry);
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+    expect(authReads).toBe(2);
+  });
+
+  it("rejects the old retry before route effects and recovers a failed replacement route", async () => {
+    let initialDate = "2026-08-15";
+    let authReads = 0;
+    const days: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads <= 2 ? Response.json({}, { status: 503 }) : Response.json(session());
+        }
+        days.push(url);
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return Response.json(day([], requested));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    initialDate = "2026-08-16";
+    hooks.renderWithoutEffects();
+    invoke(retry);
+    expect(authReads).toBe(1);
+    hooks.render();
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(text()).not.toContain("Retry day view");
+    await click("Retry session");
+    expect(authReads).toBe(3);
+    expect(days).toEqual(["/api/activities?date=2026-08-16"]);
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(3);
+  });
+
+  it.each([
+    ["response", "route", "success"],
+    ["response", "route", "503"],
+    ["response", "route", "401"],
+    ["response", "unmount", "network"],
+    ["JSON", "route", "success"],
+    ["JSON", "unmount", "success"],
+  ] as const)("ignores delayed retry %s after %s with %s", async (stage, transition, outcome) => {
+    const delayed = deferred<void>();
+    let initialDate = "2026-08-15";
+    let authReads = 0;
+    const days: string[] = [];
+    const delayedBody = vi.fn(async () => {
+      await delayed.promise;
+      return session();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) return Response.json({}, { status: 503 });
+          if (authReads === 2) {
+            if (stage === "JSON") {
+              const response = Response.json({});
+              response.json = delayedBody;
+              return response;
+            }
+            await delayed.promise;
+            if (outcome === "network") throw new TypeError("Old connection failed.");
+            return outcome === "success"
+              ? Response.json(session())
+              : Response.json({}, { status: Number(outcome) });
+          }
+          return Response.json(session());
+        }
+        days.push(url);
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return Response.json(day([], requested));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    if (stage === "JSON") expect(delayedBody).toHaveBeenCalledTimes(1);
+    if (transition === "route") {
+      initialDate = "2026-08-16";
+      hooks.renderWithoutEffects();
+    } else hooks.unmount();
+    const before = text();
+    delayed.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    invoke(retry);
+    if (transition === "route") hooks.renderWithoutEffects();
+    expect(text()).toBe(before);
+    expect(authReads).toBe(2);
+    expect(days).toHaveLength(0);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(hooks.afterClose()).toBe(0);
+    if (transition === "route") {
+      hooks.render();
+      await hooks.settle();
+      expect(authReads).toBe(3);
+      expect(days).toEqual(["/api/activities?date=2026-08-16"]);
+    }
+  });
+
+  it("replays bootstrap setup during a pending retry and ignores the cancelled retry401", async () => {
+    const cancelled = deferred<Response>();
+    let authReads = 0;
+    const days: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 1) return Response.json({}, { status: 503 });
+          if (authReads === 2) return cancelled.promise;
+          return Response.json(session());
+        }
+        days.push(url);
+        const requested = "2026-08-15";
+        return Response.json(day([], requested));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate: "2026-08-15" }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    expect(days).toEqual(["/api/activities?date=2026-08-15"]);
+    cancelled.resolve(Response.json({}, { status: 401 }));
+    await hooks.settle();
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    expect(days).toHaveLength(1);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("overlapping session recovery", () => {
+  it("does not let an old request finally clear the newer pending retry", async () => {
+    const old = deferred<Response>();
+    const current = deferred<Response>();
+    let initialDate = "2026-08-15";
+    let authReads = 0;
+    const days: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 2) return old.promise;
+          if (authReads === 4) return current.promise;
+          return Response.json({}, { status: 503 });
+        }
+        days.push(url);
+        const requested = "2026-08-16";
+        return Response.json(day([], requested));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate }));
+    await hooks.settle();
+    await click("Retry session");
+    initialDate = "2026-08-16";
+    hooks.render();
+    await hooks.settle();
+    expect(authReads).toBe(3);
+    const retry = button("Retry session");
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(4);
+    old.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(4);
+    expect(days).toHaveLength(0);
+    current.resolve(Response.json(session()));
+    await hooks.settle();
+    expect(days).toEqual(["/api/activities?date=2026-08-16"]);
+    expect(text()).not.toContain("Retry session");
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+});
+
+describe("Activity recovered session preserves existing work", () => {
+  it.each(["same owner", "replacement owner"] as const)(
+    "recovers an external route for %s with its established draft and retry identity",
+    async (ownerMode) => {
+      let initialDate = original.localDate;
+      let activeOwner = owner;
+      let authReads = 0;
+      const writes: Array<{ body: string; headers: Record<string, string> }> = [];
+      const dayOwners: string[] = [];
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          if (authReads === 2) return Response.json({}, { status: 503 });
+          return Response.json(session(activeOwner));
+        }
+        if (init?.method === "POST") {
+          writes.push({
+            body: String(init.body),
+            headers: Object.fromEntries(new Headers(init.headers)),
+          });
+          return Response.json({}, { status: 503 });
+        }
+        dayOwners.push(new Headers(init?.headers).get("x-expected-owner-user-id") ?? "");
+        const date = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return Response.json(day([], date));
+      });
+      vi.stubGlobal("fetch", fetch);
+      hooks.mount(() => ActivityClient({ initialDate }));
+      await hooks.settle();
+      await change("Activity name", "  Private retained walk  ");
+      await change("Duration (minutes)", "35");
+      await change("Self-reported calories (optional)", "12.500");
+      await change("Local time", "10:15");
+      const oldName = field("Activity name");
+      const oldSubmit = addForm();
+      await submit();
+      expect(writes).toHaveLength(1);
+      initialDate = "2026-08-16";
+      hooks.render();
+      await hooks.settle();
+      expect(text()).not.toContain("Retry day view");
+      if (ownerMode === "replacement owner") activeOwner = anotherOwner;
+      await click("Retry session");
+      const expected =
+        ownerMode === "same owner" ? ["  Private retained walk  ", "35", "12.500"] : ["", "", ""];
+      expect(
+        ["Activity name", "Duration (minutes)", "Self-reported calories (optional)"].map(
+          (label) => field(label).props.value,
+        ),
+      ).toEqual(expected);
+      expect(dayOwners).toEqual([owner, activeOwner]);
+      const calls = fetch.mock.calls.length;
+      invoke(oldName, "onChange", { target: { value: "Old owner mutation" } });
+      invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(calls);
+      expect(field("Activity name").props.value).toBe(expected[0]);
+      activeOwner = owner;
+      initialDate = original.localDate;
+      hooks.render();
+      await hooks.settle();
+      await change("Activity name", "  Private retained walk  ");
+      await change("Duration (minutes)", "35");
+      await change("Self-reported calories (optional)", "12.500");
+      await change("Local time", "10:15");
+      await submit();
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      if (ownerMode === "same owner")
+        expect(writes[1]?.headers["idempotency-key"]).toBe(writes[0]?.headers["idempotency-key"]);
+      else
+        expect(writes[1]?.headers["idempotency-key"]).not.toBe(
+          writes[0]?.headers["idempotency-key"],
+        );
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+
+  it("keeps a retained session retry inert through pending write, exact write replay and accepted-read repair", async () => {
+    const pending = deferred<Response>();
+    let authReads = 0,
+      dayReads = 0;
+    let accepted = false,
+      failRead = true;
+    const writes: Array<{ url: string; body: string; headers: Record<string, string> }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authReads += 1;
+          return authReads === 1 ? Response.json({}, { status: 503 }) : Response.json(session());
+        }
+        if (init?.method === "POST") {
+          writes.push({
+            url,
+            body: String(init.body),
+            headers: Object.fromEntries(new Headers(init.headers)),
+          });
+          if (writes.length === 1) return pending.promise;
+          accepted = true;
+          return Response.json(receipt(JSON.parse(String(init.body)), true));
+        }
+        dayReads += 1;
+        return accepted && failRead ? Response.json({}, { status: 503 }) : Response.json(day([]));
+      }),
+    );
+    hooks.mount(() => ActivityClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    await change("Activity name", "Saved recovery walk");
+    await change("Duration (minutes)", "35");
+    await change("Local time", "10:15");
+    await submit();
+    invoke(retry);
+    await hooks.settle();
+    expect({ authReads, dayReads }).toEqual({ authReads: 2, dayReads: 1 });
+    expect(writes).toHaveLength(1);
+    expect(field("Activity name").props.value).toBe("Saved recovery walk");
+    pending.resolve(Response.json({ error: "Response lost." }, { status: 503 }));
+    await hooks.settle();
+    invoke(retry);
+    await hooks.settle();
+    expect(text()).not.toContain("Retry session");
+    expect(writes).toHaveLength(1);
+    await click("Retry day view");
+    await submit();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(text()).toContain("The entry change was accepted");
+    expect(field("Activity name").props.value).toBe("");
+    const readsBefore = dayReads;
+    invoke(retry);
+    await hooks.settle();
+    expect(authReads).toBe(2);
+    expect(dayReads).toBe(readsBefore);
+    expect(writes).toHaveLength(2);
+    failRead = false;
+    await click("Retry day view");
+    expect(authReads).toBe(2);
+    expect(dayReads).toBe(readsBefore + 1);
+    expect(writes).toHaveLength(2);
+    expect(button("Add entry").props.disabled).toBe(false);
+  });
+});

@@ -1945,8 +1945,13 @@ button:disabled {
   color: #8a332b;
 }
 
-.hydrationRetry,
 .activityRetry {
+  margin: -8px 0 20px;
+}
+
+.hydrationActions {
+  align-items: center;
+  gap: 12px;
   margin: -8px 0 20px;
 }
 
