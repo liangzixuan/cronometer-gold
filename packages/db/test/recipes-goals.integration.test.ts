@@ -58,7 +58,7 @@ import {
   updateUserProfile,
 } from "../src/index.js";
 
-import { createQueryPhaseTiming } from "./query-phase-timing.js";
+import { createDriverPhaseTiming, createQueryPhaseTiming } from "./query-phase-timing.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const FIXTURE_EVIDENCE_VALID_UNTIL = new Date(Date.now() + 12 * 60 * 60 * 1_000).toISOString();
@@ -290,6 +290,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
   it("persists explainable recipe history and logs a pinned recipe version", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const queryTiming = createQueryPhaseTiming();
+    const driverTiming = createDriverPhaseTiming();
     const startedAt = performance.now();
     let phaseStartedAt = startedAt;
     let phase = "test.start";
@@ -303,12 +304,19 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
           elapsedMs: Math.round(now - startedAt),
           nextPhase,
           queries: queryTiming.take(),
+          driverCompletions: driverTiming.take(),
         }),
       );
       phase = nextPhase;
       phaseStartedAt = now;
     };
-    const fixture = await createFixture(databaseUrl, "recipes", markPhase, queryTiming.plugin);
+    const fixture = await createFixture(
+      databaseUrl,
+      "recipes",
+      markPhase,
+      queryTiming.plugin,
+      driverTiming.log,
+    );
     try {
       markPhase("recipe.create");
       const draft = foodRecipeDraft(fixture.catalogue.foodVersionId, fixture.catalogue.servingId, {
@@ -2529,14 +2537,23 @@ async function createFixture(
   label: string,
   onPhase?: (phase: string) => void,
   queryTiming?: import("kysely").KyselyPlugin,
+  driverTiming?: import("kysely").Logger,
 ) {
   onPhase?.("fixture.schema");
-  const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+  const bootstrap = createDatabase({
+    connectionString: databaseUrl,
+    maxConnections: 1,
+    ...(driverTiming ? { log: driverTiming } : {}),
+  });
   const schemaName = `${label}_${randomBytes(6).toString("hex")}`;
   await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
   const scopedUrl = new URL(databaseUrl);
   scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
-  const client = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 8 });
+  const client = createDatabase({
+    connectionString: scopedUrl.toString(),
+    maxConnections: 8,
+    ...(driverTiming ? { log: driverTiming } : {}),
+  });
   const database = queryTiming ? client.withPlugin(queryTiming) : client;
   onPhase?.("fixture.migrations");
   await runMigrations(database);

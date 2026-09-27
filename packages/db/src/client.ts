@@ -1,4 +1,4 @@
-import { Kysely, PostgresDialect, sql } from "kysely";
+import { Kysely, type Logger, PostgresDialect, sql } from "kysely";
 import { Pool, type PoolConfig } from "pg";
 
 import { discoverMigrations, migrationSearchPath, resolveMigrationSchema } from "./migrator.js";
@@ -13,6 +13,7 @@ export interface DatabaseClientOptions {
   readonly statementTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
   readonly ssl?: PoolConfig["ssl"];
+  readonly log?: Logger;
 }
 
 /**
@@ -37,6 +38,7 @@ export function createDatabase(options: DatabaseClientOptions): Kysely<Database>
 
   return new Kysely<Database>({
     dialect: new PostgresDialect({ pool }),
+    ...(options.log ? { log: options.log } : {}),
   });
 }
 
