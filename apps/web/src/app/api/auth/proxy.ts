@@ -1,4 +1,5 @@
 import { isSupportedTimeZone, parseSession } from "../../../lib/diary";
+import { isValidNewPassword } from "../../../lib/password-recovery";
 import {
   clearedSessionCookie,
   isTrustedMutationRequest,
@@ -33,11 +34,9 @@ function parseCredentials(value: unknown, operation: "login" | "register"): Cred
     typeof candidate.email !== "string" ||
     candidate.email.length < 3 ||
     candidate.email.length > 254 ||
-    typeof candidate.password !== "string" ||
-    candidate.password.length < 12 ||
-    candidate.password.length > 128
+    !isValidNewPassword(candidate.password)
   ) {
-    throw new TypeError("Enter a valid email and a password of at least 12 characters.");
+    throw new TypeError("Enter a valid email and a password between 12 and 128 characters.");
   }
   if (
     operation === "register" &&

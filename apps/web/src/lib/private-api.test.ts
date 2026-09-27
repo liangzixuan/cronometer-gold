@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { proxyPasswordRecoveryConfirm } from "../app/api/auth/password-recovery/proxy";
 import { proxyCredentials } from "../app/api/auth/proxy";
 import {
   authenticatedFetch,
@@ -240,4 +241,120 @@ describe("private web API boundary", () => {
     expect(browserBody).not.toContain(token);
     expect(browserBody).not.toContain("accessToken");
   });
+});
+
+describe("reset-admissible account passwords", () => {
+  function accountRequest(path: string, body: unknown) {
+    return new Request(`https://app.example.test/api/auth/${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "https://app.example.test",
+        "sec-fetch-site": "same-origin",
+      },
+      body: JSON.stringify(body),
+    });
+  }
+
+  const passwords = [
+    { name: "65 astral characters", value: "\u{1f642}".repeat(65) },
+    { name: "128 astral characters at the byte limit", value: "\u{1f642}".repeat(128) },
+    {
+      name: "mixed BMP and astral characters",
+      value: `${"x".repeat(64)}${"\u{1f642}".repeat(64)}`,
+    },
+    { name: "spaces and decomposed Unicode", value: "  e\u0301 secret \u{1f642} phrase  " },
+  ];
+
+  for (const operation of ["login", "register"] as const) {
+    it.each(passwords)(
+      `forwards $name unchanged after reset confirmation through ${operation}`,
+      async ({ value }) => {
+        vi.stubEnv("API_INTERNAL_URL", "http://127.0.0.1:4000");
+        const upstream: Array<{ path: string; body: Record<string, unknown> }> = [];
+        const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+          const path = url.pathname;
+          upstream.push({ path, body: JSON.parse(String(init?.body)) as Record<string, unknown> });
+          if (path === "/v1/auth/password-recovery/confirm") {
+            return Response.json({ data: { passwordReset: true } });
+          }
+          return Response.json({
+            data: {
+              accessToken: token,
+              expiresAt,
+              user: {
+                id: "96aac405-c107-4776-923e-a40ca5014975",
+                email: "ada@example.test",
+                emailVerified: true,
+              },
+              profile: profile(),
+            },
+          });
+        });
+        vi.stubGlobal("fetch", fetcher);
+        const recoveryToken = `${"r".repeat(42)}A`;
+        const reset = await proxyPasswordRecoveryConfirm(
+          accountRequest("password-recovery/confirm", { token: recoveryToken, newPassword: value }),
+        );
+        expect(reset.status).toBe(200);
+        await expect(reset.json()).resolves.toEqual({ data: { passwordReset: true } });
+
+        const response = await proxyCredentials(
+          accountRequest(operation, {
+            email: " \uff41\uff44\uff41@example.test ",
+            password: value,
+            ...(operation === "register"
+              ? { timeZone: "America/Chicago", displayName: " \uff21\uff44\uff41 " }
+              : {}),
+          }),
+          operation,
+        );
+        expect(response.status).toBe(operation === "register" ? 201 : 200);
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(upstream).toEqual([
+          {
+            path: "/v1/auth/password-recovery/confirm",
+            body: { token: recoveryToken, newPassword: value },
+          },
+          {
+            path: `/v1/auth/${operation}`,
+            body: {
+              email: "ada@example.test",
+              password: value,
+              ...(operation === "register"
+                ? { timeZone: "America/Chicago", displayName: "Ada" }
+                : {}),
+            },
+          },
+        ]);
+        const browserBody = JSON.stringify(await response.json());
+        expect(browserBody).not.toContain(value);
+        expect(browserBody).not.toContain(token);
+        expect(browserBody).not.toContain("accessToken");
+        expect(response.headers.get("set-cookie")).toContain(token);
+        expect(response.headers.get("cache-control")).toContain("no-store");
+      },
+    );
+
+    it.each([
+      { name: "11 astral characters", value: "\u{1f642}".repeat(11) },
+      { name: "129 ASCII characters", value: "a".repeat(129) },
+      { name: "a null password", value: null },
+      { name: "a numeric password", value: 123456789012 },
+    ])(`rejects $name before forwarding ${operation}`, async ({ value }) => {
+      const fetcher = vi.fn();
+      vi.stubGlobal("fetch", fetcher);
+      const response = await proxyCredentials(
+        accountRequest(operation, {
+          email: "ada@example.test",
+          password: value,
+          ...(operation === "register" ? { timeZone: "America/Chicago" } : {}),
+        }),
+        operation,
+      );
+      expect(response.status).toBe(400);
+      expect(fetcher).not.toHaveBeenCalled();
+      if (typeof value === "string") expect(await response.text()).not.toContain(value);
+    });
+  }
 });

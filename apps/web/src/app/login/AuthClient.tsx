@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { parseSession } from "../../lib/diary";
+import { isValidNewPassword } from "../../lib/password-recovery";
 
 type Mode = "login" | "register";
 
@@ -32,6 +33,8 @@ export function AuthClient() {
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordError, setPasswordError] = useState(false);
+  const passwordInput = useRef<HTMLInputElement>(null);
   const [displayName, setDisplayName] = useState("");
   const [timeZone, setTimeZone] = useState(() => {
     try {
@@ -46,6 +49,14 @@ export function AuthClient() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!isValidNewPassword(password)) {
+      setPasswordError(true);
+      setError(true);
+      setMessage("Use between 12 and 128 characters for your password.");
+      passwordInput.current?.focus();
+      return;
+    }
+    setPasswordError(false);
     setBusy(true);
     setError(false);
     setMessage(mode === "login" ? "Signing in…" : "Creating your account…");
@@ -93,6 +104,7 @@ export function AuthClient() {
   function switchMode(next: Mode) {
     if (busy) return;
     setMode(next);
+    setPasswordError(false);
     setError(false);
     setMessage(
       next === "login"
@@ -138,11 +150,14 @@ export function AuthClient() {
         />
         <label htmlFor="account-password">Password</label>
         <input
+          aria-describedby={passwordError ? "account-status" : undefined}
+          aria-invalid={passwordError ? true : undefined}
           autoComplete={mode === "login" ? "current-password" : "new-password"}
           id="account-password"
-          maxLength={128}
+          maxLength={256}
           minLength={12}
           onChange={(event) => setPassword(event.target.value)}
+          ref={passwordInput}
           required
           type="password"
           value={password}
@@ -184,7 +199,11 @@ export function AuthClient() {
           {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
         </button>
       </form>
-      <p className={error ? "authStatus authStatus--error" : "authStatus"} role="status">
+      <p
+        className={error ? "authStatus authStatus--error" : "authStatus"}
+        id="account-status"
+        role="status"
+      >
         {message}
       </p>
       <p className="privacyCopy">

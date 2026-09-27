@@ -42,6 +42,17 @@ The three generated nutrient assets and their provenance are in
 `apps/web/public/images/nutrients/README.md`; font provenance is in
 `apps/web/public/fonts/`. No new package or remote asset service is required.
 
+## Account passwords
+
+Login, account creation and password reset use the same limits: 12–128 Unicode
+code points and at most 512 UTF-8 bytes. The password field must accommodate
+every accepted value. Preserve passwords exactly, including spaces and combining
+characters; do not trim, normalize or truncate them.
+
+Reject an invalid password before submitting the account request, explain the
+length requirement and focus the field. Keep the entered value available for
+correction. Existing email, origin, session-cookie and response checks still apply.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the
