@@ -1120,6 +1120,10 @@ describe("actual web hydration Add amount presets", () => {
     await hooks.settle();
     expect(field("Milliliters").props.value).toBe("250");
     await submit("Add entry");
+    expect(writes).toHaveLength(0);
+    expect(text()).toContain("Choose the earlier or later occurrence");
+    await click("Add hydration Earlier occurrence · UTC−05:00");
+    await submit("Add entry");
     expect(writes).toHaveLength(1);
     expect(JSON.parse(String(writes[0]?.body))).toEqual({
       amountMilliliters: 250,
@@ -1728,5 +1732,317 @@ describe("Hydration recovered session preserves existing work boundaries", () =>
     expect(router.replace).not.toHaveBeenCalled();
     expect(text()).toContain("owner@example.test");
     expect(text()).not.toContain("Retry session");
+  });
+});
+
+function hydrationAddOccurrence(side: "Earlier" | "Later", offset: string) {
+  return `Add hydration ${side} occurrence · ${offset}`;
+}
+
+describe("actual Hydration Add repeated-minute selection", () => {
+  it.each([
+    ["America/Chicago", "2026-11-01", "01:30", "Earlier", "UTC−05:00", "2026-11-01T06:30:00.000Z"],
+    ["America/Chicago", "2026-11-01", "01:30", "Later", "UTC−06:00", "2026-11-01T07:30:00.000Z"],
+    [
+      "Australia/Lord_Howe",
+      "2026-04-05",
+      "01:45",
+      "Earlier",
+      "UTC+11:00",
+      "2026-04-04T14:45:00.000Z",
+    ],
+    [
+      "Australia/Lord_Howe",
+      "2026-04-05",
+      "01:45",
+      "Later",
+      "UTC+10:30",
+      "2026-04-04T15:15:00.000Z",
+    ],
+  ] as const)(
+    "submits the %s %s %s %s occurrence",
+    async (zone, date, time, side, offset, instant) => {
+      const writes: RequestInit[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(owner, zone);
+          if (init?.method === "POST") {
+            writes.push(init);
+            return Response.json({ error: "Keep exact retry." }, { status: 503 });
+          }
+          return day([], date, zone);
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: date }));
+      await hooks.settle();
+      await change("Local time", time);
+      await click("250 mL");
+      await submit("Add entry");
+      expect(writes).toHaveLength(0);
+      expect(text()).toContain("Choose the earlier or later occurrence");
+      await click(hydrationAddOccurrence(side, offset));
+      expect(button(hydrationAddOccurrence(side, offset)).props["aria-pressed"]).toBe(true);
+      expect(text()).toContain("minute precision");
+      await click("500 mL");
+      expect(button(hydrationAddOccurrence(side, offset)).props["aria-pressed"]).toBe(true);
+      await submit("Add entry");
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0]?.body))).toEqual({
+        amountMilliliters: 500,
+        occurredAt: instant,
+      });
+      expect(new Headers(writes[0]?.headers).get("x-expected-profile-time-zone")).toBe(zone);
+    },
+  );
+
+  it.each([
+    ["Earlier", "UTC−05:00", "2026-11-01T06:30:00.000Z"],
+    ["Later", "UTC−06:00", "2026-11-01T07:30:00.000Z"],
+  ] as const)(
+    "lets explicit %s selection supersede the precise captured default",
+    async (side, offset, instant) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+      const writes: RequestInit[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(owner, "America/Chicago");
+          if (init?.method === "POST") {
+            writes.push(init);
+            return Response.json({}, { status: 503 });
+          }
+          return day([], original.localDate, "America/Chicago");
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      await click("250 mL");
+      await click(hydrationAddOccurrence(side, offset));
+      await submit("Add entry");
+      expect(JSON.parse(String(writes[0]?.body))).toEqual({
+        amountMilliliters: 250,
+        occurredAt: instant,
+      });
+    },
+  );
+
+  it.each([
+    ["2026-03-08", "02:30", "does not exist"],
+    ["2026-11-01", "25:00", "valid hydration date"],
+  ])("rejects %s %s without writing or offering occurrence buttons", async (date, time, error) => {
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json({}, { status: 503 });
+        }
+        return day([], date, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: date }));
+    await hooks.settle();
+    await change("Local time", time);
+    await click("250 mL");
+    await submit("Add entry");
+    expect(writes).toHaveLength(0);
+    expect(text()).toContain(error);
+    expect(
+      elements().some((node) => String(node.props["aria-label"]).startsWith("Add hydration ")),
+    ).toBe(false);
+  });
+
+  it("invalidates retained occurrence and Add callbacks synchronously on time and selection changes", async () => {
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json({}, { status: 503 });
+        }
+        return day([], original.localDate, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "01:30");
+    await click("250 mL");
+    const oldEarlier = button(hydrationAddOccurrence("Earlier", "UTC−05:00"));
+    const oldForm = addForm();
+    invoke(button(hydrationAddOccurrence("Later", "UTC−06:00")), "onClick");
+    invoke(oldEarlier, "onClick");
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes).toHaveLength(0);
+    expect(button(hydrationAddOccurrence("Later", "UTC−06:00")).props["aria-pressed"]).toBe(true);
+    const selected = button(hydrationAddOccurrence("Later", "UTC−06:00"));
+    const selectedForm = addForm();
+    invoke(field("Local time"), "onChange", { target: { value: "01:31" } });
+    invoke(selected, "onClick");
+    invoke(selectedForm, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes).toHaveLength(0);
+    expect(button(hydrationAddOccurrence("Later", "UTC−06:00")).props["aria-pressed"]).toBe(false);
+    await submit("Add entry");
+    expect(writes).toHaveLength(0);
+    expect(text()).toContain("Choose the earlier or later occurrence");
+  });
+
+  it.each(["date", "route", "effect replay", "logout", "owner drift", "unmount"] as const)(
+    "retires occurrence choices and callbacks after %s",
+    async (transition) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+      let initialDate = original.localDate;
+      let drift = false;
+      const writes: RequestInit[] = [];
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (url === "/api/auth/logout") return new Response(null, { status: 204 });
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json({}, { status: 503 });
+        }
+        if (drift) return Response.json({ code: "HYDRATION_OWNER_CHANGED" }, { status: 409 });
+        const requested = new URL(url, "https://app.example.test").searchParams.get("date") ?? "";
+        return day([], requested, "America/Chicago");
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => HydrationClient({ initialDate }));
+      await hooks.settle();
+      await change("Local time", "01:30");
+      await click("250 mL");
+      await click(hydrationAddOccurrence("Later", "UTC−06:00"));
+      const oldChoice = button(hydrationAddOccurrence("Earlier", "UTC−05:00"));
+      const oldForm = addForm();
+      if (transition === "date" || transition === "owner drift") {
+        drift = transition === "owner drift";
+        invoke(field("Local date"), "onChange", { target: { value: "2026-11-02" } });
+      } else if (transition === "route") {
+        initialDate = "2026-11-02";
+        hooks.renderWithoutEffects();
+      } else if (transition === "effect replay") hooks.replayEffects();
+      else if (transition === "logout") await click("Sign out");
+      else hooks.unmount();
+      invoke(oldChoice, "onClick");
+      invoke(oldForm, "onSubmit", { preventDefault() {} });
+      if (transition === "route") hooks.render();
+      await hooks.settle();
+      expect(writes).toHaveLength(0);
+      expect(hooks.afterClose()).toBe(0);
+      if (transition === "logout" || transition === "owner drift") {
+        expect(router.replace).toHaveBeenCalledWith("/login");
+      } else if (transition !== "unmount") {
+        if (transition === "date") await change("Local date", original.localDate);
+        if (transition === "route") {
+          initialDate = original.localDate;
+          hooks.render();
+          await hooks.settle();
+        }
+        await change("Local time", "01:30");
+        await click("250 mL");
+        invoke(oldChoice, "onClick");
+        await hooks.settle();
+        expect(button(hydrationAddOccurrence("Earlier", "UTC−05:00")).props["aria-pressed"]).toBe(
+          false,
+        );
+        expect(button(hydrationAddOccurrence("Later", "UTC−06:00")).props["aria-pressed"]).toBe(
+          false,
+        );
+        await submit("Add entry");
+        expect(writes).toHaveLength(0);
+      }
+    },
+  );
+
+  it("retires a selected occurrence when a rejected write reloads a new profile zone", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T12:00:00.000Z"));
+    let zone = "America/Chicago";
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, zone);
+        if (init?.method === "POST") {
+          writes.push(init);
+          if (writes.length === 1) {
+            zone = "America/New_York";
+            return Response.json({ code: "HYDRATION_TIME_ZONE_CHANGED" }, { status: 409 });
+          }
+          return Response.json({}, { status: 503 });
+        }
+        return day([], original.localDate, zone);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "01:30");
+    await click("250 mL");
+    await click(hydrationAddOccurrence("Later", "UTC−06:00"));
+    const oldChoice = button(hydrationAddOccurrence("Earlier", "UTC−05:00"));
+    await submit("Add entry");
+    await click("Reload and review entries");
+    await change("Local time", "01:30");
+    invoke(oldChoice, "onClick");
+    await hooks.settle();
+    expect(button(hydrationAddOccurrence("Earlier", "UTC−04:00")).props["aria-pressed"]).toBe(
+      false,
+    );
+    expect(button(hydrationAddOccurrence("Later", "UTC−05:00")).props["aria-pressed"]).toBe(false);
+    await submit("Add entry");
+    expect(writes).toHaveLength(1);
+    await click(hydrationAddOccurrence("Later", "UTC−05:00"));
+    await submit("Add entry");
+    expect(JSON.parse(String(writes[1]?.body)).occurredAt).toBe("2026-11-01T06:30:00.000Z");
+    expect(new Headers(writes[1]?.headers).get("x-expected-profile-time-zone")).toBe(zone);
+  });
+
+  it("keeps selected occurrence bytes and key through in-flight and uncertain retries", async () => {
+    const response = deferred<Response>();
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "POST") {
+          writes.push(init);
+          return writes.length === 1 ? response.promise : Response.json({}, { status: 503 });
+        }
+        return day([], original.localDate, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "01:30");
+    await click("250 mL");
+    await click(hydrationAddOccurrence("Later", "UTC−06:00"));
+    const oldChoice = button(hydrationAddOccurrence("Earlier", "UTC−05:00"));
+    const oldForm = addForm();
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    invoke(oldChoice, "onClick");
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(button(hydrationAddOccurrence("Earlier", "UTC−05:00")).props.disabled).toBe(true);
+    response.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    invoke(oldChoice, "onClick");
+    await click("Retry saved change");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(new Headers(writes[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes[0]?.headers).get("idempotency-key"),
+    );
+    expect(JSON.parse(String(writes[1]?.body))).toEqual({
+      amountMilliliters: 250,
+      occurredAt: "2026-11-01T07:30:00.000Z",
+    });
   });
 });

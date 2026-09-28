@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isLocalDate,
   localDateInTimeZone,
-  localDateTimeToInstant,
   localTimeInTimeZone,
   parseSession,
   type SessionSummary,
@@ -96,12 +95,38 @@ function retainedDefaultOccurredAt(
   return captured.toISOString();
 }
 
+function hydrationAddTimeOccurrence(
+  localDate: string,
+  localTime: string,
+  timeZone: string,
+  selectedOccurredAt?: string | null,
+): string {
+  const resolution = resolveHydrationLocalMinute(localDate, localTime, timeZone);
+  if (resolution.kind === "invalid") {
+    throw new RangeError("Enter a valid hydration date, 24-hour time, and profile time zone.");
+  }
+  if (resolution.kind === "gap") {
+    throw new RangeError("That local time does not exist in this time zone. Choose another time.");
+  }
+  const candidate =
+    selectedOccurredAt == null && resolution.kind === "unique"
+      ? resolution.candidates[0]
+      : resolution.candidates.find((item) => item.occurredAt === selectedOccurredAt);
+  if (!candidate) {
+    throw new RangeError(
+      "This time occurs more than once or its choice is no longer current. Choose the earlier or later occurrence.",
+    );
+  }
+  return candidate.occurredAt;
+}
+
 export function prepareHydrationCreate(
   amountDraft: string,
   selectedLocalDate: string,
   localTime: string,
   loadedDay: Pick<HydrationDay, "localDate" | "timeZone">,
   untouchedDefaultOccurredAt?: string,
+  selectedOccurredAt?: string | null,
 ): {
   readonly body: { readonly amountMilliliters: number; readonly occurredAt: string };
   readonly expectedTimeZone: string;
@@ -110,7 +135,7 @@ export function prepareHydrationCreate(
     throw new TypeError("Load the selected hydration day before adding an entry.");
   }
   const retainedOccurredAt = retainedDefaultOccurredAt(
-    untouchedDefaultOccurredAt,
+    selectedOccurredAt == null ? untouchedDefaultOccurredAt : undefined,
     selectedLocalDate,
     localTime,
     loadedDay.timeZone,
@@ -120,7 +145,12 @@ export function prepareHydrationCreate(
       amountMilliliters: hydrationAmountFromDraft(amountDraft),
       occurredAt:
         retainedOccurredAt ??
-        localDateTimeToInstant(selectedLocalDate, localTime, loadedDay.timeZone),
+        hydrationAddTimeOccurrence(
+          selectedLocalDate,
+          localTime,
+          loadedDay.timeZone,
+          selectedOccurredAt,
+        ),
     },
     expectedTimeZone: loadedDay.timeZone,
   };
@@ -147,6 +177,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const [draftVersion, setDraftVersion] = useState(0);
   const draftVersionRef = useRef(draftVersion);
   const [localTime, setLocalTime] = useState("");
+  const [selectedAddOccurredAt, setSelectedAddOccurredAt] = useState<string | null>(null);
   const [edit, setEdit] = useState<HydrationEdit | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, setPending] = useState<HydrationWriteOperation | null>(null);
@@ -175,6 +206,10 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
   const untouchedDefaultOccurredAt = useRef<string | null>(null);
+  const addTimeResolution = useMemo(
+    () => resolveHydrationLocalMinute(date, localTime, day?.timeZone ?? ""),
+    [date, localTime, day?.timeZone],
+  );
   const timeResolution = useMemo(
     () =>
       edit?.time.enabled
@@ -204,6 +239,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     setAmount("");
     setLocalTime("");
     setDate("");
+    setSelectedAddOccurredAt(null);
     dateRef.current = "";
     loadedTimeZone.current = null;
     untouchedDefaultOccurredAt.current = null;
@@ -270,6 +306,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone));
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
+          setSelectedAddOccurredAt(null);
           setEdit(null);
         }
         setDay(next);
@@ -311,6 +348,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     setMovedToDate(null);
     setAmount("");
     setLocalTime("");
+    setSelectedAddOccurredAt(null);
     loadedTimeZone.current = null;
     untouchedDefaultOccurredAt.current = null;
     setMessage("Opening your private hydration log…");
@@ -441,6 +479,21 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     const version = ++draftVersionRef.current;
     setDraftVersion(version);
     setLocalTime(next);
+    setSelectedAddOccurredAt(null);
+  }
+
+  function selectAddOccurrence(occurredAt: string) {
+    if (
+      !canEditAddDraft() ||
+      addTimeResolution.kind !== "ambiguous" ||
+      !addTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt) ||
+      selectedAddOccurredAt === occurredAt
+    )
+      return;
+    untouchedDefaultOccurredAt.current = null;
+    const version = ++draftVersionRef.current;
+    setDraftVersion(version);
+    setSelectedAddOccurredAt(occurredAt);
   }
 
   function selectDate(nextDate: string) {
@@ -463,6 +516,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     setMovedToDate(null);
     setState("loading");
     setDate(nextDate);
+    setSelectedAddOccurredAt(null);
   }
 
   async function retryDayView() {
@@ -628,6 +682,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         localTime,
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
+        selectedAddOccurredAt,
       );
       await mutate(
         newOperation({
@@ -940,6 +995,38 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                   value={localTime}
                 />
               </label>
+              {addTimeResolution.kind === "ambiguous" ? (
+                <fieldset className="entryActions" disabled={createDisabled}>
+                  <legend>Repeated Add time</legend>
+                  <small className="fieldHelp" id="hydration-add-occurrence-help">
+                    This local minute occurs more than once. After changing the date or time, choose
+                    an occurrence. An untouched captured time keeps its exact instant. Choosing an
+                    occurrence saves at minute precision (seconds become zero).
+                  </small>
+                  {addTimeResolution.candidates.map((candidate, index) => {
+                    const label =
+                      index === 0
+                        ? "Earlier occurrence"
+                        : index === addTimeResolution.candidates.length - 1
+                          ? "Later occurrence"
+                          : `Occurrence ${index + 1}`;
+                    return (
+                      <button
+                        aria-label={`Add hydration ${label} · ${candidate.utcOffsetLabel}`}
+                        aria-describedby="hydration-add-occurrence-help"
+                        aria-pressed={selectedAddOccurredAt === candidate.occurredAt}
+                        className="buttonQuiet"
+                        disabled={createDisabled}
+                        key={candidate.occurredAt}
+                        onClick={() => selectAddOccurrence(candidate.occurredAt)}
+                        type="button"
+                      >
+                        {label} · {candidate.utcOffsetLabel}
+                      </button>
+                    );
+                  })}
+                </fieldset>
+              ) : null}
               <button className="buttonPrimary" disabled={createDisabled} type="submit">
                 {busy?.startsWith("POST:") ? "Adding…" : "Add entry"}
               </button>
