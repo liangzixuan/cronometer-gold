@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { performance } from "node:perf_hooks";
 
 import {
   type CatalogueReconciliationDocument,
@@ -94,6 +95,15 @@ interface Fixture {
   readonly root: string;
 }
 
+type FixturePhase =
+  | "fixture-setup"
+  | "proposal-inspection"
+  | "evidence-binding"
+  | "verified-export"
+  | "final-assertions"
+  | "cleanup-start"
+  | "cleanup";
+
 describe("synthetic full-FDC CSV integration fixture", () => {
   it("initializes an absent fixture parent and preserves shared files on reuse and cleanup", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "fdc-fixture-parent-"));
@@ -122,24 +132,32 @@ describe("synthetic full-FDC CSV integration fixture", () => {
   });
 
   it("prepares the verified 251-record export without PostgreSQL or network access", async () => {
+    // Cumulative monotonic endpoints include logging; adjacent differences isolate each phase.
+    const started = performance.now();
+    const mark = (phase: FixturePhase) => {
+      console.info(JSON.stringify({ phase, elapsedMs: performance.now() - started }));
+    };
     const cleanupPaths: string[] = [];
     const deniedFetch = vi.fn(() =>
       Promise.reject(new Error("Synthetic fixture forbids network fetch")),
     );
     try {
       vi.stubGlobal("fetch", deniedFetch);
-      const fixture = await createFixture(randomBytes(8).toString("hex"), cleanupPaths);
+      const fixture = await createFixture(randomBytes(8).toString("hex"), cleanupPaths, { mark });
       expect(fixture.manifest.releaseClass).toBe("fixture-nonrelease");
       const bytes = await readFile(join(WORKSPACE_ROOT, fixture.recordsRelative));
       expect(bytes.byteLength).toBe(fixture.recordsBytes);
       expect(hash(bytes)).toBe(fixture.recordsSha256);
       expect(bytes.toString("utf8").trimEnd().split("\n")).toHaveLength(RECORD_COUNT + 2);
       expect(deniedFetch).not.toHaveBeenCalled();
+      mark("final-assertions");
     } finally {
+      mark("cleanup-start");
       vi.unstubAllGlobals();
       for (const path of cleanupPaths.reverse()) {
         await rm(path, { force: true, recursive: true });
       }
+      mark("cleanup");
     }
   });
 });
@@ -1469,6 +1487,7 @@ async function createFixture(
     readonly recordCount?: number;
     readonly unmappedNutrient?: boolean;
     readonly syntheticLiveReview?: boolean;
+    readonly mark?: (phase: FixturePhase) => void;
   } = {},
 ): Promise<Fixture> {
   const recordCount = options.recordCount ?? RECORD_COUNT;
@@ -1577,6 +1596,7 @@ async function createFixture(
     "--extract-dir",
     `${rootRelative}/extract-${label}`,
   ];
+  options.mark?.("fixture-setup");
   const proposal = capture({ INGEST_PARSER_BUILD_SHA256: PARSER_BUILD_SHA256 });
   expect(await runCommand(inspectArgs("proposal"), proposal.io)).toBe(1);
   expect(proposal.errors).toHaveLength(1);
@@ -1586,6 +1606,7 @@ async function createFixture(
   expect(proposal.output).toHaveLength(1);
   const baseline = (JSON.parse(proposal.output[0] ?? "") as InspectionOutput).baseline;
   expect(baseline).toBeDefined();
+  options.mark?.("proposal-inspection");
   manifest = {
     ...manifest,
     validation: {
@@ -1605,6 +1626,7 @@ async function createFixture(
   const manifestSha256 = hash(await readFile(manifestPath));
   const evidencePath = join(root, "release-evidence.json");
   await writeCanonicalReleaseEvidence(evidencePath, bound.bundle);
+  options.mark?.("evidence-binding");
   const recordsRelative = `.local-data/evidence/fdc-csv-records/adr0101-${suffix}.ndjson`;
   const exported = capture({ INGEST_PARSER_BUILD_SHA256: PARSER_BUILD_SHA256 });
   expect(
@@ -1614,6 +1636,7 @@ async function createFixture(
   const output = oneOutput<InspectionOutput>(exported);
   if (!output.recordsExport)
     throw new Error("Synthetic fixture did not produce a normalized export");
+  options.mark?.("verified-export");
   return {
     manifest,
     manifestRelative,
