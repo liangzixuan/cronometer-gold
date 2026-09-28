@@ -647,3 +647,51 @@ describe("actual pasted ingredient review lifecycle", () => {
     expect(field("Pasted ingredient lines").props.value).toBe("");
   });
 });
+
+describe("passive selected serving metadata", () => {
+  it.each([
+    ["150.000000", "150"],
+    ["123456789012.123450", "123456789012.12345"],
+    ["0.000001", "0.000001"],
+  ])(
+    "formats %s while keeping the reviewed quantity and selected option raw",
+    async (raw, shown) => {
+      const selected = { ...food, defaultServing: { ...food.defaultServing, gramWeight: raw } };
+      const fetcher = readyFetcher();
+      fetcher.mockImplementation(async (url) =>
+        url === "/api/auth/me"
+          ? session()
+          : Response.json({ data: [selected], page: { nextCursor: null } }),
+      );
+      await mountReview();
+      await change("Food search for line 1", "oats");
+      await click("Search foods");
+      await click("Select Rolled oats");
+      await change("Quantity type for line 1", "serving");
+      await change("Quantity for line 1", "2.500000");
+      expect(text()).toContain(`One selected serving: scoop · ${shown} g`);
+      expect(field("Quantity type for line 1").props.value).toBe("serving");
+      expect(
+        elements(field("Quantity type for line 1"))
+          .filter((node) => node.type === "option")
+          .map((node) => [node.props.value, text(node)]),
+      ).toEqual([
+        ["grams", "Grams"],
+        ["serving", "Reviewed serving"],
+      ]);
+      expect(field("Quantity for line 1").props.value).toBe("2.500000");
+      await click("Confirm line 1");
+      expect(text()).toContain("Confirmed: Rolled oats · version 202 · 2.500000 × scoop");
+      await click("Add reviewed ingredients");
+      expect(required(onConfirm.mock.calls[0])[0][0]).toMatchObject({
+        foodVersionId: "202",
+        portion: { kind: "serving", servingId: "303", servingLabel: "scoop", amount: "2.500000" },
+      });
+      expect(
+        fetcher.mock.calls.every(
+          ([, init]) => (init?.method ?? "GET") === "GET" && init?.body === undefined,
+        ),
+      ).toBe(true);
+    },
+  );
+});

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { isLocalDate, parseSession } from "../../lib/diary";
+import { formatExactAmount } from "../../lib/nutrition-display";
 import { installPrivateDataForOwner, PrivateOwnerFenceError } from "../../lib/private-owner";
 import { type CustomFood, parseCustomFoodList } from "../../lib/retention";
 
@@ -336,7 +337,7 @@ export function MyFoodIngredientPicker(props: MyFoodIngredientPickerProps) {
               </p>
               <p className="sourceLine">
                 {food.currentVersion.serving
-                  ? `${food.currentVersion.serving.label} · ${food.currentVersion.serving.grams} g`
+                  ? `${food.currentVersion.serving.label} · ${formatExactAmount(food.currentVersion.serving.grams, "g")}`
                   : "No saved serving; use grams."}
               </p>
             </div>

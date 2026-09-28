@@ -26,6 +26,7 @@ import {
   normalizeSearchText,
   parseFoodSearchPage,
 } from "../../lib/food-search";
+import { formatExactAmount } from "../../lib/nutrition-display";
 import {
   isRecipePositiveDecimal,
   mergeRecipePage,
@@ -1797,7 +1798,8 @@ export function RecipesClient() {
                   >
                     <strong>{recipe.name}</strong>
                     <small>
-                      v{recipe.versionNumber} · {recipe.finalYieldGrams} g yield
+                      v{recipe.versionNumber} · {formatExactAmount(recipe.finalYieldGrams, "g")}{" "}
+                      yield
                       {recipe.warningCount ? ` · ${recipe.warningCount} warnings` : ""}
                     </small>
                   </button>
@@ -2095,7 +2097,7 @@ export function RecipesClient() {
                             <strong>{food.name}</strong>
                             <p className="sourceLine">
                               {food.defaultServing?.gramWeight
-                                ? `${food.defaultServing.label} · ${food.defaultServing.gramWeight} g`
+                                ? `${food.defaultServing.label} · ${formatExactAmount(food.defaultServing.gramWeight, "g")}`
                                 : "No reviewed gram-resolved serving; explicit grams are available"}
                             </p>
                             <p className="sourceLine">
@@ -2196,7 +2198,8 @@ export function RecipesClient() {
                           <div>
                             <strong>{recipe.name}</strong>
                             <p className="sourceLine">
-                              Version {recipe.versionNumber} · {recipe.finalYieldGrams} g yield
+                              Version {recipe.versionNumber} ·{" "}
+                              {formatExactAmount(recipe.finalYieldGrams, "g")} yield
                             </p>
                           </div>
                           <button

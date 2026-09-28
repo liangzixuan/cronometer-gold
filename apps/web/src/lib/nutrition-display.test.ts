@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatNutrientAmount } from "./nutrition-display";
+import { formatExactAmount, formatNutrientAmount } from "./nutrition-display";
 
 describe("compact nutrition amount presentation", () => {
   it("rounds exact calories to whole values and groups thousands without changing the source", () => {
@@ -43,5 +43,54 @@ describe("compact nutrition amount presentation", () => {
   it("rejects invalid display amounts rather than exposing NaN or Infinity", () => {
     for (const amount of ["", "NaN", "Infinity", "1e6", "-1", "1,000"])
       expect(() => formatNutrientAmount(amount, "kcal")).toThrow(TypeError);
+  });
+});
+
+describe("exact serving and yield amount presentation", () => {
+  it("removes only insignificant fractional zeros and keeps units", () => {
+    for (const [amount, unit, expected] of [
+      ["150.000000", "g", "150 g"],
+      ["40.125000", "g", "40.125 g"],
+      ["250.500000", "mL", "250.5 mL"],
+      ["0.000000", "g", "0 g"],
+      ["1000", "g", "1000 g"],
+      ["10.010100", "g", "10.0101 g"],
+    ] as const) {
+      expect(formatExactAmount(amount, unit)).toBe(expected);
+    }
+  });
+
+  it("preserves tiny values and every significant digit without changing the source", () => {
+    const amount = "9007199254740993.120000";
+    const tiny = `0.${"0".repeat(166)}100`;
+    expect(formatExactAmount(amount, "g")).toBe("9007199254740993.12 g");
+    expect(formatExactAmount("0.00000100", "g")).toBe("0.000001 g");
+    expect(formatExactAmount(tiny, "g")).toBe(`0.${"0".repeat(166)}1 g`);
+    expect(formatExactAmount("40.123456789012345678901000", "g")).toBe(
+      "40.123456789012345678901 g",
+    );
+    expect(amount).toBe("9007199254740993.120000");
+    expect(tiny).toBe(`0.${"0".repeat(166)}100`);
+  });
+
+  it("rejects values outside the response decimal grammar", () => {
+    expect(formatExactAmount).toBeTypeOf("function");
+    for (const amount of [
+      "",
+      "00",
+      "01.0",
+      " 1 ",
+      "1.",
+      ".5",
+      "+1",
+      "-0",
+      "-1",
+      "1e6",
+      "1,000",
+      "NaN",
+      "Infinity",
+    ]) {
+      expect(() => formatExactAmount(amount, "g")).toThrow(TypeError);
+    }
   });
 });

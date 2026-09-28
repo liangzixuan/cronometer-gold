@@ -8,6 +8,7 @@ import {
   type FoodSearchHit,
   parseFoodSearchPage,
 } from "../../lib/food-search";
+import { formatExactAmount } from "../../lib/nutrition-display";
 import {
   collectReviewedIngredients,
   hasReviewedGramServing,
@@ -542,10 +543,10 @@ export function PastedIngredientReview(props: PastedIngredientReviewProps) {
                       </option>
                     </select>
                   </label>
-                  {model.quantityKind === "serving" ? (
+                  {model.quantityKind === "serving" && model.food.defaultServing?.gramWeight ? (
                     <p className="sourceLine">
-                      One selected serving: {model.food.defaultServing?.label} ·{" "}
-                      {model.food.defaultServing?.gramWeight} g
+                      One selected serving: {model.food.defaultServing.label} ·{" "}
+                      {formatExactAmount(model.food.defaultServing.gramWeight, "g")}
                     </p>
                   ) : null}
                   <label className="formField">

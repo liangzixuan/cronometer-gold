@@ -774,3 +774,104 @@ it("changes only the explicit destination parameter that changed after successfu
   expect(authCount(fetcher)).toBe(2);
   expect(operationId).not.toHaveBeenCalled();
 });
+
+describe("passive food serving amounts", () => {
+  it.each([
+    ["150.000000", null, "150 g"],
+    ["123456789012.123450", null, "123456789012.12345 g"],
+    ["0.000001", null, "0.000001 g"],
+    [null, "250.500000", "250.5 mL"],
+    [null, "0.000001", "0.000001 mL"],
+  ])(
+    "shows exact readable search and barcode metadata for %s / %s",
+    async (grams, volume, shown) => {
+      const result = {
+        ...hit,
+        defaultServing: { ...hit.defaultServing, gramWeight: grams, milliliterVolume: volume },
+      };
+      const fetcher = vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?"))
+          return Response.json({ data: [result], page: { nextCursor: null } });
+        if (url.startsWith("/api/foods/barcodes/")) return Response.json({ data: result });
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await search();
+      expect(text(elements().find((node) => node.props.className === "servingCopy"))).toBe(
+        `1 slice · ${shown}`,
+      );
+      await change("quick-add-search-202-amount", "2.500000");
+      const kind = grams === null ? "grams" : "serving";
+      expect(field("quick-add-search-202-kind").props.value).toBe(kind);
+      expect(
+        elements(field("quick-add-search-202-kind"))
+          .filter((node) => node.type === "option")
+          .map((node) => [node.props.value, text(node)]),
+      ).toEqual(
+        grams === null
+          ? [["grams", "Grams"]]
+          : [
+              ["serving", "Default serving: 1 slice"],
+              ["grams", "Grams"],
+            ],
+      );
+      const action = `Add 2.500000 ${grams === null ? "g" : "default servings"} of Apple Pie`;
+      expect(button(action).props["aria-label"]).toBe(action);
+      await change("food-barcode", "012345678905");
+      const form = elements().find(
+        (node) => node.type === "form" && node.props.className === "barcodeForm",
+      );
+      if (!form) throw new Error("Missing barcode form");
+      invoke(form, "onSubmit", { preventDefault: vi.fn() });
+      await hooks.settle();
+      const barcode = elements().find((node) => node.props.className === "barcodeResult");
+      expect(text(barcode)).toContain(`1 slice · ${shown} · Data source: USDA FoodData Central`);
+      expect(field("quick-add-barcode-202-kind").props.value).toBe(kind);
+      expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+      expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+      expect(operationId).not.toHaveBeenCalled();
+      expect(result.defaultServing.gramWeight).toBe(grams);
+      expect(result.defaultServing.milliliterVolume).toBe(volume);
+    },
+  );
+
+  it("keeps raw quick-add controls and exact pending request bytes beside trimmed metadata", async () => {
+    let posts = 0;
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST") return ++posts === 1 ? failure("503") : savedMutation(init);
+      if (url.startsWith("/api/foods/search?"))
+        return Response.json({
+          data: [{ ...hit, defaultServing: { ...hit.defaultServing, gramWeight: "150.000000" } }],
+          page: { nextCursor: null },
+        });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("quick-add-search-202-amount", "2.500000");
+    invoke(button("Add 2.500000 default servings of Apple Pie"));
+    await hooks.settle();
+    expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+    invoke(button("Add 2.500000 default servings of Apple Pie"));
+    await hooks.settle();
+    const writes = pendingPosts(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(JSON.parse(String(writes[0]?.[1]?.body)).portion).toEqual({
+      kind: "serving",
+      servingId: "303",
+      amount: "2.5",
+    });
+    expect(writes[0]?.[0]).toBe(
+      "/api/diary/entries?date=2026-09-24&profileTimeZonePrecondition=v1",
+    );
+    expect(operationId).toHaveBeenCalledOnce();
+    expect(text()).toContain("1 slice · 150 g");
+  });
+});

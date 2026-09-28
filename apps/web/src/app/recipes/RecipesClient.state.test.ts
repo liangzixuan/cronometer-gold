@@ -4784,3 +4784,75 @@ describe("My foods ingredient transfer fences", () => {
     });
   });
 });
+
+describe("passive recipe serving and yield amounts", () => {
+  it.each([
+    ["150.000000", "150"],
+    ["123456789012.123450", "123456789012.12345"],
+    ["0.000001", "0.000001"],
+  ])("formats %s metadata without changing editor or retry quantities", async (raw, shown) => {
+    const saved = recipeWire();
+    saved.currentVersion.finalYield.grams = raw;
+    const selectedFood = { ...food, defaultServing: { ...food.defaultServing, gramWeight: raw } };
+    const fetcher = readyFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST")
+        return Response.json({ error: "Synthetic unavailable" }, { status: 503 });
+      if (url.startsWith("/api/recipes?")) {
+        const page = await collection().json();
+        page.data[0].currentVersion.finalYield.grams = raw;
+        return Response.json(page);
+      }
+      if (url === `/api/recipes/${recipeId}`) return Response.json({ data: { recipe: saved } });
+      if (url.startsWith("/api/foods/search?")) return ingredientSearchPage([selectedFood]);
+      return original(url, init);
+    });
+    await mountReady();
+    expect(text()).toContain(`v1 · ${shown} g yield`);
+    expect(text()).toContain(`Version 1 · ${shown} g yield`);
+    const pin = field("Pin 100 g of Saved recipe version 1");
+    expect(text(pin)).toBe("Add 100 g");
+    expect(pin.props["aria-label"]).toBe("Pin 100 g of Saved recipe version 1");
+    openSaved();
+    await hooks.settle();
+    expect(field("Final yield grams").props.value).toBe(raw);
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    expect(text(required(ingredientSearchRows()[0]))).toContain(`scoop · ${shown} g`);
+    await click("Add serving");
+    await change("Rolled oats quantity in scoop", "2.500000");
+    expect(field("Rolled oats quantity in scoop").props.value).toBe("2.500000");
+    expect(field("Final yield grams").props.value).toBe(raw);
+    save();
+    await hooks.settle();
+    save();
+    await hooks.settle();
+    const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(writes).toHaveLength(2);
+    expect(
+      writes.map(([url, init]) => ({
+        url,
+        method: init?.method,
+        headers: init?.headers,
+        body: init?.body,
+      })),
+    ).toEqual(
+      Array(2).fill({
+        url: writes[0]?.[0],
+        method: writes[0]?.[1]?.method,
+        headers: writes[0]?.[1]?.headers,
+        body: writes[0]?.[1]?.body,
+      }),
+    );
+    const body = JSON.parse(String(writes[0]?.[1]?.body));
+    expect(body.finalYield).toEqual({ grams: raw, source: "measured" });
+    expect(body.ingredients[1].portion).toEqual({
+      kind: "serving",
+      servingId: "303",
+      amount: "2.500000",
+    });
+    expect(field("Final yield grams").props.value).toBe(raw);
+    expect(field("Rolled oats quantity in scoop").props.value).toBe("2.500000");
+  });
+});

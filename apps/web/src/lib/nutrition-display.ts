@@ -1,5 +1,14 @@
 const decimal = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
 
+/** Exact display only: preserve every significant digit and the caller's source value. */
+export function formatExactAmount(amount: string, unit: string): string {
+  if (!decimal.test(amount)) throw new TypeError("An exact display amount was invalid.");
+  const decimalPoint = amount.indexOf(".");
+  if (decimalPoint === -1) return `${amount} ${unit}`;
+  const fraction = amount.slice(decimalPoint + 1).replace(/0+$/u, "");
+  return `${amount.slice(0, decimalPoint)}${fraction ? `.${fraction}` : ""} ${unit}`;
+}
+
 function formatter(maximumFractionDigits: number, lowerBound: boolean) {
   return new Intl.NumberFormat("en-US", {
     maximumFractionDigits,

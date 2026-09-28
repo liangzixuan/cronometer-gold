@@ -751,3 +751,35 @@ describe("My foods management navigation", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+describe("passive personal-food serving amounts", () => {
+  it.each([
+    ["150.000000", "150"],
+    ["123456789012.123450", "123456789012.12345"],
+    ["0.000001", "0.000001"],
+  ])(
+    "formats %s while forwarding the exact saved serving and action labels",
+    async (raw, shown) => {
+      const selected: CustomFood = {
+        ...personalFood,
+        currentVersion: {
+          ...personalFood.currentVersion,
+          serving: { ...required(personalFood.currentVersion.serving ?? undefined), grams: raw },
+        },
+      };
+      const fetcher = pickerFetcher();
+      fetcher.mockImplementation(async (url) =>
+        url === "/api/auth/me" ? session() : listResponse([selected]),
+      );
+      await ready();
+      expect(text()).toContain(`scoop · ${shown} g`);
+      const add = addButton(selected, "serving");
+      expect(add.props["aria-label"]).toBe("Add one scoop of Personal oats version 7");
+      expect(text(add)).toBe("Add serving");
+      invoke(add, "onClick");
+      expect(onAdd.mock.calls).toEqual([[selected, "serving"]]);
+      expect(onAdd.mock.calls[0]?.[0].currentVersion.serving?.grams).toBe(raw);
+      expect(selected.currentVersion.serving?.grams).toBe(raw);
+    },
+  );
+});

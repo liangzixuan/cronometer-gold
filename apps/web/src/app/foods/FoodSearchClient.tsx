@@ -44,6 +44,7 @@ import {
   parseFoodBarcodeResponse,
   parseFoodSearchPage,
 } from "../../lib/food-search";
+import { formatExactAmount } from "../../lib/nutrition-display";
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type BarcodeState = LoadState | "not-found";
@@ -59,9 +60,9 @@ function displayServing(food: FoodSearchHit): string {
   const serving = food.defaultServing;
   if (!serving) return "Serving information unavailable";
   const measurement = serving.gramWeight
-    ? `${serving.gramWeight} g`
+    ? formatExactAmount(serving.gramWeight, "g")
     : serving.milliliterVolume
-      ? `${serving.milliliterVolume} mL`
+      ? formatExactAmount(serving.milliliterVolume, "mL")
       : null;
   return measurement ? `${serving.label} · ${measurement}` : serving.label;
 }
