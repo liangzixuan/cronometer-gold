@@ -8,10 +8,12 @@ import {
   createOperationId,
   type DiaryGroup,
   defaultDiaryGroups,
+  defaultMealForHour,
   defaultMealForTime,
   diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
+  localTimeInTimeZone,
   type MealSlot,
   nutrientDisplay,
   parseDiaryMutation,
@@ -386,6 +388,7 @@ export function RecipesClient() {
   const foodSearchRequest = useRef<AbortController | null>(null);
   const foodSearchScope = useRef(0);
   const [mealSlot, setMealSlot] = useState<MealSlot>(() => defaultMealForTime());
+  const initialMealDefaultSet = useRef(false);
   const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
   const foodProfile = JSON.stringify([timeZone, diaryGroups]);
   const foodProfileRef = useRef(foodProfile);
@@ -904,10 +907,11 @@ export function RecipesClient() {
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Session verification failed.");
         const session = parseSession(await responseJson(response));
+        const now = new Date();
         const localDate =
           requestedDate && isLocalDate(requestedDate)
             ? requestedDate
-            : localDateInTimeZone(new Date(), session.profile.timeZone);
+            : localDateInTimeZone(now, session.profile.timeZone);
         if (
           !controller.signal.aborted &&
           !privateUiClosed.current &&
@@ -918,6 +922,14 @@ export function RecipesClient() {
             return;
           }
           ownerUserId.current = session.user.id;
+          if (!initialMealDefaultSet.current) {
+            initialMealDefaultSet.current = true;
+            setMealSlot(
+              defaultMealForHour(
+                Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
+              ),
+            );
+          }
           setFilterVerifiedScope(requestScope);
           setDiaryGroups(session.profile.diaryGroups);
           setDate(localDate);

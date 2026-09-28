@@ -2859,6 +2859,246 @@ function acceptedRecipeLog() {
   });
 }
 
+async function recipeSessionInZone(timeZone: string, id = owner) {
+  const value = await session(id).json();
+  value.data.profile.timeZone = timeZone;
+  value.data.profile.diaryGroups = defaultDiaryGroups.map((group) => ({
+    ...group,
+    label: `My ${group.mealSlot}`,
+  }));
+  return Response.json(value);
+}
+
+describe("actual initial recipe meal in the verified profile timezone", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["2026-09-28T15:59:00.000Z", 21, "breakfast", "2026-09-28"],
+    ["2026-09-28T16:00:00.000Z", 5, "lunch", "2026-09-28"],
+    ["2026-09-28T19:59:00.000Z", 5, "lunch", "2026-09-28"],
+    ["2026-09-28T20:00:00.000Z", 5, "dinner", "2026-09-28"],
+    ["2026-09-29T01:59:00.000Z", 5, "dinner", "2026-09-28"],
+    ["2026-09-29T02:00:00.000Z", 5, "snacks", "2026-09-28"],
+    ["2026-09-29T05:00:00.000Z", 21, "breakfast", "2026-09-29"],
+    ["2026-09-28T01:00:00.000Z", 1, "dinner", "2026-09-27"],
+  ] as const)(
+    "logs initial %s with browser hour %s as %s on profile date %s",
+    async (instant, browserHour, expectedMeal, expectedDate) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(instant));
+      vi.spyOn(Date.prototype, "getHours").mockReturnValue(browserHour);
+      navigation.query = "";
+      const fetcher = retryableLogFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) =>
+        url === "/api/auth/me" ? recipeSessionInZone("America/Chicago") : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      expect(field("Local diary date").props.value).toBe(expectedDate);
+      expect(field("Meal").props.value).toBe(expectedMeal);
+      expect(
+        elements(field("Meal")).find(
+          (node) => node.props.value === expectedMeal && node.type === "option",
+        ),
+      ).toMatchObject({ props: { children: `My ${expectedMeal}` } });
+      await click("Log recipe");
+      const [, init] = required(recipeLogPosts(fetcher)[0]);
+      expect(JSON.parse(String(init?.body))).toEqual({
+        recipeVersionId: versionId,
+        portion: { kind: "serving", amount: "1" },
+        mealSlot: expectedMeal,
+        occurredAt: instant,
+      });
+      expect(new Headers(init?.headers).get("x-expected-profile-time-zone")).toBe(
+        "America/Chicago",
+      );
+    },
+  );
+
+  it("keeps an explicit meal and exact pending request after clock and route-session refresh", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T01:00:00.000Z"));
+    vi.spyOn(Date.prototype, "getHours").mockReturnValue(1);
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    expect(field("Meal").props.value).toBe("dinner");
+    await change("Meal", "snacks");
+    await change("Amount", "1.250000");
+    await change(optionalTimeLabel, "07:30");
+    await click("Log recipe");
+    const [, first] = required(recipeLogPosts(fetcher)[0]);
+    vi.setSystemTime(new Date("2026-09-28T17:00:00.000Z"));
+    await click("Log recipe");
+    const [, second] = required(recipeLogPosts(fetcher)[1]);
+    expect(second?.body).toBe(first?.body);
+    expect(new Headers(second?.headers).get("idempotency-key")).toBe(
+      new Headers(first?.headers).get("idempotency-key"),
+    );
+    expect(field("Meal").props.value).toBe("snacks");
+    expect(field("Amount").props.value).toBe("1.250000");
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    const oldMeal = field("Meal");
+    const oldLog = button("Log recipe");
+    navigation.query = "date=2026-09-10";
+    hooks.renderWithoutEffects();
+    invoke(oldMeal, "onChange", { target: { value: "breakfast" } });
+    invoke(oldLog, "onClick");
+    hooks.render();
+    await hooks.settle();
+    expect(recipeLogPosts(fetcher)).toHaveLength(2);
+    expect(field("Meal").props.value).toBe("snacks");
+    expect(field("Amount").props.value).toBe("1.250000");
+    // The existing route behavior still selects the requested date and clears optional time.
+    expect(field("Local diary date").props.value).toBe("2026-09-10");
+    expect(field(optionalTimeLabel).props.value).toBe("");
+    await change("Local diary date", "2026-09-09");
+    await change(optionalTimeLabel, "07:30");
+    await click("Log recipe");
+    const [, third] = required(recipeLogPosts(fetcher)[2]);
+    expect(third?.body).toBe(first?.body);
+    expect(new Headers(third?.headers).get("idempotency-key")).toBe(
+      new Headers(first?.headers).get("idempotency-key"),
+    );
+  });
+
+  it.each(["route", "effect replay"] as const)(
+    "does not consume the initial default from an aborted %s session",
+    async (transition) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-28T01:00:00.000Z"));
+      vi.spyOn(Date.prototype, "getHours").mockReturnValue(23);
+      const oldAuth = deferred<Response>();
+      const currentAuth = deferred<Response>();
+      let authCalls = 0;
+      const fetcher = retryableLogFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          if (authCalls === 1) return oldAuth.promise;
+          if (authCalls === 2) return currentAuth.promise;
+          return recipeSessionInZone("America/Chicago");
+        }
+        return original(url, init);
+      });
+      hooks.mount(RecipesClient);
+      const oldSignal = required(fetcher.mock.calls[0]?.[1]?.signal ?? undefined);
+      if (transition === "route") {
+        navigation.query = "date=2026-09-10";
+        hooks.render();
+      } else hooks.replayEffects();
+      expect(oldSignal.aborted).toBe(true);
+      oldAuth.resolve(await recipeSessionInZone("UTC", secondRecipeId));
+      await hooks.settle();
+      expect(savedRecipeNames()).toEqual([]);
+      expect(reviewPresent()).toBe(false);
+      expect(router.replace).not.toHaveBeenCalled();
+      currentAuth.resolve(await recipeSessionInZone("America/Chicago"));
+      await hooks.settle();
+      openSaved();
+      await hooks.settle();
+      expect(field("Meal").props.value).toBe("dinner");
+      await click("Log recipe");
+      expect(JSON.parse(String(recipeLogPosts(fetcher)[0]?.[1]?.body)).mealSlot).toBe("dinner");
+    },
+  );
+
+  it.each(["route", "effect replay"] as const)(
+    "keeps the established unedited meal when %s verification runs at a later hour",
+    async (transition) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-28T01:00:00.000Z"));
+      vi.spyOn(Date.prototype, "getHours").mockReturnValue(1);
+      const fetcher = retryableLogFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      expect(field("Meal").props.value).toBe("dinner");
+      vi.setSystemTime(new Date("2026-09-28T17:00:00.000Z"));
+      if (transition === "route") {
+        navigation.query = "date=2026-09-10";
+        hooks.render();
+      } else hooks.replayEffects();
+      await hooks.settle();
+      expect(field("Meal").props.value).toBe("dinner");
+      await click("Log recipe");
+      expect(JSON.parse(String(recipeLogPosts(fetcher)[0]?.[1]?.body)).mealSlot).toBe("dinner");
+    },
+  );
+
+  it("closes the private destination when route verification returns a different owner", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T01:00:00.000Z"));
+    vi.spyOn(Date.prototype, "getHours").mockReturnValue(1);
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Meal", "snacks");
+    const oldMeal = field("Meal");
+    const oldLog = button("Log recipe");
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      url === "/api/auth/me" ? recipeSessionInZone("UTC", secondRecipeId) : original(url, init),
+    );
+    navigation.query = "date=2026-09-10";
+    hooks.render();
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(savedRecipeNames()).toEqual([]);
+    expect(reviewPresent()).toBe(false);
+    const count = fetcher.mock.calls.length;
+    invoke(oldMeal, "onChange", { target: { value: "lunch" } });
+    invoke(oldLog, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(count);
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+  });
+
+  it("does not install a delayed initial session after unmount", async () => {
+    const pending = deferred<Response>();
+    const fetcher = retryableLogFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      url === "/api/auth/me" ? pending.promise : original(url, init),
+    );
+    hooks.mount(RecipesClient);
+    const signal = required(fetcher.mock.calls[0]?.[1]?.signal ?? undefined);
+    hooks.unmount();
+    pending.resolve(await recipeSessionInZone("America/Chicago"));
+    await hooks.settle();
+    expect(signal.aborted).toBe(true);
+    expect(hooks.afterClose()).toBe(0);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([401, 503])(
+    "does not open a log destination after initial verification returns %s",
+    async (status) => {
+      const fetcher = retryableLogFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) =>
+        url === "/api/auth/me"
+          ? Promise.resolve(new Response(null, { status }))
+          : original(url, init),
+      );
+      hooks.mount(RecipesClient);
+      await hooks.settle();
+      expect(savedRecipeNames()).toEqual([]);
+      expect(elements().some((node) => node.type === "button" && text(node) === "Log recipe")).toBe(
+        false,
+      );
+      expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    },
+  );
+});
+
 describe("actual optional recipe log time", () => {
   it.each([
     ["2026-11-01", "", "2026-11-01T07:30:45.123Z"],
@@ -3073,9 +3313,13 @@ describe("actual optional recipe log time", () => {
     openSaved();
     await hooks.settle();
     await change(optionalTimeLabel, "07:30");
+    await change("Meal", "snacks");
+    await change("Amount", "1.250000");
     const old = field(optionalTimeLabel);
     await click("Log recipe");
     expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    expect(field("Meal").props.value).toBe("snacks");
+    expect(field("Amount").props.value).toBe("1.250000");
     expect(text()).toContain("Review 2026-09-09 at 07:30 in that zone");
     expect(button("Log recipe").props.disabled).toBe(true);
     invoke(old, "onChange", { target: { value: "23:59" } });
@@ -3090,7 +3334,12 @@ describe("actual optional recipe log time", () => {
     await click("Log recipe");
     const writes = recipeLogPosts(fetcher);
     expect(writes).toHaveLength(2);
-    expect(JSON.parse(String(writes[1]?.[1]?.body)).occurredAt).toBe("2026-09-09T08:45:00.000Z");
+    expect(JSON.parse(String(writes[1]?.[1]?.body))).toEqual({
+      recipeVersionId: versionId,
+      portion: { kind: "serving", amount: "1.250000" },
+      mealSlot: "snacks",
+      occurredAt: "2026-09-09T08:45:00.000Z",
+    });
     expect(new Headers(writes[1]?.[1]?.headers).get("x-expected-profile-time-zone")).toBe("UTC");
     expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).not.toBe(
       new Headers(writes[0]?.[1]?.headers).get("idempotency-key"),
