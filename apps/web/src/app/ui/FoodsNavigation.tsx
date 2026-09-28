@@ -1,14 +1,20 @@
 import Link from "next/link";
-import { isLocalDate } from "../../lib/diary";
+import { isLocalDate, mealSlots } from "../../lib/diary";
 
 export default function FoodsNavigation({
   active,
   date,
+  meal,
 }: {
   readonly active: "catalogue" | "custom";
   readonly date?: string | undefined;
+  readonly meal?: string | undefined;
 }) {
-  const query = date && isLocalDate(date) ? `?date=${encodeURIComponent(date)}` : "";
+  const params = new URLSearchParams();
+  if (date && isLocalDate(date)) params.set("date", date);
+  const selectedMeal = mealSlots.find((slot) => slot === meal);
+  if (selectedMeal) params.set("meal", selectedMeal);
+  const query = params.size ? `?${params.toString()}` : "";
   return (
     <nav aria-label="Foods navigation" className="foodsNavigation">
       <Link

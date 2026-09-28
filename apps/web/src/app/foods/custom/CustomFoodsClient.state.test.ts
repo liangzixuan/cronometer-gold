@@ -123,7 +123,9 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.search),
 }));
 
+import { mealSlots } from "../../../lib/diary";
 import type { CustomFood } from "../../../lib/retention";
+import FoodsNavigation from "../../ui/FoodsNavigation";
 import { CustomFoodsClient } from "./CustomFoodsClient";
 
 interface ElementNode {
@@ -2460,6 +2462,159 @@ describe("web custom-food dirty Revise protection", () => {
   });
 });
 
+function logMealField() {
+  const found = elements(logForm()).find(
+    (node) =>
+      node.type === "select" &&
+      elements(node).some(
+        (option) => option.type === "option" && option.props.value === "breakfast",
+      ),
+  );
+  if (!found) throw new Error("Missing custom-food meal selector");
+  return found;
+}
+
+describe("My foods selected-meal continuity", () => {
+  it.each(mealSlots)(
+    "opens a %s log with custom labels and preserves both navigation destinations",
+    async (meal) => {
+      const { state, writes } = workspace([food()]);
+      state.auth = async () => {
+        const value = await session().json();
+        value.data.profile.diaryGroups = mealSlots.map((mealSlot, index) => ({
+          mealSlot,
+          label: `My meal ${index + 1}`,
+        }));
+        return Response.json(value);
+      };
+      navigation.search = `date=2026-09-08&meal=${meal}`;
+      await mount();
+      const nav = elements().find((node) => node.type === FoodsNavigation);
+      expect(nav?.props.date).toBe("2026-09-08");
+      expect(nav?.props.meal).toBe(meal);
+      await click("Log pinned v1", card(food()));
+      expect(field("Local date").props.value).toBe("2026-09-08");
+      expect(logMealField().props.value).toBe(meal);
+      expect(
+        elements(logMealField())
+          .filter((node) => node.type === "option")
+          .map((node) => ({
+            value: node.props.value,
+            label: text(node),
+          })),
+      ).toEqual(
+        mealSlots.map((mealSlot, index) => ({ value: mealSlot, label: `My meal ${index + 1}` })),
+      );
+      await change("Local time", "13:14");
+      state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+      await submit("Log exact version");
+      expect(JSON.parse(String(writes()[0]?.[1]?.body)).mealSlot).toBe(meal);
+    },
+  );
+
+  it.each([
+    "",
+    "meal=",
+    "meal=brunch",
+    "meal=Lunch",
+    "meal=My%20meal%202",
+    "meal=lunch&meal=dinner",
+    "meal=lunch&meal=lunch",
+  ])("uses the existing Snacks fallback for %s", async (query) => {
+    navigation.search = `date=2026-09-08&${query}`;
+    workspace([food()]);
+    await mount();
+    expect(elements().find((node) => node.type === FoodsNavigation)?.props.meal).toBeUndefined();
+    await click("Log pinned v1", card(food()));
+    expect(logMealField().props.value).toBe("snacks");
+    expect(field("Local date").props.value).toBe("2026-09-08");
+  });
+
+  it("preserves explicit drafts and exact retry body/key across a meal-only route change", async () => {
+    const first = food();
+    const { state, fetcher, writes } = workspace([first]);
+    navigation.search = "date=2026-09-08&meal=lunch";
+    await mount();
+    await click("Revise", card(first));
+    await change("Name", "  Preserved raw draft  ");
+    await change("Notes (optional)", "  Exact notes  ");
+    await click("Log pinned v1", card(first));
+    expect(logMealField().props.value).toBe("lunch");
+    invoke(logMealField(), "onChange", { target: { value: "breakfast" } });
+    await hooks.settle();
+    await change("Local date", "2026-09-07");
+    await change("Local time", "13:14");
+    await change("Exact quantity", "2.375");
+    const draft = formValues();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await submit("Log exact version");
+    const requests = fetcher.mock.calls.length;
+    navigation.search = "date=2026-09-08&meal=dinner";
+    hooks.render();
+    await hooks.settle();
+    expect(formValues()).toEqual(draft);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    expect(button("Log exact version").props.disabled).toBe(true);
+    pending.resolve(Response.json({ error: "Receipt unavailable" }, { status: 503 }));
+    await hooks.settle();
+    state.write = () => Response.json({ error: "Still unavailable" }, { status: 503 });
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(JSON.parse(String(writes()[0]?.[1]?.body))).toEqual({
+      customFoodVersionId: first.currentVersion.id,
+      portion: { kind: "serving", servingId: "1", amount: "2.375" },
+      mealSlot: "breakfast",
+      occurredAt: "2026-09-07T18:14:00.000Z",
+    });
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+    );
+    await click("Cancel");
+    await click("Log pinned v1", card(first));
+    expect(logMealField().props.value).toBe("dinner");
+    expect(field("Local date").props.value).toBe("2026-09-08");
+    expect(field("Name").props.value).toBe("  Preserved raw draft  ");
+    expect(field("Notes (optional)").props.value).toBe("  Exact notes  ");
+  });
+
+  it.each(["meal=dinner", "", "meal=invalid", "meal=lunch&meal=dinner"])(
+    "rejects old open callbacks after replacing the meal with %s while preserving the open draft",
+    async (next) => {
+      const { fetcher } = workspace([food()]);
+      navigation.search = "date=2026-09-08&meal=lunch";
+      await mount();
+      const oldOpen = button("Log pinned v1", card(food()));
+      const requests = fetcher.mock.calls.length;
+      navigation.search = `date=2026-09-08&${next}`;
+      hooks.renderWithoutEffects();
+      invoke(oldOpen, "onClick");
+      await hooks.settle();
+      expect(
+        elements().some((node) => node.type === "button" && text(node) === "Log exact version"),
+      ).toBe(false);
+      await click("Log pinned v1", card(food()));
+      const expected = next === "meal=dinner" ? "dinner" : "snacks";
+      expect(logMealField().props.value).toBe(expected);
+      navigation.search = "date=2026-09-08&meal=lunch";
+      hooks.renderWithoutEffects();
+      invoke(oldOpen, "onClick");
+      await hooks.settle();
+      expect(logMealField().props.value).toBe(expected);
+      await click("Cancel");
+      invoke(oldOpen, "onClick");
+      await hooks.settle();
+      expect(
+        elements().some((node) => node.type === "button" && text(node) === "Log exact version"),
+      ).toBe(false);
+      await click("Log pinned v1", card(food()));
+      expect(logMealField().props.value).toBe("lunch");
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+    },
+  );
+});
+
 describe("My foods selected-day continuity", () => {
   it.each([
     ["date=2026-09-09", "2026-09-09"],
@@ -2646,7 +2801,7 @@ async function prepareLog() {
 }
 
 describe("My foods pinned log lifecycle", () => {
-  it.each(["edit-restore", "cancel-reopen", "selected-day", "background"])(
+  it.each(["edit-restore", "cancel-reopen", "selected-day", "selected-meal", "background"])(
     "rejects retained fields, submit and Cancel after %s while current controls stay usable",
     async (transition) => {
       const view = visibility();
@@ -2665,6 +2820,9 @@ describe("My foods pinned log lifecycle", () => {
         await prepareLog();
       } else if (transition === "selected-day") {
         navigation.search = "date=2026-09-10";
+        hooks.renderWithoutEffects();
+      } else if (transition === "selected-meal") {
+        navigation.search = "date=2026-09-08&meal=lunch";
         hooks.renderWithoutEffects();
       } else {
         await view.set("hidden");

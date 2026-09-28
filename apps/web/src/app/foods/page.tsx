@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { isLocalDate } from "../../lib/diary";
+import { isLocalDate, mealSlots } from "../../lib/diary";
 import { AppNavigation } from "../ui/AppNavigation";
 import FoodsNavigation from "../ui/FoodsNavigation";
 import { Icon } from "../ui/Icon";
@@ -8,12 +8,16 @@ import { FoodSearchClient } from "./FoodSearchClient";
 export const dynamic = "force-dynamic";
 
 interface FoodsPageProps {
-  readonly searchParams: Promise<{ readonly date?: string | readonly string[] }>;
+  readonly searchParams: Promise<{
+    readonly date?: string | readonly string[];
+    readonly meal?: string | readonly string[];
+  }>;
 }
 
 export default async function FoodsPage({ searchParams }: FoodsPageProps) {
-  const { date } = await searchParams;
+  const { date, meal } = await searchParams;
   const selectedDate = typeof date === "string" && isLocalDate(date) ? date : undefined;
+  const selectedMeal = mealSlots.find((slot) => slot === meal);
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -44,7 +48,7 @@ export default async function FoodsPage({ searchParams }: FoodsPageProps) {
           </div>
           <span className="statusPill">Generic & branded</span>
         </header>
-        <FoodsNavigation active="catalogue" date={selectedDate} />
+        <FoodsNavigation active="catalogue" date={selectedDate} meal={selectedMeal} />
         <p className="foodPageIntro">
           Find generic and branded foods, review their serving information, and add them to your
           diary. Missing serving data stays unknown.

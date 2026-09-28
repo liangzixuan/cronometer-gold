@@ -11,6 +11,7 @@ import {
   localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
+  mealSlots,
   parseDiaryMutation,
   parseSession,
   quoteRevision,
@@ -180,9 +181,17 @@ export function CustomFoodsClient() {
   const queryDates = searchParams.getAll("date");
   const requestedDate = queryDates.length === 1 ? queryDates[0] : undefined;
   const validatedDate = requestedDate && isLocalDate(requestedDate) ? requestedDate : undefined;
-  const routeDate = useRef({ date: validatedDate });
-  if (routeDate.current.date !== validatedDate) routeDate.current = { date: validatedDate };
-  const renderedRouteDate = routeDate.current;
+  const queryMeals = searchParams.getAll("meal");
+  const requestedMeal = queryMeals.length === 1 ? queryMeals[0] : undefined;
+  const validatedMeal = mealSlots.find((slot) => slot === requestedMeal);
+  const routeDestination = useRef({ date: validatedDate, meal: validatedMeal });
+  if (
+    routeDestination.current.date !== validatedDate ||
+    routeDestination.current.meal !== validatedMeal
+  ) {
+    routeDestination.current = { date: validatedDate, meal: validatedMeal };
+  }
+  const renderedRouteDestination = routeDestination.current;
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your personal foods…");
   const [session, setSessionState] = useState<SessionSummary | null>(null);
@@ -263,7 +272,7 @@ export function CustomFoodsClient() {
       ownerUserId.current === session.user.id &&
       customLogRef.current === customLog &&
       customLogGeneration.current === renderedLogGeneration &&
-      routeDate.current === renderedRouteDate
+      routeDestination.current === renderedRouteDestination
     );
   }
   function setCustomLog(next: CustomLogDraft | null) {
@@ -1048,7 +1057,7 @@ export function CustomFoodsClient() {
       ownsLog() &&
       customLogRef.current === customLog &&
       customLogGeneration.current === generation &&
-      routeDate.current === renderedRouteDate;
+      routeDestination.current === renderedRouteDestination;
     setBusy("custom-log");
     try {
       const response = await fetch(
@@ -1218,7 +1227,7 @@ export function CustomFoodsClient() {
           </div>
           <span className="statusPill">Private to you</span>
         </header>
-        <FoodsNavigation active="custom" date={validatedDate} />
+        <FoodsNavigation active="custom" date={validatedDate} meal={validatedMeal} />
         <p className="foodPageIntro">
           Save foods you use often, enter their nutrition information, and add a saved version to
           your diary.
@@ -1586,7 +1595,7 @@ export function CustomFoodsClient() {
                             <button
                               disabled={!session}
                               onClick={() => {
-                                if (routeDate.current !== renderedRouteDate) return;
+                                if (routeDestination.current !== renderedRouteDestination) return;
                                 if (!session) {
                                   setMessage("Refresh current account settings before logging.");
                                   return;
@@ -1596,7 +1605,7 @@ export function CustomFoodsClient() {
                                   food,
                                   kind: food.currentVersion.serving ? "serving" : "grams",
                                   quantity: "1",
-                                  mealSlot: "snacks",
+                                  mealSlot: validatedMeal ?? "snacks",
                                   localDate:
                                     validatedDate ??
                                     localDateInTimeZone(now, session.profile.timeZone),
