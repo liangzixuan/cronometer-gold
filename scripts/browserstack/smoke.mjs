@@ -210,7 +210,7 @@ try {
     await page.getByLabel("Password", { exact: true }).type(credentials.password);
     await page.locator("form").getByRole("button", { name: "Sign in", exact: true }).click();
     await page.waitForURL(`${origin}/dashboard`);
-    await page.goto(`${origin}/diary?date=${date}`);
+    await page.goto(`${origin}/dashboard?date=${date}`);
     await diaryCount(6); // Confirms an authenticated BFF read through the real API/database.
   });
   await check("real-search-and-single-add", async () => {
@@ -246,7 +246,7 @@ try {
     assert((await added).ok());
   });
   await check("saved-diary-entry-after-reload", async () => {
-    await page.goto(`${origin}/diary?date=${date}`);
+    await page.goto(`${origin}/dashboard?date=${date}`);
     await diaryCount(7);
     await page.reload();
     await diaryCount(7);
@@ -280,7 +280,7 @@ try {
   });
   await check("narrow-diary-remains-usable", async () => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`${origin}/diary?date=${date}`);
+    await page.goto(`${origin}/dashboard?date=${date}`);
     await diaryCount(7);
     assert(await page.getByRole("heading", { name: "Diary", exact: true }).isVisible());
     assert(

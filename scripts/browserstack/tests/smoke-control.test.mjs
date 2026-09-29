@@ -24,7 +24,8 @@ async function exercise(options = {}) {
     typed = [],
     filled = [],
     actions = [],
-    fetches = [];
+    fetches = [],
+    navigations = [];
   const input = {
     origin: "http://127.0.0.1:3287",
     date: "2026-09-29",
@@ -76,6 +77,14 @@ async function exercise(options = {}) {
     setDefaultNavigationTimeout() {},
     setViewportSize: async () => {},
     goto: async (url) => {
+      navigations.push(url);
+      if (options.actualPageRoutes) {
+        const target = new URL(url);
+        assert.equal(target.origin, input.origin);
+        await readFile(
+          new URL(`../../../apps/web/src/app${target.pathname}/page.tsx`, import.meta.url),
+        );
+      }
       currentURL = url;
     },
     url: () => currentURL,
@@ -252,6 +261,7 @@ async function exercise(options = {}) {
     filled,
     actions,
     fetches,
+    navigations,
     exitCode: fakeProcess.exitCode,
     rejection,
   };
@@ -378,4 +388,18 @@ test("capture metadata is projected without retaining signed URLs or asserting m
   assert.equal(result.receipt.capture.dashboardVerification, "pending-first-run-review");
   assert.equal(result.receipt.cookieAttributesIndependentlyInspected, false);
   assert(!result.raw.includes("SYNTHETIC-SECRET-SENTINEL"));
+});
+
+test("actual smoke navigations resolve to existing app pages and retain the selected diary day", async () => {
+  const result = await exercise({ actualPageRoutes: true });
+  assert.equal(result.rejection, undefined);
+  assert.equal(result.receipt.status, "passed");
+  assert.deepEqual(result.receipt.checks, expectedChecks);
+  assert.equal(result.connected, 1);
+  assert.equal(result.closed, 1);
+  const diaryVisits = result.navigations
+    .map((url) => new URL(url))
+    .filter((url) => url.pathname === "/dashboard");
+  assert.equal(diaryVisits.length, 3);
+  assert(diaryVisits.every((url) => url.searchParams.get("date") === "2026-09-29"));
 });
