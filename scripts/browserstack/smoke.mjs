@@ -68,8 +68,23 @@ const receipt = {
   sessionId: null,
   cookieAttributesIndependentlyInspected: false,
 };
+const SEARCH_SUBSTEPS = new Set([
+  "open-foods",
+  "wait-destination",
+  "check-local-day",
+  "check-meal",
+  "fill-search",
+  "submit-search",
+  "wait-result",
+  "check-result-count",
+  "fill-amount",
+  "observe-add-response",
+  "click-add",
+  "check-add-response",
+]);
 let browser, page;
 let stage = "connect";
+let substep = null;
 let cancelled = false;
 const cancel = () => {
   cancelled = true;
@@ -80,6 +95,7 @@ process.once("SIGINT", cancel);
 const limit = setTimeout(cancel, 180_000);
 async function check(name, operation) {
   stage = name;
+  substep = null;
   assert(!cancelled, "Session cancelled");
   await operation();
   receipt.checks.push(name);
@@ -214,15 +230,22 @@ try {
     await diaryCount(6); // Confirms an authenticated BFF read through the real API/database.
   });
   await check("real-search-and-single-add", async () => {
+    substep = "open-foods";
     await page.goto(`${origin}/foods?date=${date}&meal=snacks`);
+    substep = "wait-destination";
     await page.getByLabel("Local day", { exact: true }).waitFor();
+    substep = "check-local-day";
     assert.equal(await page.getByLabel("Local day", { exact: true }).inputValue(), date);
+    substep = "check-meal";
     assert.equal(await page.getByLabel("Meal", { exact: true }).inputValue(), "snacks");
+    substep = "fill-search";
     await page.getByLabel("Food or brand", { exact: true }).fill("Blueberries");
+    substep = "submit-search";
     await page
       .getByRole("form", { name: "Food search", exact: true })
       .getByRole("button", { name: "Search", exact: true })
       .click();
+    substep = "wait-result";
     const food = page
       .getByRole("list", { name: "Food search results", exact: true })
       .locator("li")
@@ -230,19 +253,24 @@ try {
         has: page.getByRole("heading", { name: "Blueberries (synthetic sample)", exact: true }),
       });
     await food.waitFor();
+    substep = "check-result-count";
     assert.equal(await food.count(), 1);
+    substep = "fill-amount";
     await food.getByLabel("Amount", { exact: true }).fill("1.5");
+    substep = "observe-add-response";
     const added = page.waitForResponse(
       (response) =>
         new URL(response.url()).pathname === "/api/diary/entries" &&
         response.request().method() === "POST",
     );
+    substep = "click-add";
     await food
       .getByRole("button", {
         name: "Add 1.5 default servings of Blueberries (synthetic sample)",
         exact: true,
       })
       .click();
+    substep = "check-add-response";
     assert((await added).ok());
   });
   await check("saved-diary-entry-after-reload", async () => {
@@ -290,6 +318,9 @@ try {
   receipt.status = "passed";
 } catch {
   receipt.failedStage = stage; // Never serialize vendor errors/capabilities or page contents.
+  if (stage === "real-search-and-single-add" && SEARCH_SUBSTEPS.has(substep)) {
+    receipt.failedSubstep = substep;
+  }
 } finally {
   clearTimeout(limit);
   if (page)

@@ -1,8 +1,11 @@
-// Executes the unchanged smoke module with synthetic APIs. No browser/network/filesystem writes.
+// Executes the smoke module with synthetic APIs; no browser or network.
+// Controller fixtures use a temporary directory.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 const source = await readFile(new URL("../smoke.mjs", import.meta.url), "utf8");
@@ -12,6 +15,20 @@ const expectedChecks = [
   "saved-diary-entry-after-reload",
   "report-agrees-with-saved-day",
   "narrow-diary-remains-usable",
+];
+const searchOperations = [
+  "open-foods",
+  "wait-destination",
+  "check-local-day",
+  "check-meal",
+  "fill-search",
+  "submit-search",
+  "wait-result",
+  "check-result-count",
+  "fill-amount",
+  "observe-add-response",
+  "click-add",
+  "check-add-response",
 ];
 
 async function exercise(options = {}) {
@@ -25,7 +42,13 @@ async function exercise(options = {}) {
     filled = [],
     actions = [],
     fetches = [],
-    navigations = [];
+    navigations = [],
+    observedSearchOperations = [];
+  let addClicks = 0;
+  function searchOperation(name) {
+    observedSearchOperations.push(name);
+    if (options.searchFailure === name) throw new Error("SYNTHETIC-SECRET-SENTINEL");
+  }
   const input = {
     origin: "http://127.0.0.1:3287",
     date: "2026-09-29",
@@ -51,23 +74,43 @@ async function exercise(options = {}) {
   if (options.missingCredential) delete env.BROWSERSTACK_ACCESS_KEY;
   const fakeProcess = { env, once() {}, exitCode: undefined };
   const locator = (label = "") => ({
-    waitFor: async () => {},
-    count: async () => 1,
+    waitFor: async () => {
+      if (label === "Local day") searchOperation("wait-destination");
+      if (label === "food-result") searchOperation("wait-result");
+    },
+    count: async () => {
+      if (label === "food-result") searchOperation("check-result-count");
+      return 1;
+    },
     first() {
       return this;
     },
     filter() {
       return this;
     },
-    locator: (next) => locator(next),
+    locator: (next) =>
+      locator(label === "Food search results" && next === "li" ? "food-result" : next),
     getByRole: (_role, value) => locator(value.name),
     getByLabel: (next) => locator(next),
     evaluate: async (fn) => fn({ id: "diary-page-count" }),
     type: async (value) => typed.push([label, value]),
-    fill: async (value) => filled.push([label, value]),
-    inputValue: async () => (label === "Meal" ? "snacks" : input.date),
+    fill: async (value) => {
+      if (label === "Food or brand") searchOperation("fill-search");
+      if (label === "Amount") searchOperation("fill-amount");
+      filled.push([label, value]);
+    },
+    inputValue: async () => {
+      if (label === "Local day") searchOperation("check-local-day");
+      if (label === "Meal") searchOperation("check-meal");
+      return label === "Meal" ? "snacks" : input.date;
+    },
     click: async () => {
-      if (label.startsWith("Add 1.5")) count = 7;
+      if (label === "Search") searchOperation("submit-search");
+      if (label.startsWith("Add 1.5")) {
+        searchOperation("click-add");
+        addClicks++;
+        count = 7;
+      }
     },
     isVisible: async () => true,
     allTextContents: async () => [`Energy: ${options.energy ?? "135"} kcal`],
@@ -77,6 +120,7 @@ async function exercise(options = {}) {
     setDefaultNavigationTimeout() {},
     setViewportSize: async () => {},
     goto: async (url) => {
+      if (new URL(url).pathname === "/foods") searchOperation("open-foods");
       navigations.push(url);
       if (options.actualPageRoutes) {
         const target = new URL(url);
@@ -95,7 +139,27 @@ async function exercise(options = {}) {
     waitForURL: async () => {
       if (options.loginFailure) throw new Error("SYNTHETIC-SECRET-SENTINEL");
     },
-    waitForResponse: async () => ({ ok: () => !options.addFailure }),
+    waitForResponse: (predicate) => {
+      searchOperation("observe-add-response");
+      assert(
+        predicate({
+          url: () => `${input.origin}/api/diary/entries?date=${input.date}`,
+          request: () => ({ method: () => "POST" }),
+        }),
+      );
+      assert(
+        !predicate({
+          url: () => `${input.origin}/api/diary/entries`,
+          request: () => ({ method: () => "GET" }),
+        }),
+      );
+      return Promise.resolve({
+        ok: () => {
+          searchOperation("check-add-response");
+          return !options.addFailure;
+        },
+      });
+    },
     waitForFunction: async (fn, arg) => {
       assert(fn(arg), "Synthetic DOM predicate rejected");
     },
@@ -262,6 +326,8 @@ async function exercise(options = {}) {
     actions,
     fetches,
     navigations,
+    observedSearchOperations,
+    addClicks,
     exitCode: fakeProcess.exitCode,
     rejection,
   };
@@ -275,6 +341,91 @@ test("actual module completes exactly one synthetic session and five journey sta
   assert.equal(result.receipt.status, "passed");
   assert.deepEqual(result.receipt.checks, expectedChecks);
   assert.equal(result.exitCode, 0);
+  assert.equal(result.receipt.failedSubstep, undefined);
+  assert.deepEqual(result.observedSearchOperations, searchOperations);
+  assert.equal(result.addClicks, 1);
+});
+
+function publicSummary(receipt) {
+  const script = `import importlib.util,json,sys
+spec=importlib.util.spec_from_file_location('browser_controller_tests',sys.argv[1])
+module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+case=module.DraftTests('test_failed_browser_never_accepts')
+case.setUp()
+try:
+ case.full_receipts();case.write('browser-result.json',json.loads(sys.stdin.read()))
+ try: case.ns['summary']()
+ except RuntimeError: pass
+finally: case.doCleanups()
+`;
+  const result = spawnSync(
+    "python3",
+    ["-B", "-c", script, fileURLToPath(new URL("./test_ci_run.py", import.meta.url))],
+    {
+      input: JSON.stringify(receipt),
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 64 * 1024,
+    },
+  );
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert(!result.stdout.includes("SYNTHETIC-SECRET-SENTINEL"));
+  return JSON.parse(result.stdout);
+}
+
+for (const [index, operation] of searchOperations.entries()) {
+  test(`search failure at ${operation} reaches the actual bounded public summary`, async () => {
+    const result = await exercise({ searchFailure: operation });
+    assert.equal(result.rejection, undefined);
+    assert.equal(result.receipt.failedStage, "real-search-and-single-add");
+    assert.equal(result.receipt.failedSubstep, operation);
+    assert.equal(result.receipt.status, "failed");
+    assert.deepEqual(result.receipt.checks, [expectedChecks[0]]);
+    assert.deepEqual(result.observedSearchOperations, searchOperations.slice(0, index + 1));
+    assert.equal(result.addClicks, operation === "check-add-response" ? 1 : 0);
+    assert.equal(result.connected, 1);
+    assert.equal(result.closed, 1);
+    assert.equal(result.exitCode, 1);
+    assert(!result.raw.includes("SYNTHETIC-SECRET-SENTINEL"));
+    const summary = publicSummary(result.receipt);
+    assert.equal(summary.accepted, false);
+    assert.equal(summary.failedBrowser.stage, "real-search-and-single-add");
+    assert.equal(summary.failedBrowser.substep, operation);
+  });
+}
+
+test("failed search substep survives terminal and cleanup failures", async () => {
+  const result = await exercise({
+    searchFailure: "wait-result",
+    terminalHttpFailure: true,
+    closeFailure: true,
+  });
+  assert.equal(result.receipt.failedStage, "real-search-and-single-add");
+  assert.equal(result.receipt.failedSubstep, "wait-result");
+  assert.equal(result.receipt.browserCleanupFailed, true);
+  assert.equal(result.receipt.terminalVerificationFailed, true);
+  assert.equal(result.receipt.status, "failed");
+  assert.equal(result.addClicks, 0);
+  assert.equal(result.closed, 1);
+});
+
+test("earlier and later failures cannot retain a search substep", async () => {
+  for (const options of [
+    { loginFailure: true },
+    { energy: "1135" },
+    { reportCount: 6 },
+    { terminalRunning: true },
+    { statusFailure: true },
+    { closeFailure: true },
+  ]) {
+    const result = await exercise(options);
+    assert.equal(result.receipt.status, "failed");
+    assert.equal(result.receipt.failedSubstep, undefined);
+    assert.equal(result.connected, 1);
+    assert.equal(result.closed, 1);
+    assert.equal(result.addClicks, options.loginFailure ? 0 : 1);
+  }
 });
 test("capture flags, masking and tunnel identity reach the actual connect call", async () => {
   const { caps, typed, filled } = await exercise();

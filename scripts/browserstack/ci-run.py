@@ -26,6 +26,9 @@ BUILD_OUTPUT_ROOTS = ('apps/api/dist', 'apps/worker/dist', 'packages/artifact-st
                       'packages/search/dist', 'apps/web/.next/standalone', 'apps/web/.next/static')
 CHECKS = ['authenticated-session-persistence', 'real-search-and-single-add',
           'saved-diary-entry-after-reload', 'report-agrees-with-saved-day', 'narrow-diary-remains-usable']
+SEARCH_SUBSTEPS = frozenset(('open-foods', 'wait-destination', 'check-local-day', 'check-meal',
+                             'fill-search', 'submit-search', 'wait-result', 'check-result-count',
+                             'fill-amount', 'observe-add-response', 'click-add', 'check-add-response'))
 COMMAND_STAGES = frozenset(('local-version', 'local-help', 'image-pull-0', 'image-pull-1',
                           'image-index-0', 'image-index-1', 'image-buildkit-0', 'image-buildkit-1',
                           'image-signed-provenance-0', 'image-signed-provenance-1',
@@ -473,6 +476,10 @@ def summary():
                 failed = {'sourceSha': os.environ['GITHUB_SHA'], 'sessionId': session_id}
                 if browser.get('failedStage') in ['connect', 'session-identity', 'terminal-verification', *CHECKS]:
                     failed['stage'] = browser['failedStage']
+                if browser.get('status') == 'failed' and browser.get('failedStage') == 'real-search-and-single-add':
+                    substep = browser.get('failedSubstep')
+                    if type(substep) is str and substep in SEARCH_SUBSTEPS:
+                        failed['substep'] = substep
                 remote = browser.get('terminal')
                 if isinstance(remote, dict) and remote.get('sessionId') == session_id:
                     if remote.get('status') in ('passed', 'failed', 'done', 'running', 'error', 'timeout'):

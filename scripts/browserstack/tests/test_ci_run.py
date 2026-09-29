@@ -471,6 +471,59 @@ class DraftTests(unittest.TestCase):
         self.assertEqual(value['failedBrowser']['stage'], CHECKS[0])
         self.assertNotIn('SYNTHETIC-SECRET-SENTINEL', output.getvalue())
 
+    def failed_summary(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(RuntimeError): self.ns['summary']()
+        self.assertNotIn('SYNTHETIC-SECRET', output.getvalue())
+        value = json.loads(output.getvalue())
+        self.assertIs(value['accepted'], False)
+        return value
+
+    def test_failed_search_summary_projects_each_fixed_substep(self):
+        for substep in ('open-foods', 'wait-destination', 'check-local-day', 'check-meal',
+                        'fill-search', 'submit-search', 'wait-result', 'check-result-count',
+                        'fill-amount', 'observe-add-response', 'click-add', 'check-add-response'):
+            with self.subTest(substep=substep):
+                self.full_receipts()
+                self.change_browser(status='failed', failedStage=CHECKS[1], failedSubstep=substep,
+                                    checks=[CHECKS[0]], unexpectedPrivate='SYNTHETIC-SECRET')
+                value = self.failed_summary()
+                self.assertEqual(value['failedBrowser']['stage'], CHECKS[1])
+                self.assertEqual(value['failedBrowser']['substep'], substep)
+
+    def test_failed_search_summary_discards_malformed_substeps(self):
+        for substep in (None, True, 1, [], {}, 'unknown', 'open-foods\nSYNTHETIC-SECRET',
+                        'x' * 10000, 'SYNTHETIC-SECRET'):
+            with self.subTest(substep=type(substep).__name__):
+                self.full_receipts()
+                self.change_browser(status='failed', failedStage=CHECKS[1], failedSubstep=substep)
+                value = self.failed_summary()
+                self.assertEqual(value['failedBrowser']['stage'], CHECKS[1])
+                self.assertNotIn('substep', value['failedBrowser'])
+
+    def test_failed_summary_discards_substeps_from_other_stages(self):
+        for stage in ('connect', 'session-identity', *CHECKS[:1], *CHECKS[2:],
+                      'terminal-verification', 'unknown', 'SYNTHETIC-SECRET'):
+            with self.subTest(stage=stage):
+                self.full_receipts()
+                self.change_browser(status='failed', failedStage=stage, failedSubstep='open-foods')
+                self.assertNotIn('substep', self.failed_summary()['failedBrowser'])
+
+    def test_success_summary_omits_forged_failure_substep(self):
+        self.full_receipts()
+        self.change_browser(failedStage=CHECKS[1], failedSubstep='open-foods')
+        value = self.summary_result()
+        self.assertIs(value['accepted'], True)
+        self.assertNotIn('failedBrowser', value)
+        self.assertNotIn('failedSubstep', json.dumps(value))
+        self.assertNotIn('open-foods', json.dumps(value))
+
+    def test_cleanup_failure_does_not_relabel_passed_browser_as_search_failure(self):
+        self.full_receipts()
+        self.change_browser(failedStage=CHECKS[1], failedSubstep='open-foods')
+        self.write('cleanup.json', {'failures': ['runtime-stop']})
+        self.assertNotIn('substep', self.failed_summary()['failedBrowser'])
+
     def test_missing_receipt_never_accepts(self):
         self.full_receipts(); (self.private / 'browser-result.json').unlink()
         with self.assertRaises(RuntimeError): self.summary_result()
