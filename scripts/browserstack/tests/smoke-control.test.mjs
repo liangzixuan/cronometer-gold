@@ -3,10 +3,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
+import { parse } from "@babel/parser";
 
 const source = await readFile(new URL("../smoke.mjs", import.meta.url), "utf8");
 const expectedChecks = [
@@ -31,7 +33,161 @@ const searchOperations = [
   "check-add-response",
 ];
 
-async function exercise(options = {}) {
+function matchingNodes(tree, predicate) {
+  const found = [];
+  function visit(node) {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (typeof node.type !== "string") return;
+    if (predicate(node)) found.push(node);
+    for (const value of Object.values(node)) visit(value);
+  }
+  visit(tree);
+  return found;
+}
+
+// A bounded model of this native label/select, not HTML parsing, hydration or a browser.
+// JSX and option text come from app source; matching runs the installed Playwright functions.
+async function mealSelectorModel() {
+  const component = parse(
+    await readFile(
+      new URL("../../../apps/web/src/app/foods/FoodSearchClient.tsx", import.meta.url),
+      "utf8",
+    ),
+    { sourceType: "module", plugins: ["typescript", "jsx"] },
+  );
+  const attr = (node, name) =>
+    node.openingElement.attributes.find(
+      (item) => item.type === "JSXAttribute" && item.name.name === name,
+    )?.value;
+  const elements = (tree, tag) =>
+    matchingNodes(
+      tree,
+      (node) => node.type === "JSXElement" && node.openingElement.name.name === tag,
+    );
+  const labels = elements(component, "label").filter(
+    (node) => attr(node, "htmlFor")?.value === "quick-add-meal",
+  );
+  assert.equal(labels.length, 1);
+  const [label] = labels;
+  const selects = elements(label, "select");
+  assert.equal(selects.length, 1);
+  const [select] = selects;
+  const id = attr(select, "id").value;
+  assert.equal(id, "quick-add-meal");
+  assert.equal(attr(select, "value").expression.name, "mealSlot");
+  assert.equal(
+    matchingNodes(
+      component,
+      (node) => node.type === "JSXAttribute" && node.name.name === "id" && node.value?.value === id,
+    ).length,
+    1,
+  );
+  const [option] = elements(select, "option");
+  assert.equal(attr(option, "value").expression.object.name, "group");
+  assert.equal(attr(option, "value").expression.property.name, "mealSlot");
+  const optionText = option.children.find(
+    (node) => node.type === "JSXExpressionContainer",
+  ).expression;
+  assert.equal(optionText.object.name, "group");
+  assert.equal(optionText.property.name, "label");
+  assert(
+    select.children.some(
+      (node) =>
+        node.type === "JSXExpressionContainer" &&
+        node.expression?.callee?.object?.name === "diaryGroups" &&
+        node.expression?.callee?.property?.name === "map",
+    ),
+  );
+  const diary = parse(
+    await readFile(new URL("../../../apps/web/src/lib/diary.ts", import.meta.url), "utf8"),
+    { sourceType: "module", plugins: ["typescript"] },
+  );
+  const [groups] = matchingNodes(
+    diary,
+    (node) => node.type === "VariableDeclarator" && node.id.name === "defaultDiaryGroups",
+  );
+  const options = groups.init.expression.elements.map((node) =>
+    Object.fromEntries(
+      node.properties.map((property) => {
+        assert.equal(property.value.type, "StringLiteral");
+        return [property.key.name, property.value.value];
+      }),
+    ),
+  );
+  const document = { head: null };
+  const text = (value) => ({ nodeType: 3, nodeValue: value });
+  const element = (name, children, attributes = {}) => {
+    for (let index = 0; index < children.length; index++)
+      children[index].nextSibling = children[index + 1];
+    return {
+      nodeType: 1,
+      nodeName: name,
+      ownerDocument: document,
+      firstChild: children[0],
+      getAttribute: (name) => attributes[name] ?? null,
+    };
+  };
+  const selectNode = element(
+    "SELECT",
+    options.map((option) => element("OPTION", [text(option.label)])),
+    { id },
+  );
+  const labelNode = element("LABEL", [
+    text(
+      label.children
+        .filter((node) => node.type === "JSXText")
+        .map((node) => node.value)
+        .join(""),
+    ),
+    selectNode,
+  ]);
+  selectNode.labels = [labelNode];
+  const require = createRequire(import.meta.url);
+  const playwrightRequire = createRequire(require.resolve("playwright/package.json"));
+  const core = dirname(playwrightRequire.resolve("playwright-core/package.json"));
+  assert.equal(require(join(core, "package.json")).version, "1.59.0");
+  const injected = require(join(core, "lib/generated/injectedScriptSource.js")).source;
+  const parsed = parse(injected);
+  const names = [
+    "normalizeWhiteSpace",
+    "shouldSkipForTextMatching",
+    "elementText",
+    "getAriaLabelledByElements",
+    "getElementLabels",
+    "createTextMatcher",
+  ];
+  const functions = names.map((name) => {
+    const declarations = matchingNodes(
+      parsed,
+      (node) => node.type === "FunctionDeclaration" && node.id?.name === name,
+    );
+    assert.equal(declarations.length, 1);
+    return injected.slice(declarations[0].start, declarations[0].end);
+  });
+  const engine = vm.runInNewContext(
+    `${functions.join("\n")}\n({getElementLabels,createTextMatcher})`,
+    {
+      normalizedWhitespaceCache: undefined,
+      HTMLInputElement: class {},
+      Node: { TEXT_NODE: 3, ELEMENT_NODE: 1, COMMENT_NODE: 8 },
+    },
+  );
+  const nativeLabels = engine.getElementLabels(new Map(), selectNode);
+  return {
+    id,
+    options,
+    normalizedLabel: nativeLabels[0].normalized,
+    exactLabelMatches: (name) =>
+      nativeLabels.some(engine.createTextMatcher(`${JSON.stringify(name)}s`, true).matcher),
+  };
+}
+
+async function exercise(options = {}, smokeSource = source) {
+  const mealModel = options.mealModel;
   let currentURL = "",
     count = 6,
     connected = 0,
@@ -43,7 +199,8 @@ async function exercise(options = {}) {
     actions = [],
     fetches = [],
     navigations = [],
-    observedSearchOperations = [];
+    observedSearchOperations = [],
+    mealReads = [];
   let addClicks = 0;
   function searchOperation(name) {
     observedSearchOperations.push(name);
@@ -101,8 +258,19 @@ async function exercise(options = {}) {
     },
     inputValue: async () => {
       if (label === "Local day") searchOperation("check-local-day");
-      if (label === "Meal") searchOperation("check-meal");
-      return label === "Meal" ? "snacks" : input.date;
+      if (label === "Meal" || label === "#quick-add-meal" || label === "missing-meal") {
+        searchOperation("check-meal");
+        assert.notEqual(label, "missing-meal", "Exact label has no matching control");
+        if (mealModel) {
+          assert.equal(label, `#${mealModel.id}`);
+          const value = options.mealValue ?? new URL(currentURL).searchParams.get("meal");
+          assert(mealModel.options.some((option) => option.mealSlot === value));
+          mealReads.push(value);
+          return value;
+        }
+        return "snacks";
+      }
+      return input.date;
     },
     click: async () => {
       if (label === "Search") searchOperation("submit-search");
@@ -134,7 +302,12 @@ async function exercise(options = {}) {
     url: () => currentURL,
     reload: async () => {},
     locator,
-    getByLabel: locator,
+    getByLabel: (name, config) =>
+      locator(
+        mealModel && name === "Meal" && config?.exact && !mealModel.exactLabelMatches(name)
+          ? "missing-meal"
+          : name,
+      ),
     getByRole: (_role, value) => locator(value.name),
     waitForURL: async () => {
       if (options.loginFailure) throw new Error("SYNTHETIC-SECRET-SENTINEL");
@@ -280,7 +453,7 @@ async function exercise(options = {}) {
       );
     return modules.get(name);
   }
-  const module = new vm.SourceTextModule(source, { context, identifier: "actual-smoke.mjs" });
+  const module = new vm.SourceTextModule(smokeSource, { context, identifier: "actual-smoke.mjs" });
   await module.link((name) => {
     if (name === "node:assert/strict") return moduleFor(name, { default: assert });
     if (name === "node:path") return moduleFor(name, { join });
@@ -327,11 +500,47 @@ async function exercise(options = {}) {
     fetches,
     navigations,
     observedSearchOperations,
+    mealReads,
     addClicks,
     exitCode: fakeProcess.exitCode,
     rejection,
   };
 }
+
+test("actual runner resolves the source-derived meal select without matching nested option text", async () => {
+  const mealModel = await mealSelectorModel();
+  assert.equal(mealModel.exactLabelMatches("Meal"), false);
+  assert(mealModel.normalizedLabel.startsWith("Meal"));
+  assert(mealModel.options.every((option) => mealModel.normalizedLabel.includes(option.label)));
+  const result = await exercise({ mealModel });
+  assert.equal(result.receipt.status, "passed");
+  assert.deepEqual(result.receipt.checks, expectedChecks);
+  assert.deepEqual(result.mealReads, ["snacks"]);
+  assert.equal(result.addClicks, 1);
+});
+
+test("the original exact Meal label fails in the actual runner before search or add", async () => {
+  const oldLookup = 'page.getByLabel("Meal", { exact: true }).inputValue()';
+  const original = source.replace('page.locator("#quick-add-meal").inputValue()', oldLookup);
+  assert(original.includes(oldLookup));
+  const result = await exercise({ mealModel: await mealSelectorModel() }, original);
+  assert.equal(result.receipt.failedSubstep, "check-meal");
+  assert.equal(result.receipt.status, "failed");
+  assert.deepEqual(result.observedSearchOperations, searchOperations.slice(0, 4));
+  assert.equal(result.addClicks, 0);
+  assert.equal(result.closed, 1);
+  assert.deepEqual(result.mealReads, []);
+});
+
+test("a wrong meal value still stops the actual runner before search or add", async () => {
+  const result = await exercise({ mealModel: await mealSelectorModel(), mealValue: "breakfast" });
+  assert.equal(result.receipt.failedSubstep, "check-meal");
+  assert.equal(result.receipt.status, "failed");
+  assert.deepEqual(result.observedSearchOperations, searchOperations.slice(0, 4));
+  assert.equal(result.addClicks, 0);
+  assert.equal(result.closed, 1);
+  assert.deepEqual(result.mealReads, ["breakfast"]);
+});
 
 test("actual module completes exactly one synthetic session and five journey stages", async () => {
   const result = await exercise();

@@ -237,7 +237,7 @@ try {
     substep = "check-local-day";
     assert.equal(await page.getByLabel("Local day", { exact: true }).inputValue(), date);
     substep = "check-meal";
-    assert.equal(await page.getByLabel("Meal", { exact: true }).inputValue(), "snacks");
+    assert.equal(await page.locator("#quick-add-meal").inputValue(), "snacks");
     substep = "fill-search";
     await page.getByLabel("Food or brand", { exact: true }).fill("Blueberries");
     substep = "submit-search";
