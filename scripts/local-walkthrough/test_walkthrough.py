@@ -195,7 +195,10 @@ class PreparationTests(unittest.TestCase):
 
     def prepare(self):
         def prerequisite(arguments, **kwargs):
-            return '[{"Id":"sha256:offline"}]' if arguments[1:3] == ["image", "inspect"] else ""
+            if arguments[1:3] == ["image", "inspect"]:
+                return json.dumps([{"Id": "sha256:" + "b" * 64, "RepoDigests": [arguments[-1]],
+                                    "Os": "linux", "Architecture": "arm64", "Config": {}}])
+            return "a" * 40 if arguments == ["git", "rev-parse", "HEAD"] else ""
 
         with patch.object(run, "ROOT", self.root), \
                 patch.object(run, "free_ports"), \
@@ -225,6 +228,34 @@ class PreparationTests(unittest.TestCase):
         with self.assertRaisesRegex(ownership.WalkthroughError, "escaping symlink"):
             self.prepare()
         self.assertEqual(outside.read_bytes(), b"outside-export")
+
+
+    def test_ci_preparation_records_profile_pins_context_and_rendered_compose(self):
+        self.arguments.image_profile = "ci-qualified-arm64"
+        with patch.dict(os.environ, ImageProfileTests.CONTEXT, clear=True), \
+                patch.object(run.platform, "machine", return_value="aarch64"), \
+                patch.object(run, "runtime_image_contract") as admitted:
+            runtime = self.prepare()
+        self.assertEqual(admitted.call_args_list, [unittest.mock.call("postgres", {}),
+                                                   unittest.mock.call("meilisearch", {})])
+        self.assertEqual(runtime.state["version"], 2)
+        self.assertEqual(runtime.state["imageProfile"], "ci-qualified-arm64")
+        self.assertEqual(runtime.state["imagePins"], run.CI_IMAGES)
+        self.assertEqual(runtime.state["imageContext"], ImageProfileTests.CONTEXT)
+        self.assertEqual(runtime.state["images"], {key: "sha256:" + "b" * 64 for key in run.CI_IMAGES})
+        self.assertEqual((runtime.path / "compose.yaml").read_bytes(), run.render_compose("ci-qualified-arm64"))
+        self.assertEqual(runtime.state["composeSha256"], run.digest(runtime.path / "compose.yaml"))
+        self.assertEqual(runtime.state["head"], "a" * 40)
+        with patch.dict(os.environ, {**ImageProfileTests.CONTEXT, "GITHUB_RUN_ATTEMPT": "2"}, clear=True), \
+                patch.object(run.platform, "machine", return_value="aarch64"), \
+                patch.object(runtime, "owned_containers") as owned:
+            with self.assertRaisesRegex(ownership.WalkthroughError, "another CI workflow"):
+                runtime.start_apps()
+            owned.assert_not_called()
+        changed = {**runtime.state, "imagePins": {**run.CI_IMAGES, "postgres": run.IMAGES["postgres"]}}
+        (runtime.path / "runtime.json").write_text(json.dumps(changed))
+        with patch.object(run, "ROOT", self.root), self.assertRaisesRegex(ownership.WalkthroughError, "selected profile"):
+            run.Runtime(runtime.path)
 
 
 class InterfaceTests(unittest.TestCase):
@@ -280,6 +311,154 @@ class InterfaceTests(unittest.TestCase):
         self.assertEqual(source.count("pids_limit: 256"), 2)
         self.assertEqual(source.count('restart: "no"'), 2)
         self.assertEqual(source.count('"127.0.0.1:${WALKTHROUGH_'), 2)
+
+
+
+class ImageProfileTests(unittest.TestCase):
+    CONTEXT = {
+        "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+        "RUNNER_OS": "Linux", "RUNNER_ARCH": "ARM64",
+        "GITHUB_REPOSITORY": "liangzixuan/cronometer-gold",
+        "GITHUB_REF": "refs/heads/codex/retention-features", "GITHUB_EVENT_NAME": "push",
+        "GITHUB_SHA": "a" * 40, "GITHUB_RUN_ID": "1234", "GITHUB_RUN_ATTEMPT": "1",
+    }
+
+    def test_local_default_is_explicit_and_does_not_require_ci(self):
+        arguments = run.parser().parse_args(["create", "--runtime-parent", "/tmp"])
+        self.assertEqual(arguments.image_profile, "local")
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(run.profile_context("local"))
+        self.assertEqual(run.profile_images("local"), run.IMAGES)
+        self.assertEqual(run.render_compose("local"), (run.TOOLS / "compose.yaml").read_bytes())
+
+    def test_only_explicit_reviewed_profile_is_selectable(self):
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            run.parser().parse_args(["create", "--runtime-parent", "/tmp", "--image-profile", "arbitrary"])
+        with self.assertRaises(ownership.WalkthroughError):
+            run.profile_images("arbitrary")
+
+    def test_ci_requires_exact_hosted_arm_repository_branch_and_event(self):
+        with patch.dict(os.environ, self.CONTEXT, clear=True), patch.object(run.platform, "machine", return_value="aarch64"):
+            context = run.profile_context("ci-qualified-arm64")
+        self.assertEqual(context, {key: self.CONTEXT[key] for key in run.CI_CONTEXT_KEYS})
+        for key, value in (
+            ("GITHUB_ACTIONS", "false"), ("RUNNER_ENVIRONMENT", "self-hosted"),
+            ("RUNNER_OS", "Windows"), ("RUNNER_ARCH", "X64"),
+            ("GITHUB_REPOSITORY", "someone/fork"), ("GITHUB_REF", "refs/pull/1/merge"),
+            ("GITHUB_EVENT_NAME", "pull_request_target"), ("GITHUB_SHA", "short"),
+            ("GITHUB_RUN_ID", "0"), ("GITHUB_RUN_ATTEMPT", "1;extra"),
+        ):
+            with self.subTest(key=key), patch.dict(os.environ, {**self.CONTEXT, key: value}, clear=True), \
+                    patch.object(run.platform, "machine", return_value="aarch64"), \
+                    self.assertRaises(ownership.WalkthroughError):
+                run.profile_context("ci-qualified-arm64")
+        with patch.dict(os.environ, self.CONTEXT, clear=True), patch.object(run.platform, "machine", return_value="x86_64"), \
+                self.assertRaises(ownership.WalkthroughError):
+            run.profile_context("ci-qualified-arm64")
+        with patch.dict(os.environ, {**self.CONTEXT, "GITHUB_EVENT_NAME": "workflow_dispatch"}, clear=True), \
+                patch.object(run.platform, "machine", return_value="aarch64"):
+            self.assertEqual(run.profile_context("ci-qualified-arm64")["GITHUB_EVENT_NAME"], "workflow_dispatch")
+
+    def test_rejected_ci_context_precedes_ports_docker_or_runtime_creation(self):
+        arguments = run.parser().parse_args(["create", "--runtime-parent", "/tmp",
+                                             "--image-profile", "ci-qualified-arm64"])
+        with patch.dict(os.environ, {}, clear=True), patch.object(run, "free_ports") as ports, \
+                patch.object(run, "read_command") as command, patch.object(run.tempfile, "mkdtemp") as temporary:
+            with self.assertRaises(ownership.WalkthroughError):
+                run.prepare(arguments)
+        ports.assert_not_called()
+        command.assert_not_called()
+        temporary.assert_not_called()
+
+
+    def test_ci_source_mismatch_precedes_docker_and_runtime_creation(self):
+        arguments = run.parser().parse_args(["create", "--runtime-parent", "/tmp",
+                                             "--image-profile", "ci-qualified-arm64"])
+        with patch.dict(os.environ, self.CONTEXT, clear=True), \
+                patch.object(run.platform, "machine", return_value="aarch64"), \
+                patch.object(run, "read_command", return_value="b" * 40) as command, \
+                patch.object(run.tempfile, "mkdtemp") as temporary:
+            with self.assertRaisesRegex(ownership.WalkthroughError, "event source"):
+                run.prepare(arguments)
+        command.assert_called_once_with(["git", "rev-parse", "HEAD"])
+        temporary.assert_not_called()
+
+    def test_ci_claim_rejects_changed_container_user_or_scratch_mount_before_recording(self):
+        runtime = run.Runtime.__new__(run.Runtime)
+        runtime.profile = "ci-qualified-arm64"
+        runtime.run_id = "test"
+        runtime.path = Path("/offline")
+        runtime.ports = {"postgres": 55488, "meilisearch": 57788}
+        runtime.state = {"images": {"postgres": "sha256:postgres", "meilisearch": "sha256:meilisearch"}}
+        runtime.docker_env = {}
+        def record(service):
+            port = "5432/tcp" if service == "postgres" else "7700/tcp"
+            return {"id": service, "service": service, "project": "nourishing-walkthrough-test", "owner": "test",
+                    "image": runtime.state["images"][service],
+                    "ports": {port: [{"HostIp": "127.0.0.1", "HostPort": str(runtime.ports[service])}]},
+                    "memory": 1073741824, "memorySwap": 1073741824, "nanoCpus": 1000000000, "pidsLimit": 256,
+                    "user": "70:70" if service == "postgres" else "1000:1000",
+                    "tmpfs": {} if service == "postgres" else {"/meili_data": run.CI_MEILI_TMPFS.split(":", 1)[1]}}
+        records = [record("postgres"), record("meilisearch")]
+        with patch.object(runtime, "compose", return_value=["offline"]), \
+                patch.object(run, "read_command", return_value="postgres meilisearch"), \
+                patch.object(runtime, "inspect", side_effect=records), patch.object(run, "write_json") as saved:
+            self.assertEqual(runtime.claim_containers(), records)
+            saved.assert_called_once_with(Path("/offline/containers.json"), records)
+        for field, replacement in (("user", "0:0"), ("tmpfs", {}),
+                                   ("tmpfs", {"/meili_data": "uid=0,gid=0,size=1g"})):
+            with self.subTest(field=field, value=replacement), \
+                    patch.object(runtime, "compose", return_value=["offline"]), \
+                    patch.object(run, "read_command", return_value="postgres meilisearch"), \
+                    patch.object(runtime, "inspect", side_effect=[records[0], {**records[1], field: replacement}]), \
+                    patch.object(run, "write_json") as saved:
+                with self.assertRaises(ownership.WalkthroughError):
+                    runtime.claim_containers()
+                saved.assert_not_called()
+
+    def test_ci_render_changes_only_two_pins_and_owned_meili_scratch_mount(self):
+        source = (run.TOOLS / "compose.yaml").read_bytes()
+        rendered = run.render_compose("ci-qualified-arm64")
+        for service, pin in run.CI_IMAGES.items():
+            self.assertIn(pin, (run.ROOT / ".github/workflows/ci.yml").read_text())
+            self.assertIn(("image: " + pin).encode(), rendered)
+            rendered = rendered.replace(pin.encode(), run.IMAGES[service].encode())
+        rendered = rendered.replace(
+            ('    tmpfs:\n      - "' + run.CI_MEILI_TMPFS + '"\n').encode(),
+            b"    volumes:\n      - meilisearch-data:/meili_data\n")
+        self.assertEqual(rendered, source)
+
+    def test_ci_inspection_requires_exact_pin_platform_id_and_existing_runtime_policy(self):
+        pin = run.CI_IMAGES["postgres"]
+        record = {"Id": "sha256:" + "b" * 64, "RepoDigests": [pin],
+                  "Os": "linux", "Architecture": "arm64", "Config": {"marker": "fixture"}}
+        with patch.object(run, "runtime_image_contract") as contract:
+            self.assertEqual(run.admit_image("ci-qualified-arm64", "postgres", pin, [record]), record["Id"])
+            contract.assert_called_once_with("postgres", record["Config"])
+        for field, value in (("Id", "sha256:short"), ("RepoDigests", []),
+                             ("Os", "windows"), ("Architecture", "amd64")):
+            with self.subTest(field=field), patch.object(run, "runtime_image_contract") as contract:
+                with self.assertRaises(ownership.WalkthroughError):
+                    run.admit_image("ci-qualified-arm64", "postgres", pin, [{**record, field: value}])
+                contract.assert_not_called()
+        with self.assertRaises(ownership.WalkthroughError):
+            run.admit_image("ci-qualified-arm64", "postgres", pin, [record, record])
+        with self.assertRaises(ownership.WalkthroughError):
+            run.runtime_image_contract("postgres", {})
+
+    def test_runtime_inspection_retains_uid_and_tmpfs_in_ownership_fingerprint(self):
+        runtime = run.Runtime.__new__(run.Runtime)
+        runtime.state = {"docker": "/offline/docker"}
+        runtime.docker_env = {}
+        fixture = {"Id": "id", "Name": "/owned", "Image": "sha256:fixture",
+                   "Config": {"Labels": {}, "User": "1000:1000"},
+                   "HostConfig": {"PortBindings": {}, "Memory": 1073741824,
+                                  "MemorySwap": 1073741824, "NanoCpus": 1000000000,
+                                  "PidsLimit": 256, "Tmpfs": {"/meili_data": "uid=1000,gid=1000,mode=0700,size=512m"}}}
+        with patch.object(run, "read_command", return_value=json.dumps([fixture])):
+            record = runtime.inspect("id")
+        self.assertEqual(record["user"], "1000:1000")
+        self.assertEqual(record["tmpfs"], fixture["HostConfig"]["Tmpfs"])
 
 
 if __name__ == "__main__":

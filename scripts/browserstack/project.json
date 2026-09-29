@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "status": "reviewed-ready-for-first-run",
+  "repository": "liangzixuan/cronometer-gold",
+  "branch": "refs/heads/codex/retention-features",
+  "origin": "http://127.0.0.1:3287",
+  "browser": "chrome",
+  "browserVersion": "latest",
+  "os": "Windows",
+  "osVersion": "11",
+  "playwrightVersion": "1.59.0",
+  "sessions": 1,
+  "retries": 0,
+  "localOnly": "127.0.0.1,3287,0",
+  "localBinary": {
+    "url": "https://local-downloads.browserstack.com/BrowserStackLocal-linux-arm64.zip",
+    "archiveSha256": "666c7cf9f48d4f58de13cdc62877c9f9531cf0ce871a92d39ed00ed0877d781e",
+    "binarySha256": "51dfcda89d9cbe9842957b82df3de29a28c25e1894c38264d54b0c035eb8654c",
+    "archiveBytes": 15235231,
+    "binaryBytes": 47523950,
+    "version": "8.9",
+    "architecture": "arm64"
+  },
+  "images": [
+    "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3",
+    "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa"
+  ],
+  "imageProfile": "ci-qualified-arm64",
+  "imageProducers": [
+    {
+      "image": "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3",
+      "sourceSha": "924822c3f100ebf68f5fa65aa81d982dea74d82d",
+      "workflowSha": "924822c3f100ebf68f5fa65aa81d982dea74d82d",
+      "sourceRef": "refs/heads/codex/retention-features"
+    },
+    {
+      "image": "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa",
+      "sourceSha": "e46b91afe7d875c74e0ce27f5e129edfb8efc70d",
+      "workflowSha": "e46b91afe7d875c74e0ce27f5e129edfb8efc70d",
+      "sourceRef": "refs/heads/codex/retention-features"
+    }
+  ]
+}

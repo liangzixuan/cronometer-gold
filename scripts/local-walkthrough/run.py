@@ -4,8 +4,10 @@ import argparse
 import base64
 import datetime
 import hashlib
+import importlib.util
 import json
 import os
+import platform
 from pathlib import Path
 import re
 import secrets
@@ -29,6 +31,85 @@ IMAGES = {
     "postgres": "postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94",
     "meilisearch": "getmeili/meilisearch:v1.32.0@sha256:61b1c86c459fa52d0653516f573702791e611574737dc76175ae9d2628c911f5",
 }
+
+
+CI_IMAGES = {
+    "postgres": "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3",
+    "meilisearch": "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa",
+}
+CI_MEILI_TMPFS = "/meili_data:uid=1000,gid=1000,mode=0700,size=512m"
+CI_CONTEXT_KEYS = (
+    "GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "RUNNER_OS", "RUNNER_ARCH",
+    "GITHUB_REPOSITORY", "GITHUB_REF", "GITHUB_EVENT_NAME",
+    "GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT",
+)
+
+
+def profile_images(profile):
+    require(profile in ("local", "ci-qualified-arm64"), "Unknown image profile.")
+    return dict(IMAGES if profile == "local" else CI_IMAGES)
+
+
+def profile_context(profile):
+    profile_images(profile)
+    if profile == "local":
+        return None
+    context = {key: os.environ.get(key, "") for key in CI_CONTEXT_KEYS}
+    require(sys.platform == "linux" and platform.machine() in ("aarch64", "arm64")
+            and context["GITHUB_ACTIONS"] == "true"
+            and context["RUNNER_ENVIRONMENT"] == "github-hosted"
+            and context["RUNNER_OS"] == "Linux" and context["RUNNER_ARCH"] == "ARM64"
+            and context["GITHUB_REPOSITORY"] == "liangzixuan/cronometer-gold"
+            and context["GITHUB_REF"] == "refs/heads/codex/retention-features"
+            and context["GITHUB_EVENT_NAME"] in ("push", "workflow_dispatch")
+            and re.fullmatch(r"[a-f0-9]{40}", context["GITHUB_SHA"]) is not None
+            and all(re.fullmatch(r"[1-9][0-9]*", context[key]) is not None
+                    for key in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT")),
+            "CI image profile requires the trusted GitHub-hosted ARM workflow context.")
+    return context
+
+
+def render_compose(profile):
+    images = profile_images(profile)
+    source = (TOOLS / "compose.yaml").read_bytes()
+    if profile == "local":
+        return source
+    for service, pin in images.items():
+        previous = ("    image: " + IMAGES[service] + "\n").encode()
+        require(source.count(previous) == 1, "Local Compose image declaration changed.")
+        source = source.replace(previous, ("    image: " + pin + "\n").encode())
+    previous = b"    volumes:\n      - meilisearch-data:/meili_data\n"
+    require(source.count(previous) == 1, "Local Meilisearch volume declaration changed.")
+    return source.replace(previous, ('    tmpfs:\n      - "' + CI_MEILI_TMPFS + '"\n').encode())
+
+
+def runtime_image_contract(service, config):
+    # Reuse the repository's reviewed runtime policy; CI verifies attestations/scans first.
+    policy = ROOT / "infra/oci/files/image-admission.py"
+    spec = importlib.util.spec_from_file_location("walkthrough_image_admission", policy)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    variable = "POSTGRES_IMAGE" if service == "postgres" else "MEILI_IMAGE"
+    try:
+        module.require_repository_runtime_contract(variable, config)
+    except SystemExit as error:
+        raise WalkthroughError("CI image does not match the reviewed runtime contract.") from error
+
+
+def admit_image(profile, service, pin, inspected):
+    require(profile_images(profile).get(service) == pin,
+            "Image reference differs from the selected profile.")
+    require(type(inspected) is list and len(inspected) == 1 and type(inspected[0]) is dict,
+            "Expected exactly one inspected image.")
+    image = inspected[0]
+    if profile == "ci-qualified-arm64":
+        require(image.get("Os") == "linux" and image.get("Architecture") == "arm64"
+                and type(image.get("RepoDigests")) is list and pin in image["RepoDigests"]
+                and re.fullmatch(r"sha256:[a-f0-9]{64}", image.get("Id", "")) is not None
+                and type(image.get("Config")) is dict,
+                "CI image digest or native platform differs from its reviewed pin.")
+        runtime_image_contract(service, image["Config"])
+    return image["Id"]
 
 
 def now():
@@ -97,11 +178,19 @@ class Runtime:
     def __init__(self, directory):
         self.path = linux_directory(directory, private=True)
         self.state = read_private_json(self.path / "runtime.json")
-        require(self.state.get("version") == 1 and self.state.get("syntheticOnly") is True
+        require(self.state.get("version") == 2 and self.state.get("syntheticOnly") is True
                 and self.state.get("runtime") == str(self.path)
                 and self.state.get("repository") == str(ROOT)
                 and re.fullmatch(r"[a-f0-9]{16}", self.state.get("runId", "")) is not None,
                 "Runtime identity does not match this checkout.")
+        self.profile = self.state["imageProfile"]
+        require(self.state["imagePins"] == profile_images(self.profile)
+                and set(self.state["images"]) == set(self.state["imagePins"]),
+                "Runtime images differ from their selected profile.")
+        context = self.state["imageContext"]
+        require((self.profile == "local" and context is None)
+                or (self.profile == "ci-qualified-arm64" and type(context) is dict
+                    and set(context) == set(CI_CONTEXT_KEYS)), "Invalid recorded CI context.")
         self.run_id = self.state["runId"]
         self.ports = self.state["ports"]
         require(set(self.ports) == {"web", "api", "postgres", "meilisearch"}
@@ -160,8 +249,10 @@ class Runtime:
             print(json.dumps(receipt), flush=True)
 
     def inspect(self, container_id):
-        return container_identity(json.loads(read_command(
-            self.docker("inspect", container_id), env=self.docker_env))[0])
+        value = json.loads(read_command(
+            self.docker("inspect", container_id), env=self.docker_env))[0]
+        return {**container_identity(value), "user": value["Config"].get("User") or "",
+                "tmpfs": value["HostConfig"].get("Tmpfs") or {}}
 
     def owned_containers(self):
         records = read_private_json(self.path / "containers.json")
@@ -189,6 +280,12 @@ class Runtime:
                     and record["memorySwap"] == 1_073_741_824
                     and record["nanoCpus"] == 1_000_000_000 and record["pidsLimit"] == 256,
                     "Created container does not match the pinned, bounded local contract.")
+            expected_tmpfs = {"/meili_data": CI_MEILI_TMPFS.split(":", 1)[1]} \
+                if self.profile == "ci-qualified-arm64" and service == "meilisearch" else {}
+            require(record["tmpfs"] == expected_tmpfs, "Container scratch mount differs from its profile.")
+            if self.profile == "ci-qualified-arm64":
+                require(record["user"] == ("70:70" if service == "postgres" else "1000:1000"),
+                        "CI container user differs from its admitted image.")
             records.append(record)
         write_json(self.path / "containers.json", records)
         return records
@@ -221,6 +318,11 @@ class Runtime:
                    {"identity": identity, "startedAt": now(), "log": str(log), "argv": arguments})
 
     def start_apps(self):
+        require(profile_context(self.profile) == self.state["imageContext"],
+                "Runtime belongs to another CI workflow context.")
+        if self.profile == "ci-qualified-arm64":
+            require(read_command(["git", "rev-parse", "HEAD"]).strip() == self.state["head"]
+                    == self.state["imageContext"]["GITHUB_SHA"], "CI source identity changed.")
         containers = self.owned_containers()
         require(len(containers) == 2, "Both owned containers are required.")
         for record in containers:
@@ -279,6 +381,11 @@ def ready(url, *, api=False):
 
 
 def prepare(arguments):
+    context = profile_context(arguments.image_profile)
+    image_pins = profile_images(arguments.image_profile)
+    if context is not None:
+        require(read_command(["git", "rev-parse", "HEAD"]).strip() == context["GITHUB_SHA"],
+                "CI checkout does not match its event source.")
     linux_directory(ROOT)
     ports = selected_ports(arguments)
     free_ports(ports.values())
@@ -300,13 +407,14 @@ def prepare(arguments):
                   "DOCKER_CONFIG": str(path / "docker-config")}
     read_command([docker, "info", "--format", "{{.ID}}"], env=docker_env)
     read_command([docker, "compose", "version", "--short"], env=docker_env)
-    images = {service: json.loads(read_command([docker, "image", "inspect", pin], env=docker_env))[0]["Id"]
-              for service, pin in IMAGES.items()}
+    images = {service: admit_image(arguments.image_profile, service, pin,
+              json.loads(read_command([docker, "image", "inspect", pin], env=docker_env)))
+              for service, pin in image_pins.items()}
     require(not read_command([docker, "ps", "-aq", "--filter",
                 "label=com.docker.compose.project=nourishing-walkthrough-" + run_id], env=docker_env).strip(),
             "The generated project name already exists.")
     password, master = secrets.token_hex(24), secrets.token_hex(32)
-    shutil.copyfile(TOOLS / "compose.yaml", path / "compose.yaml")
+    (path / "compose.yaml").write_bytes(render_compose(arguments.image_profile))
     (path / "compose.env").write_text(f"WALKTHROUGH_RUN_ID={run_id}\nPOSTGRES_PASSWORD={password}\nMEILI_MASTER_KEY={master}\n"
         f"WALKTHROUGH_POSTGRES_PORT={ports['postgres']}\nWALKTHROUGH_MEILI_PORT={ports['meilisearch']}\n")
     b64 = lambda: base64.b64encode(secrets.token_bytes(32)).decode()
@@ -326,7 +434,8 @@ def prepare(arguments):
         "EXPORT_ARTIFACT_STORE": "filesystem", "EXPORT_ARTIFACT_DIRECTORY": str(path / "exports"),
         "EXPORT_ARTIFACT_READ_SPOOL_DIR": str(path / "spool")}
     write_json(path / "private-env.json", private)
-    write_json(path / "runtime.json", {"version": 1, "syntheticOnly": True, "createdAt": now(),
+    write_json(path / "runtime.json", {"version": 2, "syntheticOnly": True, "createdAt": now(),
+        "imageProfile": arguments.image_profile, "imagePins": image_pins, "imageContext": context,
         "runtime": str(path), "repository": str(ROOT), "runId": run_id, "ports": ports,
         "node": node, "docker": docker, "images": images, "composeSha256": digest(path / "compose.yaml"),
         "buildId": (ROOT / "apps/web/.next/BUILD_ID").read_text().strip(),
@@ -399,6 +508,8 @@ def parser():
     actions = value.add_subparsers(dest="action", required=True)
     fresh = actions.add_parser("create", help="Opt in to new synthetic containers, account and applications")
     fresh.add_argument("--runtime-parent", required=True, help="Existing Linux directory outside the checkout")
+    fresh.add_argument("--image-profile", choices=("local", "ci-qualified-arm64"), default="local",
+                       help="Use the local defaults or the admitted GitHub-hosted ARM CI images")
     for name, default in (("web", 3287), ("api", 4287), ("postgres", 55488), ("meilisearch", 57788)):
         fresh.add_argument("--" + name + "-port", default=default)
     for action in ("status", "stop", "stop-apps", "start-apps", "restart-apps"):

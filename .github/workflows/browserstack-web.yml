@@ -1,0 +1,100 @@
+name: browserstack-web
+on:
+  push:
+    branches: [codex/retention-features]
+  workflow_dispatch:
+permissions:
+  contents: read
+  attestations: read
+  packages: read
+concurrency:
+  group: nourishing-browserstack-one-session
+  cancel-in-progress: false
+jobs:
+  synthetic-browser:
+    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      NEXT_TELEMETRY_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.23.2
+          cache: pnpm
+      - name: Install locked development dependencies
+        run: |
+          test "$(pnpm --version)" = "11.19.0"
+          pnpm install --frozen-lockfile --strict-peer-dependencies
+      - name: Set up the repository-pinned image inspection tool
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.36.1
+          driver: docker
+          cache-binary: false
+      - name: Bind checkout and prepare pinned browser/image assets
+        run: python3 -B scripts/browserstack/ci-run.py prepare
+      - name: Verify exact original service image provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/browserstack/ci-run.py admit-images
+      - name: Initialize empty fixture vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/browser-fixture.trivyignore"
+      - name: Reject high or critical PostgreSQL fixture vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          version: v0.74.0
+          cache: false
+          scan-type: image
+          image-ref: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/browser-fixture.trivyignore
+          exit-code: "1"
+          timeout: 5m
+      - name: Reject high or critical Meilisearch fixture vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        with:
+          version: v0.74.0
+          cache: false
+          scan-type: image
+          image-ref: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/browser-fixture.trivyignore
+          exit-code: "1"
+          timeout: 5m
+      - name: Build this checkout without task-cache reuse
+        run: |
+          pnpm build --force
+          python3 -B scripts/browserstack/ci-run.py record-build
+      - name: Start the bounded synthetic real app
+        timeout-minutes: 11
+        run: python3 -B scripts/browserstack/ci-run.py start
+      - name: One BrowserStack Local browser session
+        timeout-minutes: 5
+        env:
+          BROWSERSTACK_USERNAME: ${{ secrets.BROWSERSTACK_USERNAME }}
+          BROWSERSTACK_ACCESS_KEY: ${{ secrets.BROWSERSTACK_ACCESS_KEY }}
+        run: python3 -B scripts/browserstack/ci-run.py run
+      - name: Stop owned tunnel, applications and containers
+        if: always()
+        timeout-minutes: 4
+        run: python3 -B scripts/browserstack/ci-run.py cleanup
+      - name: Print the bounded source, browser and cleanup receipt
+        if: always()
+        run: python3 -B scripts/browserstack/ci-run.py summary

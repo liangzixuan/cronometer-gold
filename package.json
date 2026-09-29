@@ -38,7 +38,9 @@
     "test": "turbo run test --concurrency=2",
     "test:localstack:dev": "python3 -B infra/localstack/dev-profile.py verify",
     "typecheck": "turbo run typecheck",
-    "verify": "pnpm check && pnpm build && pnpm audit:prod && pnpm licenses:check"
+    "verify": "pnpm check && pnpm build && pnpm audit:prod && pnpm licenses:check",
+    "test:browserstack:smoke": "python3 -B scripts/browserstack/ci-run.py run",
+    "test:browserstack:cleanup": "python3 -B scripts/browserstack/ci-run.py cleanup"
   },
   "devDependencies": {
     "@babel/parser": "7.29.8",
@@ -46,8 +48,9 @@
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "dotenv-cli": "11.0.0",
-    "turbo": "2.10.10",
+    "playwright": "1.59.0",
     "tsx": "4.23.12",
+    "turbo": "2.10.10",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

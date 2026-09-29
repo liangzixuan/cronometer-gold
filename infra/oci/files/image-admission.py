@@ -348,6 +348,19 @@ def require_repository_runtime_contract(variable, config):
         fail(f"{variable} environment differs from the reviewed runtime contract")
 
 
+def require_repository_source_contract(variable, config, revision):
+    labels = config.get("Labels") or {}
+    component = REPOSITORY_IMAGES[variable][1]
+    expected = {
+        "org.opencontainers.image.revision": revision,
+        "org.opencontainers.image.source": "https://github.com/liangzixuan/cronometer-gold",
+        "org.opencontainers.image.title": f"cronometer-gold-{component}",
+        "org.opencontainers.image.version": f"sha-{revision}",
+    }
+    if any(labels.get(key) != value for key, value in expected.items()):
+        fail(f"{variable} source, revision, title, or version differs from the release contract")
+
+
 def inspect_images(deploy_file, runtime_file):
     deploy = validate(deploy_file)
     runtime = read_env(runtime_file)
@@ -361,16 +374,7 @@ def inspect_images(deploy_file, runtime_file):
             "linux", "arm64",
         ):
             fail(f"{variable} is not a pulled linux/arm64 runtime image")
-        labels = inspected[0].get("Config", {}).get("Labels") or {}
-        component = REPOSITORY_IMAGES[variable][1]
-        expected = {
-            "org.opencontainers.image.revision": revision,
-            "org.opencontainers.image.source": "https://github.com/liangzixuan/cronometer-gold",
-            "org.opencontainers.image.title": f"cronometer-gold-{component}",
-            "org.opencontainers.image.version": f"sha-{revision}",
-        }
-        if any(labels.get(key) != value for key, value in expected.items()):
-            fail(f"{variable} source, revision, title, or version differs from the release contract")
+        require_repository_source_contract(variable, inspected[0].get("Config", {}), revision)
         require_repository_runtime_contract(variable, inspected[0].get("Config", {}))
 
 
