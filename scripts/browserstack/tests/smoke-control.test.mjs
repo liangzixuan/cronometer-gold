@@ -188,6 +188,26 @@ async function mealSelectorModel() {
 
 async function exercise(options = {}, smokeSource = source) {
   const mealModel = options.mealModel;
+  let clock = 0;
+  const metadataSignals = [],
+    metadataDelays = [],
+    journeyTimeouts = [],
+    signalHandlers = {};
+  const testAbortSignal = {
+    timeout(milliseconds) {
+      const deadline = clock + milliseconds;
+      const signal = {
+        get aborted() {
+          return clock >= deadline;
+        },
+        throwIfAborted() {
+          if (this.aborted) throw new Error("Synthetic deadline");
+        },
+      };
+      metadataSignals.push({ milliseconds, signal });
+      return signal;
+    },
+  };
   let currentURL = "",
     count = 6,
     connected = 0,
@@ -229,7 +249,13 @@ async function exercise(options = {}, smokeSource = source) {
     BROWSERSTACK_ACCESS_KEY: "synthetic-key",
   };
   if (options.missingCredential) delete env.BROWSERSTACK_ACCESS_KEY;
-  const fakeProcess = { env, once() {}, exitCode: undefined };
+  const fakeProcess = {
+    env,
+    once(name, callback) {
+      signalHandlers[name] = callback;
+    },
+    exitCode: undefined,
+  };
   const locator = (label = "") => ({
     waitFor: async () => {
       if (label === "Local day") searchOperation("wait-destination");
@@ -380,16 +406,24 @@ async function exercise(options = {}, smokeSource = source) {
   };
   const terminalFetch = async (url, config) => {
     assert.equal(closed, 1, "Terminal read must follow browser close");
+    const phase = options.terminalSequence?.[fetches.length] ?? {};
     fetches.push([url, config]);
+    clock += phase.requestMs ?? 0;
+    config.signal.throwIfAborted();
+    if (phase.transportFailure) throw new Error("SYNTHETIC-SECRET-SENTINEL");
     const value = {
       automation_session: {
-        hashed_id: options.crossSession ? "other-session" : "synthetic-session",
+        hashed_id: options.crossSession || phase.foreign ? "other-session" : "synthetic-session",
         name: "synthetic-login-search-add-report",
         project_name: "Nourishing",
         build_name: options.wrongBuild ? "another-build" : `nourishing-${input.sourceSha}-123-1`,
-        status: options.terminalFailed ? "failed" : "passed",
-        browserstack_status: options.terminalRunning ? "running" : "done",
-        duration: options.fractionalDuration ? 25.5 : 25,
+        status: phase.status ?? (options.terminalFailed ? "failed" : "passed"),
+        browserstack_status: phase.execution ?? (options.terminalRunning ? "running" : "done"),
+        duration: Object.hasOwn(phase, "duration")
+          ? phase.duration
+          : options.fractionalDuration
+            ? 25.5
+            : 25,
         video_url: options.videoPresent
           ? "https://private.invalid/SYNTHETIC-SECRET-SENTINEL"
           : null,
@@ -398,16 +432,23 @@ async function exercise(options = {}, smokeSource = source) {
         playwright_logs_url: null,
       },
     };
+    if (phase.malformed)
+      value.automation_session.video_url = { private: "SYNTHETIC-SECRET-SENTINEL" };
     if (options.oversizedResponse) value.ignoredPrivate = "X".repeat(70 * 1024);
+    if (phase.paddingBytes) value.ignoredPrivate = "X".repeat(phase.paddingBytes);
     const bytes = new TextEncoder().encode(JSON.stringify(value));
     let consumed = false;
     return {
-      ok: !options.terminalHttpFailure,
+      ok: !(options.terminalHttpFailure || phase.httpFailure),
       body: {
         getReader: () => ({
           read: async () => {
             if (consumed) return { done: true };
             consumed = true;
+            clock += phase.bodyMs ?? 0;
+            config.signal.throwIfAborted();
+            if (phase.bodyFailure) throw new Error("SYNTHETIC-SECRET-SENTINEL");
+            if (phase.cancel) signalHandlers.SIGTERM();
             return { value: bytes, done: false };
           },
           cancel: async () => {},
@@ -420,7 +461,7 @@ async function exercise(options = {}, smokeSource = source) {
   const context = vm.createContext({
     URL,
     Buffer,
-    AbortSignal,
+    AbortSignal: testAbortSignal,
     TextDecoder,
     Uint8Array,
     fetch: terminalFetch,
@@ -433,7 +474,10 @@ async function exercise(options = {}, smokeSource = source) {
       },
     },
     process: fakeProcess,
-    setTimeout: () => 1,
+    setTimeout: (_callback, milliseconds) => {
+      journeyTimeouts.push(milliseconds);
+      return 1;
+    },
     clearTimeout() {},
     document,
     window: { innerWidth: 390 },
@@ -457,6 +501,15 @@ async function exercise(options = {}, smokeSource = source) {
   await module.link((name) => {
     if (name === "node:assert/strict") return moduleFor(name, { default: assert });
     if (name === "node:path") return moduleFor(name, { join });
+    if (name === "node:timers/promises")
+      return moduleFor(name, {
+        setTimeout: async (milliseconds, _value, { signal }) => {
+          signal.throwIfAborted();
+          metadataDelays.push(milliseconds);
+          clock += milliseconds;
+          signal.throwIfAborted();
+        },
+      });
     if (name === "node:fs/promises")
       return moduleFor(name, {
         readFile: async (path) =>
@@ -501,6 +554,10 @@ async function exercise(options = {}, smokeSource = source) {
     navigations,
     observedSearchOperations,
     mealReads,
+    metadataSignals,
+    metadataDelays,
+    journeyTimeouts,
+    clock,
     addClicks,
     exitCode: fakeProcess.exitCode,
     rejection,
@@ -708,9 +765,144 @@ test("browser close failure fails local receipt", async () => {
 test("1135 kcal cannot satisfy the intended exact135 kcal assertion", async () => {
   assert.equal((await exercise({ energy: "1135" })).receipt.status, "failed");
 });
+test("same-session running observations converge within one metadata budget without replay", async () => {
+  const result = await exercise({
+    terminalSequence: [
+      { execution: "running", duration: null },
+      { execution: "running" },
+      { execution: "done" },
+    ],
+  });
+  assert.equal(result.receipt.status, "passed");
+  assert.equal(result.receipt.terminalReadCount, 3);
+  assert.equal(result.receipt.terminal.browserstackStatus, "done");
+  assert.deepEqual(result.metadataDelays, [1000, 2000]);
+  assert.deepEqual(result.journeyTimeouts, [180000]);
+  assert.equal(result.metadataSignals.length, 1);
+  assert.equal(result.metadataSignals[0].milliseconds, 15000);
+  assert(
+    result.fetches.every(
+      ([url, config]) =>
+        url === result.fetches[0][0] &&
+        config.signal === result.metadataSignals[0].signal &&
+        config.redirect === "error",
+    ),
+  );
+  assert.equal(result.connected, 1);
+  assert.equal(result.closed, 1);
+  assert.equal(result.addClicks, 1);
+  assert.equal(result.actions.filter((action) => action.action === "setSessionStatus").length, 1);
+  assert.deepEqual(result.observedSearchOperations, searchOperations);
+});
+
+test("persistent running stops after four reads and preserves the last safe observation", async () => {
+  const result = await exercise({ terminalRunning: true });
+  assert.equal(result.receipt.status, "failed");
+  assert.equal(result.receipt.failedStage, "terminal-verification");
+  assert.equal(result.receipt.terminalReadCount, 4);
+  assert.equal(result.fetches.length, 4);
+  assert.deepEqual(result.metadataDelays, [1000, 2000, 4000]);
+  assert.equal(result.receipt.terminal.browserstackStatus, "running");
+  assert.equal(result.connected, 1);
+  assert.equal(result.closed, 1);
+  assert.equal(result.addClicks, 1);
+});
+
+test("terminal requests bodies and delays share the original fifteen-second deadline", async () => {
+  for (const [sequence, reads, delays] of [
+    [[{ requestMs: 15000 }], 1, []],
+    [[{ bodyMs: 15000 }], 1, []],
+    [[{ execution: "running", requestMs: 14000 }], 1, [1000]],
+    [
+      [
+        { execution: "running", requestMs: 7000, bodyMs: 3000 },
+        { requestMs: 2000, bodyMs: 2000 },
+      ],
+      2,
+      [1000],
+    ],
+  ]) {
+    const result = await exercise({ terminalSequence: sequence });
+    assert.equal(result.receipt.status, "failed");
+    assert.equal(result.receipt.terminalReadCount, reads);
+    assert.equal(result.fetches.length, reads);
+    assert.deepEqual(result.metadataDelays, delays);
+    assert.equal(result.metadataSignals.length, 1);
+    assert.equal(result.metadataSignals[0].milliseconds, 15000);
+    assert.equal(result.connected, 1);
+    assert.equal(result.closed, 1);
+    assert.equal(result.addClicks, 1);
+  }
+});
+
+test("the metadata byte cap is aggregate across otherwise valid responses", async () => {
+  const result = await exercise({
+    terminalSequence: [
+      { execution: "running", paddingBytes: 20000 },
+      { execution: "running", paddingBytes: 20000 },
+      { execution: "running", paddingBytes: 20000 },
+      { execution: "done", paddingBytes: 20000 },
+    ],
+  });
+  assert.equal(result.receipt.status, "failed");
+  assert.equal(result.receipt.terminalReadCount, 4);
+  assert.equal(result.receipt.terminal.browserstackStatus, "running");
+  assert(!result.raw.includes("X".repeat(100)));
+});
+
+test("only validated passed-running metadata may be observed again", async () => {
+  for (const phase of [
+    { status: "failed" },
+    { execution: "error" },
+    { execution: "timeout" },
+    { execution: "failed" },
+    { status: "unknown" },
+    { malformed: true },
+    { foreign: true },
+    { httpFailure: true },
+    { transportFailure: true },
+    { bodyFailure: true },
+  ]) {
+    const result = await exercise({
+      terminalSequence: [{ execution: "running" }, { execution: "running", ...phase }],
+    });
+    assert.equal(result.receipt.status, "failed");
+    assert.equal(result.receipt.terminalReadCount, 2);
+    assert.equal(result.fetches.length, 2);
+    assert.deepEqual(result.metadataDelays, [1000]);
+    assert(!result.raw.includes("SYNTHETIC-SECRET-SENTINEL"));
+  }
+});
+
+test("prior journey status-update and close failures never enter terminal observation delays", async () => {
+  for (const failure of [{ loginFailure: true }, { statusFailure: true }, { closeFailure: true }]) {
+    const result = await exercise({ ...failure, terminalRunning: true });
+    assert.equal(result.receipt.status, "failed");
+    assert.equal(result.fetches.length, 1);
+    assert.equal(result.receipt.terminalReadCount, 1);
+    assert.deepEqual(result.metadataDelays, []);
+    if (failure.loginFailure) assert.equal(result.receipt.failedStage, expectedChecks[0]);
+  }
+});
+
+test("cancellation during metadata cannot accept a passed-done record", async () => {
+  const result = await exercise({ terminalSequence: [{ cancel: true }] });
+  assert.equal(result.receipt.status, "failed");
+  assert.equal(result.receipt.terminalReadCount, 1);
+  assert.equal(result.fetches.length, 1);
+  assert.deepEqual(result.metadataDelays, []);
+});
+
+test("passed-done requires an actual integer duration", async () => {
+  const result = await exercise({ terminalSequence: [{ duration: null }] });
+  assert.equal(result.receipt.status, "failed");
+  assert.equal(result.fetches.length, 1);
+});
+
 test("terminal verification reads the exact HTTPS session after close with no redirects", async () => {
   const result = await exercise();
   assert.equal(result.fetches.length, 1);
+  assert.equal(result.receipt.terminalReadCount, 1);
   assert.equal(
     result.fetches[0][0],
     "https://api.browserstack.com/automate/sessions/synthetic-session.json",

@@ -1,7 +1,8 @@
-// Draft destination: scripts/browserstack/smoke.mjs. One connection, no retries.
+// One browser journey, with bounded observations of its terminal session state.
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { chromium } from "playwright";
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: This standalone CI session runs outside Turbo; its credentials must not enter task caching.
@@ -116,78 +117,98 @@ async function diaryCount(number) {
   );
 }
 async function terminalDetails() {
-  // A single read after close. An eventual-consistency or API failure remains unaccepted;
-  // it never starts a second browser session. Never follow an authenticated redirect.
-  const response = await fetch(
-    `https://api.browserstack.com/automate/sessions/${receipt.sessionId}.json`,
-    {
-      headers: { Authorization: `Basic ${Buffer.from(`${username}:${key}`).toString("base64")}` },
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-    },
-  );
-  assert(response.ok && response.body, "Session metadata unavailable");
-  const reader = response.body.getReader();
-  const chunks = [];
+  // Only a validated passed/running session may be read again after close. All reads,
+  // response bodies and delays share one deadline and byte cap; no journey is replayed.
+  const signal = AbortSignal.timeout(15_000);
   let size = 0;
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      assert(size <= 64 * 1024, "Session metadata exceeds bound");
-      chunks.push(Buffer.from(value));
+  for (let attempt = 0; attempt < 4; attempt++) {
+    signal.throwIfAborted();
+    assert(!cancelled, "Session cancelled");
+    receipt.terminalReadCount = attempt + 1;
+    const response = await fetch(
+      `https://api.browserstack.com/automate/sessions/${receipt.sessionId}.json`,
+      {
+        headers: { Authorization: `Basic ${Buffer.from(`${username}:${key}`).toString("base64")}` },
+        redirect: "error",
+        signal,
+      },
+    );
+    signal.throwIfAborted();
+    assert(response.ok && response.body, "Session metadata unavailable");
+    const reader = response.body.getReader();
+    const chunks = [];
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        signal.throwIfAborted();
+        if (done) break;
+        size += value.byteLength;
+        assert(size <= 64 * 1024, "Session metadata exceeds bound");
+        chunks.push(Buffer.from(value));
+      }
+    } finally {
+      await reader.cancel();
     }
-  } finally {
-    await reader.cancel();
+    signal.throwIfAborted();
+    const details = JSON.parse(Buffer.concat(chunks).toString("utf8")).automation_session;
+    assert.equal(details.hashed_id, receipt.sessionId);
+    assert.equal(details.project_name, caps.project);
+    assert.equal(details.build_name, caps.build);
+    assert.equal(details.name, caps.name);
+    assert(
+      details.duration === null ||
+        (Number.isInteger(details.duration) && details.duration >= 0 && details.duration <= 240),
+    );
+    assert(["passed", "failed", "done", "running", "error", "timeout"].includes(details.status));
+    assert(["done", "running", "error", "failed", "timeout"].includes(details.browserstack_status));
+    const observedArtifacts = {};
+    for (const field of [
+      "video_url",
+      "har_logs_url",
+      "browser_console_logs_url",
+      "playwright_logs_url",
+    ]) {
+      const value = details[field];
+      assert(value === undefined || value === null || typeof value === "string");
+      observedArtifacts[field] =
+        value === undefined
+          ? "missing"
+          : value === null
+            ? "null"
+            : value === ""
+              ? "empty"
+              : "present";
+    }
+    // Presence fields are documented URLs, not an authoritative capability echo.
+    // Do not fetch or retain signed URLs or claim that absent links prove capture/masking.
+    receipt.capture = {
+      requested: captureRequested,
+      observedArtifacts,
+      dashboardVerification: "pending-first-run-review",
+    };
+    receipt.terminal = {
+      sessionId: details.hashed_id,
+      status: details.status,
+      browserstackStatus: details.browserstack_status,
+      durationSeconds: details.duration,
+      buildName: details.build_name,
+      projectName: details.project_name,
+      name: details.name,
+    };
+    assert(!cancelled, "Session cancelled");
+    if (details.browserstack_status === "done") {
+      if (receipt.status === "passed") {
+        assert.equal(details.status, "passed");
+        assert(Number.isInteger(details.duration));
+      }
+      return;
+    }
+    assert.equal(receipt.status, "passed");
+    assert.equal(details.status, "passed");
+    assert.equal(details.browserstack_status, "running");
+    assert(attempt < 3, "Session remains nonterminal");
+    await delay([1_000, 2_000, 4_000][attempt], undefined, { signal });
   }
-  const details = JSON.parse(Buffer.concat(chunks).toString("utf8")).automation_session;
-  assert.equal(details.hashed_id, receipt.sessionId);
-  assert.equal(details.project_name, caps.project);
-  assert.equal(details.build_name, caps.build);
-  assert.equal(details.name, caps.name);
-  assert(
-    details.duration === null ||
-      (Number.isInteger(details.duration) && details.duration >= 0 && details.duration <= 240),
-  );
-  assert(["passed", "failed", "done", "running", "error", "timeout"].includes(details.status));
-  assert(["done", "running", "error", "failed", "timeout"].includes(details.browserstack_status));
-  const observedArtifacts = {};
-  for (const field of [
-    "video_url",
-    "har_logs_url",
-    "browser_console_logs_url",
-    "playwright_logs_url",
-  ]) {
-    const value = details[field];
-    assert(value === undefined || value === null || typeof value === "string");
-    observedArtifacts[field] =
-      value === undefined
-        ? "missing"
-        : value === null
-          ? "null"
-          : value === ""
-            ? "empty"
-            : "present";
-  }
-  // Presence fields are documented URLs, not an authoritative capability echo.
-  // Do not fetch or retain signed URLs or claim that absent links prove capture/masking.
-  receipt.capture = {
-    requested: captureRequested,
-    observedArtifacts,
-    dashboardVerification: "pending-first-run-review",
-  };
-  receipt.terminal = {
-    sessionId: details.hashed_id,
-    status: details.status,
-    browserstackStatus: details.browserstack_status,
-    durationSeconds: details.duration,
-    buildName: details.build_name,
-    projectName: details.project_name,
-    name: details.name,
-  };
-  assert.equal(details.browserstack_status, "done");
-  if (receipt.status === "passed") assert.equal(details.status, "passed");
 }
 try {
   // The endpoint/capabilities never enter stdout, error reports, or artifacts.
