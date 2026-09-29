@@ -50,32 +50,34 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
         with:
           version: v0.74.0
           cache: false
+          cache-dir: ${{ runner.temp }}/browser-fixture-trivy-cache
           scan-type: image
           image-ref: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
           ignore-unfixed: false
-          trivyignores: ${{ runner.temp }}/browser-fixture.trivyignore
           exit-code: "1"
           timeout: 5m
       - name: Reject high or critical Meilisearch fixture vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
         with:
           version: v0.74.0
           cache: false
+          cache-dir: ${{ runner.temp }}/browser-fixture-trivy-cache
           scan-type: image
           image-ref: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
           ignore-unfixed: false
-          trivyignores: ${{ runner.temp }}/browser-fixture.trivyignore
           exit-code: "1"
           timeout: 5m
       - name: Build this checkout without task-cache reuse

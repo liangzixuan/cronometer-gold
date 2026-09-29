@@ -12,6 +12,11 @@ for (const [name, executable, args] of [
     ["-B", fileURLToPath(new URL("tests/test_admission.py", directory)), "-v"],
   ],
   [
+    "pinned Trivy workflow workspace contracts",
+    "python3",
+    ["-B", fileURLToPath(new URL("tests/test_trivy_workflow.py", directory)), "-v"],
+  ],
+  [
     "pinned vendor artifact contracts",
     "python3",
     ["-B", fileURLToPath(new URL("tests/test_vendor.py", directory)), "-v"],
