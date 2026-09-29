@@ -3,6 +3,7 @@ import ast
 import contextlib
 import hashlib
 import io
+import importlib.util
 import json
 import os
 import re
@@ -278,6 +279,179 @@ class DraftTests(unittest.TestCase):
         value = json.loads((self.private / 'browser-result.json').read_text())
         value.update(changes)
         self.write('browser-result.json', value)
+
+    def startup_fixture(self, commands=()):
+        runtime = self.private / 'runtimes/nourishing-walkthrough-synthetic'
+        runtime.mkdir(parents=True, mode=0o700)
+        state = {'version': 2, 'syntheticOnly': True, 'runtime': str(runtime),
+                 'repository': str(self.root), 'head': SHA, 'runId': 'a' * 16}
+        (runtime / 'runtime.json').write_text(json.dumps(state))
+        (runtime / 'runtime.json').chmod(0o600)
+        self.write('runtime-path', str(runtime))
+        (self.private / 'runtime-path').write_text(str(runtime) + '\n')
+        (self.private / 'runtime-path').chmod(0o600)
+        (self.private / 'create.stderr').write_text(json.dumps({'failed': True, 'reason': 'Expected two owned containers.'}))
+        (self.private / 'create.stderr').chmod(0o600)
+        for label, code in commands:
+            record = {'label': label, 'exit': code, 'startedAt': '2026-09-29T04:00:00+00:00',
+                      'endedAt': '2026-09-29T04:00:01.250000+00:00',
+                      'argv': ['SYNTHETIC-SECRET-ARGV'], 'log': '/SYNTHETIC-PRIVATE-PATH'}
+            path = runtime / (label + '-12345678.json')
+            path.write_text(json.dumps(record)); path.chmod(0o600)
+        return runtime
+
+    def failed_start(self):
+        self.ns['_start_runtime'] = mock.Mock(side_effect=RuntimeError('SYNTHETIC-PRIMARY-SECRET'))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaisesRegex(RuntimeError, 'SYNTHETIC-PRIMARY-SECRET'):
+            self.ns['start']()
+        text = output.getvalue()
+        self.assertNotIn('SYNTHETIC-PRIMARY-SECRET', text)
+        return json.loads(text)['startupFailure']
+
+    def test_startup_failure_projects_actual_receipt_shape_without_private_fields(self):
+        self.startup_fixture([('dependencies', 1)])
+        value = self.failed_start()
+        self.assertEqual(value, {'diagnostics': 'available', 'runtimeCreated': True,
+            'commands': [{'phase': 'dependencies', 'exit': 1, 'status': 'failed', 'elapsedMilliseconds': 1250}],
+            'guardCode': 'container-count'})
+        self.assertNotIn('SYNTHETIC-', json.dumps(value))
+
+    def test_real_launcher_command_receipt_is_safely_projected(self):
+        runtime = self.startup_fixture()
+        launcher_path = DRAFT.parent / 'local-walkthrough'
+        sys.path.insert(0, str(launcher_path))
+        try:
+            spec = importlib.util.spec_from_file_location('startup_receipt_launcher', launcher_path / 'run.py')
+            launcher = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(launcher)
+        finally:
+            sys.path.remove(str(launcher_path))
+        instance = object.__new__(launcher.Runtime)
+        instance.path, instance.run_id, instance.base = runtime, 'a' * 16, {}
+        child = mock.Mock(pid=4321)
+        child.wait.return_value = 1
+        with mock.patch.object(launcher.subprocess, 'Popen', return_value=child), \
+                mock.patch.object(launcher, 'live_identity', return_value=None), \
+                contextlib.redirect_stdout(io.StringIO()), self.assertRaises(launcher.WalkthroughError):
+            instance.command('dependencies', ['SYNTHETIC-SECRET-ARGV'])
+        value = self.ns['startup_diagnostic']()
+        self.assertEqual(value['diagnostics'], 'available')
+        self.assertEqual(value['commands'][0]['phase'], 'dependencies')
+        self.assertEqual(value['commands'][0]['exit'], 1)
+        self.assertNotIn('SYNTHETIC-', json.dumps(value))
+        self.assertNotIn(str(runtime), json.dumps(value))
+
+    def test_actual_start_failure_captures_runtime_and_keeps_original_exception(self):
+        self.build_fixture(); self.record_fixture_build(); self.admitted_fixture()
+        runtime = self.startup_fixture([('dependencies', 1)])
+        (self.private / 'runtime-path').unlink()
+        def create_failure(label, argv, seconds, env):
+            self.assertEqual(label, 'create')
+            (self.private / 'create.stdout').write_text(json.dumps({'runtime': str(runtime), 'syntheticOnly': True}) + '\n')
+            raise RuntimeError('SYNTHETIC-PRIMARY-SECRET')
+        self.ns['command'] = create_failure
+        output = io.StringIO()
+        # The real CLI has the existing owner-private umask before this call.
+        previous = os.umask(0o077)
+        try:
+            with contextlib.redirect_stdout(output), self.assertRaisesRegex(RuntimeError, 'SYNTHETIC-PRIMARY-SECRET'):
+                self.ns['start']()
+        finally:
+            os.umask(previous)
+        self.assertEqual((self.private / 'runtime-path').read_text(), str(runtime) + '\n')
+        self.assertEqual(json.loads(output.getvalue())['startupFailure']['commands'][0]['exit'], 1)
+        self.assertNotIn('SYNTHETIC-PRIMARY-SECRET', output.getvalue())
+
+    def test_startup_failure_before_runtime_still_preserves_primary(self):
+        value = self.failed_start()
+        self.assertEqual(value['diagnostics'], 'unavailable')
+        self.assertEqual(value['commands'], [])
+        self.assertEqual(value['guardCode'], 'undisclosed')
+
+    def test_startup_failure_before_first_command_is_not_container_proof(self):
+        runtime = self.startup_fixture()
+        (runtime / 'containers.json').write_text('[]')
+        value = self.failed_start()
+        self.assertEqual(value['commands'], [])
+        self.assertNotIn('containers', json.dumps(value))
+        self.assertTrue(value['runtimeCreated'])
+
+    def test_startup_rejects_malformed_oversized_and_hostile_receipts(self):
+        runtime = self.startup_fixture([('dependencies', 1)])
+        p = runtime / 'dependencies-12345678.json'; valid = p.read_bytes()
+        for payload in (b'{', b'x' * 65537, json.dumps({'label': 'SYNTHETIC-SECRET', 'exit': 1}).encode()):
+            with self.subTest(payload=payload[:20]):
+                p.write_bytes(payload)
+                value = self.ns['startup_diagnostic']()
+                self.assertEqual(value['diagnostics'], 'unavailable')
+                self.assertNotIn('SYNTHETIC-SECRET', json.dumps(value))
+        p.write_bytes(valid)
+        (self.private / 'create.stderr').write_text(json.dumps({'failed': True, 'reason': 'Expected two owned containers.\nSYNTHETIC-SECRET'}))
+        self.assertEqual(self.ns['startup_diagnostic']()['guardCode'], 'undisclosed')
+
+    def test_startup_rejects_unsafe_files_without_following_them(self):
+        runtime = self.startup_fixture([('dependencies', 1)])
+        p = runtime / 'dependencies-12345678.json'; valid = p.read_bytes()
+        p.chmod(0o644)
+        self.assertEqual(self.ns['startup_diagnostic']()['diagnostics'], 'unavailable')
+        p.chmod(0o600); p.unlink(); target = self.path / 'SYNTHETIC-PRIVATE'
+        target.write_bytes(valid); target.chmod(0o600); p.symlink_to(target)
+        self.assertEqual(self.ns['startup_diagnostic']()['diagnostics'], 'unavailable')
+        p.unlink(); os.link(target, p)
+        self.assertEqual(self.ns['startup_diagnostic']()['diagnostics'], 'unavailable')
+        p.unlink(); p.write_bytes(valid); p.chmod(0o600)
+        with mock.patch.object(self.ns['os'], 'getuid', return_value=os.getuid() + 1):
+            self.assertEqual(self.ns['startup_diagnostic']()['diagnostics'], 'unavailable')
+
+    def test_startup_rejects_invalid_exit_and_duration_primitives(self):
+        runtime = self.startup_fixture([('dependencies', 1)])
+        p = runtime / 'dependencies-12345678.json'; valid = json.loads(p.read_text())
+        variants = [{'exit': x} for x in (True, 1.5, '1', -65, 256)] + [
+            {'endedAt': '2026-09-29T03:59:59+00:00'},
+            {'endedAt': '2026-09-29T04:10:01+00:00'},
+            {'endedAt': 'NaN'}, {'startedAt': False},
+            {'endedAt': '2026-09-29T04:00:01'},
+        ]
+        for changes in variants:
+            with self.subTest(changes=changes):
+                p.write_text(json.dumps({**valid, **changes}))
+                self.assertEqual(self.ns['startup_diagnostic']()['diagnostics'], 'unavailable')
+        for code, status in ((None, 'incomplete'), (-15, 'failed'), (0, 'completed')):
+            p.write_text(json.dumps({**valid, 'exit': code}))
+            self.assertEqual(self.ns['startup_diagnostic']()['commands'][0]['status'], status)
+
+    def test_startup_projection_failure_never_masks_primary(self):
+        self.ns['startup_diagnostic'] = mock.Mock(side_effect=ValueError('SYNTHETIC-SECRET'))
+        self.ns['save'] = mock.Mock(side_effect=OSError('SYNTHETIC-WRITE-SECRET'))
+        self.assertEqual(self.failed_start()['diagnostics'], 'unavailable')
+
+    def test_startup_summary_retains_failure_and_honest_cleanup_without_browser(self):
+        runtime = self.startup_fixture([('dependencies', 1)])
+        self.failed_start()
+        self.ns['command'] = mock.Mock()
+        self.ns['cleanup']()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(RuntimeError): self.ns['summary']()
+        value = json.loads(output.getvalue())
+        self.assertFalse(value['accepted'])
+        self.assertEqual(value['startupFailure']['commands'][0]['exit'], 1)
+        self.assertEqual(value['startupCleanup'], {'runtimeStop': 'passed'})
+        self.assertNotIn('containers', json.dumps(value))
+        self.assertNotIn(str(runtime), output.getvalue())
+
+    def test_startup_cleanup_status_distinguishes_absent_and_failed(self):
+        self.ns['cleanup']()
+        self.assertEqual(json.loads((self.private / 'cleanup.json').read_text())['runtimeStop'], 'not-attempted')
+        (self.private / 'cleanup.json').unlink()
+        self.startup_fixture()
+        self.ns['command'] = mock.Mock(side_effect=RuntimeError('SYNTHETIC-SECRET'))
+        with self.assertRaises(RuntimeError): self.ns['cleanup']()
+        self.assertEqual(json.loads((self.private / 'cleanup.json').read_text())['runtimeStop'], 'failed')
+
+    def test_startup_failure_marker_never_allows_success_summary(self):
+        self.full_receipts(); self.write('startup-failure.json', {'failed': True})
+        with self.assertRaises(RuntimeError): self.summary_result()
 
     def test_complete_synthetic_receipts_accept(self):
         self.full_receipts()

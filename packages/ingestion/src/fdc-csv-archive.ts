@@ -1240,8 +1240,14 @@ class PartitionWriter {
   }
 
   private async syncHandles(): Promise<void> {
-    for (const handle of this.#handles.values()) {
-      await handle.sync();
+    const handles = [...this.#handles.values()];
+    for (let offset = 0; offset < handles.length; offset += 4) {
+      const results = await Promise.allSettled(
+        handles.slice(offset, offset + 4).map(async (handle) => handle.sync()),
+      );
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+      }
     }
   }
 }

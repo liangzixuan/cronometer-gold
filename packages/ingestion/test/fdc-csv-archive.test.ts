@@ -125,6 +125,94 @@ describe("full FDC CSV archive inspection", () => {
     ).toThrowError("FDC spool file identity changed between creation and sealing");
   });
 
+  it("syncs independent spool files in bounded batches before sealing", async () => {
+    const fixture = await partitionSyncFixture();
+    try {
+      await vi.waitFor(() => expect(fixture.calls).toHaveLength(4));
+      expect(fixture.active()).toBe(4);
+      expect(fixture.resultSettled()).toBe(false);
+      expect(fixture.observations).toEqual([]);
+      fixture.calls[3]?.release();
+      fixture.calls[1]?.release();
+      fixture.calls[0]?.release();
+      await vi.waitFor(() => expect(fixture.active()).toBe(1));
+      expect(fixture.calls).toHaveLength(4);
+      expect(fixture.observations).toEqual([]);
+      fixture.calls[2]?.release();
+
+      await vi.waitFor(() => expect(fixture.calls).toHaveLength(8));
+      expect(fixture.active()).toBe(4);
+      expect(fixture.observations).toEqual([]);
+      for (const call of fixture.calls.slice(4, 8)) call.release();
+      await vi.waitFor(() => expect(fixture.calls).toHaveLength(10));
+      expect(fixture.active()).toBe(2);
+      expect(fixture.observations).toEqual([]);
+      for (const call of fixture.calls.slice(8)) call.release();
+
+      const result = await fixture.result;
+      expect(result.error).toBeUndefined();
+      expect(result.value?.semanticEvidence.canonicalAcceptedRecords.count).toBe(10);
+      expect(fixture.maximumActive()).toBe(4);
+      expect(fixture.calls.map((call) => call.target)).toEqual(
+        [...new Set(fixture.calls.map((call) => call.target))].sort(),
+      );
+      expect(fixture.calls.every((call) => call.settled && call.handle.fd === -1)).toBe(true);
+      expect(fixture.observations.length).toBeGreaterThan(0);
+      expect(
+        fixture.observations.every((event) => event.active === 0 && event.settled === 10),
+      ).toBe(true);
+      expect(await readdir(fixture.destination)).toEqual([PREFIX]);
+      expect((await readdir(join(fixture.destination, PREFIX))).sort()).toEqual(
+        Object.values(PATHS)
+          .filter((path) => path !== PATHS.guide)
+          .map((path) => path.slice(PREFIX.length + 1))
+          .sort(),
+      );
+      expect(fixture.openSpoolTargets()).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("settles every started spool sync before failing in handle order and cleaning", async () => {
+    const fixture = await partitionSyncFixture();
+    const firstFailure = new Error("first handle sync failure");
+    const earlierCompletionFailure = new Error("fourth handle sync failure");
+    try {
+      await vi.waitFor(() => expect(fixture.calls).toHaveLength(4));
+      fixture.calls[3]?.fail(earlierCompletionFailure);
+      await vi.waitFor(() => expect(fixture.active()).toBe(3));
+      expect(fixture.resultSettled()).toBe(false);
+      expect(fixture.observations).toEqual([]);
+      expect(fixture.calls.every((call) => call.handle.fd >= 0)).toBe(true);
+
+      fixture.calls[0]?.fail(firstFailure);
+      await vi.waitFor(() => expect(fixture.active()).toBe(2));
+      expect(fixture.resultSettled()).toBe(false);
+      expect(fixture.calls).toHaveLength(4);
+      expect(fixture.observations).toEqual([]);
+      fixture.calls[2]?.release();
+      await vi.waitFor(() => expect(fixture.active()).toBe(1));
+      expect(fixture.resultSettled()).toBe(false);
+      expect(fixture.calls).toHaveLength(4);
+      fixture.calls[1]?.release();
+
+      const result = await fixture.result;
+      expect(result.error).toBe(firstFailure);
+      expect(result.value).toBeUndefined();
+      expect(fixture.calls).toHaveLength(4);
+      expect(fixture.maximumActive()).toBe(4);
+      expect(fixture.active()).toBe(0);
+      expect(fixture.calls.every((call) => call.settled && call.handle.fd === -1)).toBe(true);
+      expect(fixture.observations.every((event) => event.active === 0)).toBe(true);
+      expect(await readdir(fixture.destination)).toEqual([PREFIX]);
+      expect(await readdir(join(fixture.destination, PREFIX))).toEqual([]);
+      expect(fixture.openSpoolTargets()).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("rejects public archive-limit overrides that exceed the inspector hard bounds", async () => {
     const root = await temporaryDirectory();
     const archive = join(root, "archive-limit-overrides.zip");
@@ -1322,6 +1410,119 @@ function methodPrototype(value: object, method: string): object {
     prototype = Object.getPrototypeOf(prototype);
   }
   throw new Error(`Unable to locate prototype method ${method}`);
+}
+
+async function partitionSyncFixture() {
+  const root = await temporaryDirectory();
+  const archive = join(root, "partition-sync.zip");
+  const destination = join(root, "out");
+  const identifiers = new Map<number, string>();
+  for (let value = 1; identifiers.size < 10 && value <= 10_000; value += 1) {
+    const identifier = String(value);
+    const partition = createHash("sha256").update(identifier).digest().readUInt32BE(0) % 16;
+    if (!identifiers.has(partition)) identifiers.set(partition, identifier);
+  }
+  if (identifiers.size !== 10) throw new Error("Unable to populate ten deterministic partitions");
+  await writeFixtureZip(archive, {
+    [PATHS.food]: [
+      "fdc_id,data_type,description,publication_date",
+      ...[...identifiers.values()].map(
+        (identifier) => `${identifier},source_foundation,Synthetic sync food,2026-04-30`,
+      ),
+      "",
+    ].join("\n"),
+    [PATHS.branded]:
+      "fdc_id,brand_owner,gtin_upc,serving_size,serving_size_unit,household_serving_fulltext,market_country\n",
+    [PATHS.foodNutrient]: "id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq\n",
+    [PATHS.portion]: "id,fdc_id,amount,measure_unit_id,portion_description,modifier,gram_weight\n",
+  });
+  const probe = await open(join(root, "method-probe"), "w+");
+  const prototype = methodPrototype(probe, "sync") as {
+    sync: typeof probe.sync;
+    stat: typeof probe.stat;
+  };
+  const originalSync = prototype.sync;
+  const originalStat = prototype.stat;
+  await probe.close();
+  const calls: {
+    readonly target: string;
+    readonly handle: typeof probe;
+    readonly release: () => void;
+    readonly fail: (error: Error) => void;
+    settled: boolean;
+  }[] = [];
+  const observations: { readonly active: number; readonly settled: number }[] = [];
+  let active = 0;
+  let maximumActive = 0;
+  let automatic = false;
+  let resultSettled = false;
+  const isSpool = (target: string) =>
+    target.includes("/.fdc-csv-spool-") && target.endsWith(".jsonl");
+  const syncSpy = vi.spyOn(prototype, "sync").mockImplementation(function (this: typeof probe) {
+    const target = descriptorTarget(this.fd);
+    if (!isSpool(target)) return originalSync.call(this);
+    let release!: () => void;
+    let fail!: (error: Error) => void;
+    const deferred = new Promise<void>((resolve, reject) => {
+      release = resolve;
+      fail = reject;
+    });
+    const call = { target, handle: this, release, fail, settled: false };
+    calls.push(call);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    if (automatic) release();
+    return deferred
+      .then(() => originalSync.call(this))
+      .finally(() => {
+        call.settled = true;
+        active -= 1;
+      });
+  });
+  const statSpy = vi.spyOn(prototype, "stat").mockImplementation(function (this: typeof probe) {
+    if (calls.length > 0 && isSpool(descriptorTarget(this.fd))) {
+      observations.push({ active, settled: calls.filter((call) => call.settled).length });
+    }
+    return originalStat.call(this);
+  });
+  const result = parseFdcCsvArchive({
+    archiveExpectation: expectation(await readFile(archive)),
+    archivePath: archive,
+    context: context(),
+    destinationDirectory: destination,
+    expectedFiles: Object.keys(CSV),
+    fileContracts: CONTRACTS,
+    processingLimits: { partitionCount: 16 },
+  }).then(
+    (value) => {
+      resultSettled = true;
+      return { value, error: undefined };
+    },
+    (error: unknown) => {
+      resultSettled = true;
+      return { value: undefined, error };
+    },
+  );
+  return {
+    calls,
+    observations,
+    destination,
+    result,
+    active: () => active,
+    maximumActive: () => maximumActive,
+    resultSettled: () => resultSettled,
+    openSpoolTargets: () =>
+      readdirSync("/proc/self/fd")
+        .map((name) => descriptorTarget(Number(name)))
+        .filter((target) => target.startsWith(`${root}/`) && target.includes("/.fdc-csv-spool-")),
+    dispose: async () => {
+      automatic = true;
+      for (const call of calls) call.release();
+      await result;
+      statSpy.mockRestore();
+      syncSpy.mockRestore();
+    },
+  };
 }
 
 async function writeFixtureZip(

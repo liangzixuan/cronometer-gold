@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Bounded browser checks on a trusted ephemeral GitHub runner."""
 import hashlib
+import datetime
 import importlib.util
 import json
 import os
@@ -210,7 +211,121 @@ def record_build():
          'pnpmVersion': subprocess.check_output(['pnpm', '--version']).decode().strip()})
 
 
+STARTUP_PHASES = ('dependencies', 'migrate', 'scoped-keys', 'catalogue', 'account')
+STARTUP_GUARDS = {
+    'Expected two owned containers.': 'container-count',
+    'Created container does not match the pinned, bounded local contract.': 'container-contract',
+    'Container scratch mount differs from its profile.': 'container-scratch-contract',
+    'CI container user differs from its admitted image.': 'container-user-contract',
+    'Readiness failed at the selected loopback service.': 'application-readiness',
+    'api exited or did not acquire the expected identity.': 'api-process-identity',
+    'web exited or did not acquire the expected identity.': 'web-process-identity',
+    'FileNotFoundError': 'filesystem-missing',
+    'PermissionError': 'filesystem-permission',
+    **{phase + ' failed; inspect its private log.': 'command-failed' for phase in STARTUP_PHASES},
+}
+
+
+def unavailable_startup():
+    return {'diagnostics': 'unavailable', 'runtimeCreated': False, 'commands': [], 'guardCode': 'undisclosed'}
+
+
+def diagnostic_text(path):
+    # Read only a bounded owner-private regular receipt, never a child command log.
+    with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb') as stream:
+        before = os.fstat(stream.fileno())
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1
+                and before.st_uid == os.getuid() and stat.S_IMODE(before.st_mode) == 0o600
+                and 0 < before.st_size <= 65_536, 'Invalid diagnostic receipt')
+        data = stream.read(65_537)
+        after = os.fstat(stream.fileno())
+        require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                == (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                and len(data) == before.st_size, 'Diagnostic receipt changed')
+    return data.decode('utf-8')
+
+
+def startup_diagnostic():
+    try:
+        path = Path(diagnostic_text(PRIVATE / 'runtime-path').strip())
+        require(path.parent == PRIVATE / 'runtimes' and path.name.startswith('nourishing-walkthrough-')
+                and path.resolve() == path and not path.is_symlink(), 'Invalid diagnostic runtime')
+        metadata = path.stat()
+        require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid()
+                and stat.S_IMODE(metadata.st_mode) == 0o700, 'Invalid diagnostic runtime owner')
+        state = json.loads(diagnostic_text(path / 'runtime.json'))
+        require(type(state) is dict and state.get('version') == 2 and state.get('syntheticOnly') is True
+                and state.get('runtime') == str(path) and state.get('repository') == str(ROOT)
+                and state.get('head') == os.environ['GITHUB_SHA'], 'Diagnostic runtime identity differs')
+        commands = []
+        for phase in STARTUP_PHASES:
+            candidates = list(path.glob(phase + '-????????.json'))
+            require(len(candidates) <= 1, 'Duplicate command receipt')
+            if not candidates:
+                continue
+            receipt = candidates[0]
+            require(re.fullmatch(phase + r'-[a-f0-9]{8}\.json', receipt.name), 'Invalid command receipt name')
+            value = json.loads(diagnostic_text(receipt))
+            require(type(value) is dict and value.get('label') == phase, 'Invalid command receipt label')
+            code = value.get('exit')
+            require('exit' in value and (code is None or type(code) is int and -64 <= code <= 255), 'Invalid command exit')
+            stamps = []
+            for key in ('startedAt', 'endedAt'):
+                stamp = value.get(key)
+                require(type(stamp) is str and len(stamp) <= 40, 'Invalid diagnostic timestamp')
+                parsed = datetime.datetime.fromisoformat(stamp)
+                require(parsed.utcoffset() == datetime.timedelta(0), 'Diagnostic timestamp must use UTC')
+                stamps.append(parsed)
+            elapsed = (stamps[1] - stamps[0]).total_seconds()
+            require(0 <= elapsed <= 600, 'Invalid diagnostic duration')
+            commands.append({'phase': phase, 'exit': code,
+                'status': 'incomplete' if code is None else 'completed' if code == 0 else 'failed',
+                'elapsedMilliseconds': int(elapsed * 1000)})
+        require([item['phase'] for item in commands] == list(STARTUP_PHASES[:len(commands)])
+                and all(item['exit'] == 0 for item in commands[:-1]), 'Inconsistent command sequence')
+        guard = 'undisclosed'
+        error_path = PRIVATE / 'create.stderr'
+        if error_path.exists():
+            error = json.loads(diagnostic_text(error_path))
+            if type(error) is dict and error.get('failed') is True and type(error.get('reason')) is str:
+                guard = STARTUP_GUARDS.get(error['reason'], 'undisclosed')
+        return {'diagnostics': 'available', 'runtimeCreated': True, 'commands': commands, 'guardCode': guard}
+    except Exception:
+        return unavailable_startup()
+
+
+def startup_cleanup_diagnostic():
+    try:
+        value = read(PRIVATE / 'cleanup.json')
+        require(type(value) is dict and type(value.get('failures')) is list
+                and all(type(item) is str and item in ('normal-tunnel-stop', 'owned-tunnel-cleanup', 'owned-runtime-cleanup')
+                        for item in value['failures']), 'Invalid cleanup diagnostics')
+        status = value.get('runtimeStop')
+        require(type(status) is str and status in ('not-attempted', 'passed', 'failed')
+                and (status == 'failed') == ('owned-runtime-cleanup' in value['failures']), 'Invalid runtime-stop result')
+        return {'runtimeStop': status}
+    except Exception:
+        return {'runtimeStop': 'undisclosed'}
+
+
 def start():
+    try:
+        _start_runtime()
+    except Exception:
+        # Recording failure must never replace the primary startup exception.
+        try:
+            save(PRIVATE / 'startup-failure.json', {'failed': True})
+        except Exception:
+            pass
+        try:
+            diagnostic = startup_diagnostic()
+        except Exception:
+            diagnostic = unavailable_startup()
+        print(json.dumps({'startupFailure': diagnostic}), flush=True)
+        raise
+
+
+def _start_runtime():
     admitted = read(PRIVATE / 'image-provenance.json')
     require(admitted == {'images': CFG['imageProducers'], 'buildkitVerified': True,
             'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False}, 'Image provenance admission missing')
@@ -264,6 +379,7 @@ def run_browser():
 
 def cleanup():
     failures = []
+    runtime_stop = 'not-attempted'
     config = PRIVATE / 'local-secret.yml'
     if config.exists():
         try:
@@ -296,9 +412,11 @@ def cleanup():
         try:
             command('runtime-stop', ['python3', '-B', 'scripts/local-walkthrough/run.py', 'stop',
                     '--runtime', str(runtime_path())], 150, private_env())
+            runtime_stop = 'passed'
         except Exception:
+            runtime_stop = 'failed'
             failures.append('owned-runtime-cleanup')
-    save(PRIVATE / 'cleanup.json', {'failures': failures, 'volumesRetainedUntilEphemeralRunnerTeardown': True})
+    save(PRIVATE / 'cleanup.json', {'failures': failures, 'runtimeStop': runtime_stop, 'volumesRetainedUntilEphemeralRunnerTeardown': True})
     require(not failures, 'Cleanup failed; never count this run as accepted')
 
 def summary():
@@ -307,6 +425,7 @@ def summary():
     result['accepted'] = False
     browser = None
     try:
+        require(not (PRIVATE / 'startup-failure.json').exists(), 'Startup failed')
         build, browser, cleaned = (read(PRIVATE / name) for name in ('build.json', 'browser-result.json', 'cleanup.json'))
         before = read(PRIVATE / 'source-before.json')
         require(all(build.get(key) == before.get(key) for key in ('sha', 'tree', 'trackedFiles', 'fileMapSha256', 'lockSha256')), 'Build source differs')
@@ -361,6 +480,9 @@ def summary():
                     if remote.get('browserstackStatus') in ('done', 'running', 'error', 'failed', 'timeout'):
                         failed['remoteExecutionStatus'] = remote['browserstackStatus']
                 result['failedBrowser'] = failed
+    if (PRIVATE / 'startup-failure.json').exists():
+        result['startupFailure'] = startup_diagnostic()
+        result['startupCleanup'] = startup_cleanup_diagnostic()
     print(json.dumps(result, sort_keys=True))
     require(result['accepted'], 'Browser delivery incomplete')
 
