@@ -13,6 +13,7 @@ import { appendFile, lstat, readFile, realpath, writeFile } from "node:fs/promis
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import * as contracts from "../../packages/contracts/dist/index.js";
+import { assertAccountRuntime } from "./runtime-contract.mjs";
 
 const require = createRequire(new URL("../../packages/contracts/package.json", import.meta.url));
 const { Ajv } = require("ajv");
@@ -263,14 +264,11 @@ async function main() {
     "Evidence directory must be owner-only",
   );
   const runtime = await privateJson(join(directory, "runtime.json"));
-  assert(
-    runtime.version === 1 &&
-      runtime.syntheticOnly === true &&
-      runtime.runtime === directory &&
-      runtime.runId === process.env.WALKTHROUGH_RUN_ID &&
-      String(runtime.ports.api) === api.port,
-    "API target must match the selected runtime",
-  );
+  assertAccountRuntime(runtime, {
+    directory,
+    runId: process.env.WALKTHROUGH_RUN_ID,
+    apiPort: api.port,
+  });
   const catalogue = await privateJson(join(directory, "synthetic-catalogue.json"));
   assert(
     catalogue.syntheticOnly === true &&

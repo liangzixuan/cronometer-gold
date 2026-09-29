@@ -33,6 +33,7 @@ import {
 import { lockActiveNutrientRegistryForWrite } from "../../packages/db/dist/nutrient-registry-lock.js";
 import { CORE_NUTRIENTS } from "../../packages/domain/dist/index.js";
 import { MeilisearchHttpClient } from "../../packages/search/dist/index.js";
+import { assertCatalogueRuntime } from "./runtime-contract.mjs";
 
 type Fixture = {
   name: string;
@@ -638,15 +639,12 @@ async function seed() {
     "Evidence directory must be owner-only",
   );
   const runtime = JSON.parse(await readFile(join(directory, "runtime.json"), "utf8"));
-  assert(
-    runtime.version === 1 &&
-      runtime.syntheticOnly === true &&
-      runtime.runtime === directory &&
-      runtime.runId === runId &&
-      String(runtime.ports.postgres) === target.port &&
-      String(runtime.ports.meilisearch) === meili.port,
-    "Service targets must match the selected runtime",
-  );
+  assertCatalogueRuntime(runtime, {
+    directory,
+    runId,
+    postgresPort: target.port,
+    meiliPort: meili.port,
+  });
   const receipt = join(directory, "synthetic-catalogue.json");
   await writeFile(
     join(directory, "catalogue-seed-claimed.json"),

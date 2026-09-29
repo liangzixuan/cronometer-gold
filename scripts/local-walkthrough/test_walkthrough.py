@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
@@ -206,6 +207,67 @@ class PreparationTests(unittest.TestCase):
                 patch.object(run, "read_command", side_effect=prerequisite), \
                 patch.object(run.subprocess, "run", side_effect=AssertionError("No external commands")):
             return run.prepare(self.arguments)
+
+    def assert_runtime_consumers(self, runtime):
+        # This document comes from the actual prepare writer above. Node imports
+        # the same pure validators used at both production fixture boundaries.
+        script = r"""
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const { assertCatalogueRuntime, assertAccountRuntime } = await import(pathToFileURL(process.argv[1]));
+const runtime = JSON.parse(readFileSync(process.argv[2], 'utf8'));
+const expected = { directory: runtime.runtime, runId: runtime.runId,
+  postgresPort: String(runtime.ports.postgres), meiliPort: String(runtime.ports.meilisearch),
+  apiPort: String(runtime.ports.api) };
+const consumers = [
+  ['catalogue', assertCatalogueRuntime, ['postgres', 'meilisearch']],
+  ['account', assertAccountRuntime, ['api']],
+];
+for (const [name, validate, ports] of consumers) {
+  validate(runtime, expected);
+  for (const version of [1, undefined, null, '2', true, {}, [], 0, 3, 2.5, NaN, Infinity]) {
+    assert.throws(() => validate({ ...runtime, version }, expected), `${name}: version`);
+  }
+  const missing = { ...runtime }; delete missing.version;
+  assert.throws(() => validate(missing, expected), `${name}: absent version`);
+  for (const value of [null, false, 2, [], 'runtime']) {
+    assert.throws(() => validate(value, expected), `${name}: malformed document`);
+  }
+  for (const mutation of [
+    { syntheticOnly: false }, { syntheticOnly: 'true' }, { runtime: '/other-runtime' },
+    { runId: 'another-run' }, { ports: {} }, { ports: null },
+  ]) {
+    assert.throws(() => validate({ ...runtime, ...mutation }, expected), `${name}: identity`);
+  }
+  for (const port of ports) {
+    assert.throws(() => validate({ ...runtime, ports: { ...runtime.ports, [port]: 1 } }, expected), `${name}: selected port`);
+    assert.throws(() => validate(runtime, { ...expected, [port === 'meilisearch' ? 'meiliPort' : port + 'Port']: '1' }), `${name}: expected port`);
+  }
+}
+// Preserve each original consumer's own service selection, with no new scope.
+assertCatalogueRuntime({ ...runtime, ports: { ...runtime.ports, api: 1 } }, expected);
+assertAccountRuntime({ ...runtime, ports: { ...runtime.ports, postgres: 1, meilisearch: 1 } }, expected);
+console.log('Both actual runtime consumers accepted the producer and rejected all mutations.');
+"""
+        result = subprocess.run(['node', '--input-type=module', '-e', script,
+                                 str(run.TOOLS / 'runtime-contract.mjs'), str(runtime.path / 'runtime.json')],
+                                capture_output=True, text=True, timeout=10,
+                                env={'PATH': os.environ['PATH'], 'LANG': 'C.UTF-8'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(),
+                         'Both actual runtime consumers accepted the producer and rejected all mutations.')
+
+    def test_local_producer_document_matches_both_actual_fixture_consumers(self):
+        self.assert_runtime_consumers(self.prepare())
+
+    def test_ci_producer_document_matches_both_actual_fixture_consumers(self):
+        self.arguments.image_profile = 'ci-qualified-arm64'
+        with patch.dict(os.environ, ImageProfileTests.CONTEXT, clear=True), \
+                patch.object(run.platform, 'machine', return_value='aarch64'), \
+                patch.object(run, 'runtime_image_contract'):
+            runtime = self.prepare()
+        self.assert_runtime_consumers(runtime)
 
     def test_prepare_exports_public_assets_with_standalone_and_static(self):
         (self.root / "apps/web/public/font.woff2").symlink_to("fonts/fa-solid-900.woff2")
