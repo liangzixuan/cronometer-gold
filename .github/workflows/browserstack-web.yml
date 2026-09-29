@@ -80,7 +80,7 @@ jobs:
           timeout: 5m
       - name: Build this checkout without task-cache reuse
         run: |
-          pnpm build --force
+          pnpm exec turbo run build --filter=@nutrition-tracker/web... --filter=@nutrition-tracker/api... --filter=@nutrition-tracker/worker... --force
           python3 -B scripts/browserstack/ci-run.py record-build
       - name: Start the bounded synthetic real app
         timeout-minutes: 11

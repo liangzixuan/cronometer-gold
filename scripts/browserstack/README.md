@@ -16,7 +16,7 @@ The BrowserStack native App Automate CLI and BrowserStack Local are different to
 
 ## Execution and evidence
 
-The helper records the complete tracked source hashes/modes, Git commit/tree, lockfile hash and Node/pnpm versions. A forced fresh build produces a recorded Next build ID and output digest. The synthetic launch must match that source/build. The public receipt requires all journey assertions, one session, no retries, the actual terminal vendor result and successful owned cleanup. Partial evidence never passes.
+The helper records the complete tracked source hashes/modes, Git commit/tree, lockfile hash and Node/pnpm versions. The forced build covers web, API, worker and their dependency closure. The worker supplies the synthetic catalogue search rebuild. Its eight tasks exclude mobile export; the main CI keeps its full build and mobile release checks. The receipt requires every output root in this closure, including worker output, plus the Next build ID. The launcher checks the output digest again before starting services. The public receipt requires all journey assertions, one session, no retries, the actual terminal vendor result and successful owned cleanup. Partial evidence never passes.
 
 Only `127.0.0.1:3287` is exposed through the uniquely named tunnel. API, database and search ports stay outside it. Secure cookies, origin checks and TLS validation remain enabled. Login uses the generated synthetic account; cookies and storage state are not injected or retrieved. Authenticated reload proves persistence, while existing BFF tests cover cookie attributes. The smoke does not claim separate runtime cookie-attribute inspection.
 
@@ -24,7 +24,7 @@ Video, screenshots, network, console and Playwright capture are requested off. U
 
 Cleanup stops the named tunnel and uses recorded executable/UID/start ticks plus a pidfd for any necessary fallback. The existing launcher stops only its owned applications and containers. Volumes remain until the disposable GitHub runner is destroyed. A missing or failed cleanup receipt fails the job; runner disappearance alone is not cleanup acceptance.
 
-Focused offline contracts run in normal `pnpm check` through `scripts/browserstack.test.mjs`. They cover source/session mismatches, incomplete assertions, private-field redaction, terminal failures, cancellation, ownership and vendor artifacts. The nested Node runner clears `NODE_TEST_CONTEXT` and requires actual test counts, preventing a skipped nested runner from appearing green.
+A focused test resolves the actual workflow command with installed Turbo in JSON dry-run mode and checks its tasks and dependency edges against the workspace manifests. Missing or changed worker output and weakened build commands fail. Focused offline contracts run in normal `pnpm check` through `scripts/browserstack.test.mjs`. They cover source/session mismatches, incomplete assertions, private-field redaction, terminal failures, cancellation, ownership and vendor artifacts. The nested Node runner clears `NODE_TEST_CONTEXT` and requires actual test counts, preventing a skipped nested runner from appearing green.
 
 ## Appwrite project binding
 

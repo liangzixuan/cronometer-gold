@@ -5,6 +5,9 @@ import hashlib
 import io
 import json
 import os
+import re
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 import tempfile
@@ -17,6 +20,12 @@ TREE = ast.parse((DRAFT / 'ci-run.py').read_text())
 INERT = ast.Module(body=[item for item in TREE.body if isinstance(item, (ast.Import, ast.ImportFrom, ast.Assign, ast.FunctionDef))], type_ignores=[])
 ENTRY = ast.Module(body=[TREE.body[-1]], type_ignores=[])
 SHA = 'a' * 40
+BUILD_COMMAND = ('pnpm', 'exec', 'turbo', 'run', 'build',
+                 '--filter=@nutrition-tracker/web...', '--filter=@nutrition-tracker/api...',
+                 '--filter=@nutrition-tracker/worker...', '--force')
+OUTPUT_ROOTS = ('apps/api/dist', 'apps/worker/dist', 'packages/artifact-store/dist',
+                'packages/contracts/dist', 'packages/db/dist', 'packages/domain/dist',
+                'packages/search/dist', 'apps/web/.next/standalone', 'apps/web/.next/static')
 CHECKS = ['authenticated-session-persistence', 'real-search-and-single-add', 'saved-diary-entry-after-reload', 'report-agrees-with-saved-day', 'narrow-diary-remains-usable']
 
 class DraftTests(unittest.TestCase):
@@ -116,20 +125,121 @@ class DraftTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'Build source changed'): self.ns['record_build']()
         self.assertFalse((self.private / 'build.json').exists())
 
-    def test_record_build_binds_current_build_outputs(self):
-        input_value = {'sha': SHA, 'tree': 'b' * 40, 'fileMapSha256': 'c' * 64, 'trackedFiles': 2, 'lockSha256': 'd' * 64}
-        self.write('source-before.json', input_value)
-        self.ns['source'] = lambda: dict(input_value)
-        for name in ['apps/api/dist', 'packages/db/dist', 'apps/web/.next/standalone', 'apps/web/.next/static']:
+    def build_fixture(self):
+        value = {'sha': SHA, 'tree': 'b' * 40, 'fileMapSha256': 'c' * 64, 'trackedFiles': 2, 'lockSha256': 'd' * 64}
+        self.write('source-before.json', value)
+        self.ns['source'] = lambda: dict(value)
+        for name in OUTPUT_ROOTS:
             path = self.root / name
             path.mkdir(parents=True)
             (path / 'output.js').write_text(name)
         (self.root / 'apps/web/.next/BUILD_ID').write_text('synthetic-build-id')
-        with mock.patch.object(self.ns['subprocess'], 'check_output', side_effect=[b'v22.23.2\n', b'11.19.0\n']): self.ns['record_build']()
-        receipt = json.loads((self.private / 'build.json').read_text())
+
+    def record_fixture_build(self):
+        with mock.patch.object(self.ns['subprocess'], 'check_output', side_effect=[b'v22.23.2\n', b'11.19.0\n']):
+            self.ns['record_build']()
+        return json.loads((self.private / 'build.json').read_text())
+
+    def admitted_fixture(self):
+        self.write('image-provenance.json', {'images': self.cfg['imageProducers'], 'buildkitVerified': True,
+                   'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False})
+
+    def test_record_build_binds_current_build_outputs(self):
+        self.build_fixture()
+        receipt = self.record_fixture_build()
         self.assertEqual(receipt['sha'], SHA)
         self.assertEqual(receipt['buildId'], 'synthetic-build-id')
+        self.assertEqual(receipt['command'], ' '.join(BUILD_COMMAND))
+        self.assertEqual(receipt['nodeVersion'], 'v22.23.2')
+        self.assertEqual(receipt['pnpmVersion'], '11.19.0')
         self.assertRegex(receipt['outputsSha256'], '^[a-f0-9]{64}$')
+
+    def test_record_build_requires_every_nonempty_closure_root(self):
+        self.build_fixture()
+        for name in OUTPUT_ROOTS:
+            with self.subTest(root=name):
+                path = self.root / name
+                (path / 'output.js').unlink()
+                with self.assertRaisesRegex(RuntimeError, 'Missing build output'):
+                    self.record_fixture_build()
+                self.assertFalse((self.private / 'build.json').exists())
+                (path / 'output.js').write_text(name)
+
+    def test_substituted_worker_root_is_rejected(self):
+        self.build_fixture()
+        worker = self.root / 'apps/worker/dist'
+        (worker / 'output.js').unlink()
+        worker.rmdir()
+        other = self.path / 'unrelated-output'
+        other.mkdir()
+        (other / 'output.js').write_text('not the worker build')
+        worker.symlink_to(other, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, 'Missing build output'):
+            self.record_fixture_build()
+        self.assertFalse((self.private / 'build.json').exists())
+
+    def test_missing_worker_root_is_not_replaced_by_stale_ingestion_output(self):
+        self.build_fixture()
+        worker = self.root / 'apps/worker/dist'
+        (worker / 'output.js').unlink()
+        worker.rmdir()
+        stale = self.root / 'packages/ingestion/dist'
+        stale.mkdir(parents=True)
+        (stale / 'output.js').write_text('unrelated old output')
+        with self.assertRaisesRegex(RuntimeError, 'Missing build output'):
+            self.record_fixture_build()
+        self.assertFalse((self.private / 'build.json').exists())
+
+    def test_worker_bytes_change_the_build_receipt(self):
+        self.build_fixture()
+        first = self.record_fixture_build()
+        (self.private / 'build.json').unlink()
+        (self.root / 'apps/worker/dist/output.js').write_text('changed worker')
+        second = self.record_fixture_build()
+        self.assertNotEqual(first['outputsSha256'], second['outputsSha256'])
+
+    def test_unrelated_output_is_excluded_from_build_receipt(self):
+        self.build_fixture()
+        first = self.record_fixture_build()
+        (self.private / 'build.json').unlink()
+        stale = self.root / 'packages/ingestion/dist'
+        stale.mkdir(parents=True)
+        (stale / 'output.js').write_text('unrelated old output')
+        second = self.record_fixture_build()
+        self.assertEqual(first['outputsSha256'], second['outputsSha256'])
+
+    def test_changed_worker_is_rejected_before_service_start(self):
+        self.build_fixture()
+        self.record_fixture_build()
+        self.admitted_fixture()
+        (self.root / 'apps/worker/dist/output.js').write_text('changed after receipt')
+        call = self.ns['command'] = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, 'Build output changed'):
+            self.ns['start']()
+        call.assert_not_called()
+
+    def test_start_rejects_old_or_weakened_build_command_before_service(self):
+        self.build_fixture()
+        original = self.record_fixture_build()
+        self.admitted_fixture()
+        call = self.ns['command'] = mock.Mock()
+        for value in ('pnpm build --force', ' '.join(BUILD_COMMAND[:-1]),
+                      ' '.join(x for x in BUILD_COMMAND if 'worker' not in x)):
+            with self.subTest(command=value):
+                self.write('build.json', {**original, 'command': value})
+                with self.assertRaisesRegex(RuntimeError, 'Build command/tool mismatch'):
+                    self.ns['start']()
+                call.assert_not_called()
+
+    def test_summary_rejects_old_or_weakened_build_command(self):
+        self.full_receipts()
+        original = json.loads((self.private / 'build.json').read_text())
+        for value in ('pnpm build --force', ' '.join(BUILD_COMMAND[:-1]),
+                      ' '.join(x for x in BUILD_COMMAND if 'worker' not in x)):
+            with self.subTest(command=value):
+                self.write('build.json', {**original, 'command': value})
+                with self.assertRaisesRegex(RuntimeError, 'Browser delivery incomplete'):
+                    self.summary_result()
 
     def test_stale_process_is_never_signalled_and_cleanup_fails(self):
         self.write('tunnel-process.json', {'pid': 999999, 'uid': 1000, 'startTicks': 'old', 'exe': '/synthetic'})
@@ -151,7 +261,7 @@ class DraftTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in self.ns['command'].call_args_list], ['tunnel-stop', 'runtime-stop'])
 
     def full_receipts(self):
-        self.write('build.json', {'sha': SHA, 'buildId': 'synthetic-build', 'tree': 'b' * 40, 'fileMapSha256': 'c' * 64, 'lockSha256': 'd' * 64, 'outputsSha256': 'e' * 64, 'trackedFiles': 2, 'command': 'pnpm build --force', 'nodeVersion': 'v22.23.2', 'pnpmVersion': '11.19.0'})
+        self.write('build.json', {'sha': SHA, 'buildId': 'synthetic-build', 'tree': 'b' * 40, 'fileMapSha256': 'c' * 64, 'lockSha256': 'd' * 64, 'outputsSha256': 'e' * 64, 'trackedFiles': 2, 'command': ' '.join(BUILD_COMMAND), 'nodeVersion': 'v22.23.2', 'pnpmVersion': '11.19.0'})
         self.write('source-before.json', {'sha': SHA, 'tree': 'b' * 40, 'fileMapSha256': 'c' * 64, 'lockSha256': 'd' * 64, 'trackedFiles': 2})
         self.write('browser-result.json', {'schemaVersion': 1, 'sourceSha': SHA, 'buildId': 'synthetic-build', 'syntheticOnly': True, 'browserSessionsAttempted': 1, 'retries': 0, 'origin': 'http://127.0.0.1:3287', 'checks': CHECKS, 'status': 'passed', 'sessionId': 'synthetic-session', 'browserVersion': 'synthetic-browser',
             'terminal': {'sessionId': 'synthetic-session', 'status': 'passed', 'browserstackStatus': 'done', 'durationSeconds': 25, 'buildName': f'nourishing-{SHA}-123-1', 'projectName': 'Nourishing', 'name': 'synthetic-login-search-add-report'},
@@ -332,5 +442,64 @@ class DraftTests(unittest.TestCase):
             try: self.ns['summary']()
             except RuntimeError: pass
         self.assertNotIn('SYNTHETIC-SECRET-SENTINEL', output.getvalue())
+
+class RealBuildGraphTests(unittest.TestCase):
+    def test_workflow_build_resolves_actual_runtime_dependency_closure(self):
+        root = DRAFT.parents[1]
+        workflow = (root / '.github/workflows/browserstack-web.yml').read_text()
+        section = workflow.split('- name: Build this checkout without task-cache reuse\n', 1)[1].split('\n      - name:', 1)[0]
+        commands = [shlex.split(line.strip()) for line in section.splitlines()
+                    if line.strip().startswith('pnpm ')]
+        self.assertEqual(len(commands), 1)
+        invocation = commands[0]
+        if invocation[:3] == ['pnpm', 'exec', 'turbo']:
+            turbo_args = invocation[3:]
+        else:
+            self.assertEqual(invocation[:2], ['pnpm', 'build'])
+            script = shlex.split(json.loads((root / 'package.json').read_text())['scripts']['build'])
+            self.assertEqual(script[0], 'turbo')
+            turbo_args = [*script[1:], *invocation[2:]]
+        env = {key: os.environ[key] for key in ('PATH', 'HOME', 'LANG') if key in os.environ}
+        env.update(CI='1', TURBO_TELEMETRY_DISABLED='1')
+        result = subprocess.run(['node', str(root / 'node_modules/turbo/bin/turbo'),
+                                 *turbo_args, '--dry=json'], cwd=root, env=env,
+                                capture_output=True, text=True, timeout=30, check=True)
+        graph = json.loads(result.stdout)
+        manifests = {}
+        for pattern in ('apps/*/package.json', 'packages/*/package.json'):
+            for path in root.glob(pattern):
+                value = json.loads(path.read_text())
+                manifests[value['name']] = value
+        roots = {'@nutrition-tracker/' + name for name in ('web', 'api', 'worker')}
+        dependencies = {name: {dep for key in ('dependencies', 'devDependencies')
+                              for dep, version in item.get(key, {}).items()
+                              if version.startswith('workspace:')}
+                        for name, item in manifests.items()}
+        closure = set(roots)
+        pending = list(roots)
+        while pending:
+            for dependency in dependencies[pending.pop()]:
+                if dependency not in closure:
+                    closure.add(dependency)
+                    pending.append(dependency)
+        expected = {name + '#build' for name in closure}
+        tasks = {task['taskId']: task for task in graph['tasks']}
+        self.assertEqual(set(tasks), expected)
+        self.assertEqual(len(tasks), 8)
+        self.assertFalse(any(name in closure for name in
+                             ('@nutrition-tracker/mobile', '@nutrition-tracker/ingest', '@nutrition-tracker/ingestion')))
+        for name in closure:
+            task = tasks[name + '#build']
+            self.assertEqual(task['command'], manifests[name]['scripts']['build'])
+            self.assertEqual(set(task['dependencies']), {dep + '#build' for dep in dependencies[name]})
+        self.assertEqual(invocation, list(BUILD_COMMAND))
+        declared = next(item.value for item in TREE.body if isinstance(item, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == 'BUILD_COMMAND' for target in item.targets))
+        self.assertEqual(ast.literal_eval(declared), BUILD_COMMAND)
+        fixture = (root / 'scripts/local-walkthrough/seed-catalogue.mts').read_text()
+        dist_imports = re.findall(r'from ["\']\.\./\.\./((?:apps|packages)/[^/]+)/dist/', fixture)
+        self.assertIn('apps/worker', dist_imports)
+        for package in dist_imports:
+            self.assertIn(json.loads((root / package / 'package.json').read_text())['name'], closure)
 
 if __name__ == '__main__': unittest.main()

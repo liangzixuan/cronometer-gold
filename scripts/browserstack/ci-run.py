@@ -17,6 +17,12 @@ import vendor
 ROOT = Path(__file__).resolve().parents[2]  # After copying to scripts/browserstack.
 CONFIG = Path(__file__).with_name('project.json')
 ACTION = sys.argv[1] if len(sys.argv) == 2 else ''
+BUILD_COMMAND = ('pnpm', 'exec', 'turbo', 'run', 'build',
+                 '--filter=@nutrition-tracker/web...', '--filter=@nutrition-tracker/api...',
+                 '--filter=@nutrition-tracker/worker...', '--force')
+BUILD_OUTPUT_ROOTS = ('apps/api/dist', 'apps/worker/dist', 'packages/artifact-store/dist',
+                      'packages/contracts/dist', 'packages/db/dist', 'packages/domain/dist',
+                      'packages/search/dist', 'apps/web/.next/standalone', 'apps/web/.next/static')
 CHECKS = ['authenticated-session-persistence', 'real-search-and-single-add',
           'saved-diary-entry-after-reload', 'report-agrees-with-saved-day', 'narrow-diary-remains-usable']
 COMMAND_STAGES = frozenset(('local-version', 'local-help', 'image-pull-0', 'image-pull-1',
@@ -181,28 +187,36 @@ def admit_images():
          'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False})
 
 
+def build_outputs_sha256():
+    files = []
+    for relative in BUILD_OUTPUT_ROOTS:
+        root = ROOT / relative
+        require(root.is_dir() and not root.is_symlink(), 'Missing build output')
+        entries = [[str(path.relative_to(ROOT)), sha(path.read_bytes())]
+                   for path in sorted(root.rglob('*')) if path.is_file() and not path.is_symlink()]
+        require(entries, 'Missing build output')
+        files.extend(entries)
+    return sha(json.dumps(files, separators=(',', ':')).encode())
+
+
 def record_build():
     before = read(PRIVATE / 'source-before.json')
     require(source() == before, 'Build source changed')
     build_id = (ROOT / 'apps/web/.next/BUILD_ID').read_text().strip()
     require(bool(re.fullmatch('[a-zA-Z0-9_-]{1,100}', build_id)), 'Invalid Next build ID')
-    roots = [ROOT / 'apps/api/dist', *sorted((ROOT / 'packages').glob('*/dist')),
-             ROOT / 'apps/web/.next/standalone', ROOT / 'apps/web/.next/static']
-    files = []
-    for root in roots:
-        require(root.is_dir(), 'Missing build output')
-        for path in sorted(root.rglob('*')):
-            if path.is_file() and not path.is_symlink():
-                files.append([str(path.relative_to(ROOT)), sha(path.read_bytes())])
-    save(PRIVATE / 'build.json', {**before, 'buildId': build_id, 'command': 'pnpm build --force',
-         'outputsSha256': sha(json.dumps(files, separators=(',', ':')).encode()),
+    save(PRIVATE / 'build.json', {**before, 'buildId': build_id, 'command': ' '.join(BUILD_COMMAND),
+         'outputsSha256': build_outputs_sha256(),
          'nodeVersion': subprocess.check_output(['node', '--version']).decode().strip(),
          'pnpmVersion': subprocess.check_output(['pnpm', '--version']).decode().strip()})
+
 
 def start():
     admitted = read(PRIVATE / 'image-provenance.json')
     require(admitted == {'images': CFG['imageProducers'], 'buildkitVerified': True,
             'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False}, 'Image provenance admission missing')
+    build = read(PRIVATE / 'build.json')
+    require(build.get('command') == ' '.join(BUILD_COMMAND), 'Build command/tool mismatch')
+    require(build.get('outputsSha256') == build_outputs_sha256(), 'Build output changed')
     try:
         command('create', ['python3', '-B', 'scripts/local-walkthrough/run.py', 'create',
                 '--runtime-parent', str(PRIVATE / 'runtimes'), '--image-profile', CFG['imageProfile']], 600, private_env())
@@ -301,7 +315,7 @@ def summary():
         require(all(re.fullmatch('[a-f0-9]{64}', build.get(key, '')) for key in ('fileMapSha256', 'lockSha256', 'outputsSha256')), 'Missing source/build hashes')
         require(type(build.get('trackedFiles')) is int and build['trackedFiles'] > 0, 'Invalid file count')
         require(re.fullmatch('[a-zA-Z0-9_-]{1,100}', build.get('buildId', '')) is not None, 'Invalid build ID')
-        require(build.get('command') == 'pnpm build --force' and build.get('nodeVersion') == 'v22.23.2' and build.get('pnpmVersion') == '11.19.0', 'Build command/tool mismatch')
+        require(build.get('command') == ' '.join(BUILD_COMMAND) and build.get('nodeVersion') == 'v22.23.2' and build.get('pnpmVersion') == '11.19.0', 'Build command/tool mismatch')
         require(type(browser.get('schemaVersion')) is int and browser['schemaVersion'] == 1 and browser.get('syntheticOnly') is True and browser.get('status') == 'passed', 'Browser not passed')
         require(browser.get('sourceSha') == build['sha'] and browser.get('buildId') == build['buildId'], 'Browser/build mismatch')
         require(browser.get('origin') == 'http://127.0.0.1:3287' and browser.get('checks') == CHECKS, 'Incomplete journey')
