@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "nutrition-tracker-managed-runtime-policy-v1",
+  "profile": "appwrite-cloud-azure-v1",
+  "approvedReviewSha256": "a75d86de6a1157856aeeae5a935b14d06d335f53e0f6e1a35f93b62211c89d9d",
+  "endpoint": "https://nyc.cloud.appwrite.io/v1",
+  "projectId": "6abac02e002f10c31ac2",
+  "infrastructureTrust": "provider-managed-hidden-host-components-not-verified",
+  "observableRuntime": {
+    "node": "22.23.2",
+    "openssl": "3.5.7",
+    "opensslFixCommit": "08e7756c3900bcfd77a720e7b74e27d6e4ed01a9",
+    "architectures": ["arm64", "x64"]
+  },
+  "reviewMaximumAgeHours": 24,
+  "observationMaximumAgeMinutes": 60,
+  "applicationAccess": "public-authenticated-api-with-bounded-anonymous-routes",
+  "backendComponents": ["api", "worker", "migrator", "caddy", "postgres", "meilisearch"]
+}

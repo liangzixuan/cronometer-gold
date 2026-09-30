@@ -43,15 +43,19 @@ const caps = {
   "browserstack.networkLogs": false,
   "browserstack.console": "disable",
   playwrightLogs: false,
+  "browserstack.playwrightLogs": false,
   "browserstack.maskCommands":
     "sendType,sendPress,setHTTPCredentials,setStorageState,setGeolocation",
 };
+const playwrightLogsDisabled =
+  caps.playwrightLogs === false && caps["browserstack.playwrightLogs"] === false;
+assert(playwrightLogsDisabled, "Playwright logging must be disabled");
 const captureRequested = {
   video: false,
   screenshots: false,
   networkLogs: false,
   console: "disable",
-  playwrightLogs: false,
+  playwrightLogs: !playwrightLogsDisabled,
   maskCommands: caps["browserstack.maskCommands"],
 };
 const receipt = {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ArtifactAuthenticationError,
@@ -14,6 +14,11 @@ import {
   parseArtifactEncryptionKeyRing,
   type RawArtifactStore,
 } from "./artifact-encryption.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rm: vi.fn(actual.rm) };
+});
 
 class MemoryRawArtifactStore implements RawArtifactStore {
   readonly objects = new Map<string, Buffer>();
@@ -337,4 +342,55 @@ describe("artifact encryption key configuration", () => {
       }),
     ).toThrowError(expect.objectContaining({ field: "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID" }));
   });
+});
+
+it("automatic spool disposal catches only its notification rejection and preserves explicit failures", async () => {
+  const directory = join(tmpdir(), "nutrition-disposal-" + randomBytes(12).toString("hex"));
+  cleanupDirectories.push(directory);
+  await mkdir(directory, { mode: 0o700 });
+  const raw = new MemoryRawArtifactStore();
+  const store = new EncryptedArtifactStore({
+    keyRing: keyRing(),
+    rawStore: raw,
+    temporaryDirectory: directory,
+  });
+  const bytes = Buffer.from("synthetic authenticated disposal");
+  const metadata = await store.put({
+    mediaType: "application/json",
+    objectKey: "exports/disposal.json.enc",
+    plaintextBytes: bytes.length,
+    source: Readable.from([bytes]),
+  });
+  const opened = required(
+    await store.openAuthenticated(metadata),
+    "Missing authenticated artifact",
+  );
+
+  const original = new Error("synthetic public rm failure");
+  const unhandled: unknown[] = [];
+  const listener = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", listener);
+  const removal = vi.mocked(rm);
+  removal.mockClear();
+  removal.mockRejectedValueOnce(original);
+  try {
+    const closed = new Promise<void>((done) => opened.stream.once("close", done));
+    opened.stream.destroy();
+    await closed;
+    await new Promise((done) => setImmediate(done));
+    await expect(opened.dispose()).rejects.toBe(original);
+    await expect(opened.dispose()).rejects.toBe(original);
+    await new Promise((done) => setImmediate(done));
+    expect(removal).toHaveBeenCalledTimes(1);
+    expect(await readdir(directory)).toHaveLength(1);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", listener);
+    removal.mockReset();
+    removal.mockImplementation(
+      (await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")).rm,
+    );
+  }
 });

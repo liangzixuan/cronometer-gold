@@ -1,14 +1,7 @@
 {
-  "schemaVersion": "nutrition-tracker-release-deployment-v7",
-  "deploymentPlatform": "azure",
+  "schemaVersion": "nutrition-tracker-release-deployment-v8",
+  "profile": "appwrite-cloud-azure-v1",
+  "target": "production",
   "deploymentConfirmed": false,
-  "apiOrigin": null,
-  "serviceGitCommit": null,
-  "serviceImages": null,
-  "deployedBy": null,
-  "externalHttpsEvidenceSha256": null,
-  "reviewerAccessEvidenceSha256": null,
-  "reviewedBy": null,
-  "reviewerAttestation": null,
-  "reviewedAt": null
+  "apiOrigin": null
 }

@@ -15,14 +15,24 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
+  POSTGRES_BACKUP_EVIDENCE_LIMITS,
+  PostgresBackupEvidenceError,
+  parsePostgresBackupEvidence,
+  serializePostgresBackupEvidence,
+} from "./postgres-backup-evidence.mjs";
+
+import {
   assertProtectedDumpDestination,
   assertRegularDumpArtifact,
   assertRestoreAuthorityPolicyDigest,
   canonicalizeRestoreAuthorityEvidence,
+  collectAuthorityFingerprint,
   collectRestoreMigrationLedger,
   compareRestoreEvidence,
   parseRestoreDrillArguments,
   RESTORE_AUTHORITY_POLICY_SHA256,
+  RESTORE_EVIDENCE_QUERIES,
+  RESTORE_EVIDENCE_VIEW_QUERIES,
   removeDumpArtifact,
   retainRestoreAuthorityConstraintMismatch,
   runCommand,
@@ -3115,4 +3125,1547 @@ test("rejects changed or incomplete source-defined public eligibility view evide
       /public eligibility view/,
     );
   }
+});
+
+function completeBackupEvidence() {
+  const authority = validAuthorityEvidence();
+  const authorityFingerprint = canonicalizeRestoreAuthorityEvidence(authority);
+  return {
+    authorityFingerprint,
+    authorityFingerprintSha256: createHash("sha256").update(authorityFingerprint).digest("hex"),
+    authorityPolicySha256: RESTORE_AUTHORITY_POLICY_SHA256,
+    migrationLedger: TRACKED_MIGRATION_LEDGER_JSON,
+    tableCounts: new Map(
+      authority.relations
+        .filter(({ kind }) => kind === "r" || kind === "p")
+        .map(({ name }, index) => [name, String(index)]),
+    ),
+    unvalidatedConstraints: "0",
+  };
+}
+
+function backupEvidenceWire(change = () => undefined) {
+  const record = JSON.parse(
+    serializePostgresBackupEvidence(completeBackupEvidence(), expectedOwner),
+  );
+  change(record);
+  return Buffer.from(canonicalizeRestoreAuthorityEvidence(record));
+}
+
+function backupFingerprintChange(record, change) {
+  const authority = JSON.parse(record.authorityFingerprint);
+  change(authority);
+  record.authorityFingerprint = canonicalizeRestoreAuthorityEvidence(authority);
+  record.authorityFingerprintSha256 = createHash("sha256")
+    .update(record.authorityFingerprint)
+    .digest("hex");
+}
+
+function rejectsBackupEvidence(operation) {
+  assert.throws(operation, (error) => {
+    assert.ok(error instanceof PostgresBackupEvidenceError);
+    assert.equal(error.message, "PostgreSQL backup source evidence is invalid");
+    assert.equal(error.cause, undefined);
+    return true;
+  });
+}
+
+test("backup evidence round-trips the complete authority fixture and existing comparison", (t) => {
+  const source = completeBackupEvidence();
+  const bytes = serializePostgresBackupEvidence(source, expectedOwner);
+  const parsed = parsePostgresBackupEvidence(bytes, expectedOwner);
+  compareRestoreEvidence(source, parsed);
+  assert.equal(parsed.authorityFingerprint, source.authorityFingerprint);
+  assert.equal(parsed.migrationLedger, source.migrationLedger);
+  assert.equal(parsed.authorityFingerprintSha256, source.authorityFingerprintSha256);
+  assert.deepEqual(serializePostgresBackupEvidence(parsed, expectedOwner), bytes);
+  assert.deepEqual([...parsed.tableCounts.keys()], [...source.tableCounts.keys()].sort());
+  source.tableCounts.clear();
+  assert.ok(parsed.tableCounts.size > 0);
+  t.diagnostic(`Complete synthetic backup evidence: ${bytes.length} bytes`);
+});
+
+test("backup evidence serializer orders counts without changing fingerprint or source map", () => {
+  const evidence = completeBackupEvidence();
+  const reversed = { ...evidence, tableCounts: new Map([...evidence.tableCounts].reverse()) };
+  const originalOrder = [...reversed.tableCounts.keys()];
+  assert.deepEqual(
+    serializePostgresBackupEvidence(evidence, expectedOwner),
+    serializePostgresBackupEvidence(reversed, expectedOwner),
+  );
+  assert.deepEqual([...reversed.tableCounts.keys()], originalOrder);
+});
+
+for (const [name, change] of [
+  [
+    "unknown outer field",
+    (r) => {
+      r.accepted = true;
+    },
+  ],
+  [
+    "missing outer field",
+    (r) => {
+      delete r.authorityFingerprint;
+    },
+  ],
+  [
+    "unknown format",
+    (r) => {
+      r.formatVersion = "nutrition-postgres-restore-evidence-v2";
+    },
+  ],
+  [
+    "changed owner",
+    (r) => {
+      r.expectedOwner = "different_owner";
+    },
+  ],
+  [
+    "changed policy digest",
+    (r) => {
+      r.authorityPolicySha256 = "0".repeat(64);
+    },
+  ],
+  [
+    "changed fingerprint digest",
+    (r) => {
+      r.authorityFingerprintSha256 = "0".repeat(64);
+    },
+  ],
+  [
+    "incomplete ledger",
+    (r) => {
+      r.migrationLedger = "[]";
+    },
+  ],
+  [
+    "noncanonical ledger",
+    (r) => {
+      r.migrationLedger = ` ${r.migrationLedger}`;
+    },
+  ],
+  [
+    "noncanonical fingerprint",
+    (r) => {
+      r.authorityFingerprint = ` ${r.authorityFingerprint}`;
+    },
+  ],
+  [
+    "unvalidated constraint",
+    (r) => {
+      r.unvalidatedConstraints = "1";
+    },
+  ],
+  [
+    "unknown count field",
+    (r) => {
+      r.tableCounts[0].accepted = true;
+    },
+  ],
+  [
+    "missing table count",
+    (r) => {
+      r.tableCounts.shift();
+    },
+  ],
+  [
+    "extra table count",
+    (r) => {
+      r.tableCounts.push({ count: "0", table: "zz_extra_table" });
+    },
+  ],
+  [
+    "duplicate table count",
+    (r) => {
+      r.tableCounts.splice(1, 0, r.tableCounts[0]);
+    },
+  ],
+  [
+    "unsorted table counts",
+    (r) => {
+      r.tableCounts.reverse();
+    },
+  ],
+  [
+    "numeric count",
+    (r) => {
+      r.tableCounts[0].count = 0;
+    },
+  ],
+  [
+    "leading zero count",
+    (r) => {
+      r.tableCounts[0].count = "00";
+    },
+  ],
+  [
+    "negative count",
+    (r) => {
+      r.tableCounts[0].count = "-1";
+    },
+  ],
+  [
+    "overflow count",
+    (r) => {
+      r.tableCounts[0].count = "9223372036854775808";
+    },
+  ],
+  [
+    "unsafe table name",
+    (r) => {
+      r.tableCounts[0].table = "table;select secret";
+    },
+  ],
+  [
+    "view in table counts",
+    (r) => {
+      r.tableCounts.push({ count: "0", table: "promoted_food_search_catalogue_v1" });
+      r.tableCounts.sort((a, b) => (a.table < b.table ? -1 : 1));
+    },
+  ],
+]) {
+  test(`backup evidence rejects ${name}`, () => {
+    rejectsBackupEvidence(() =>
+      parsePostgresBackupEvidence(backupEvidenceWire(change), expectedOwner),
+    );
+  });
+}
+
+for (const [name, change] of [
+  [
+    "unknown authority version",
+    (a) => {
+      a.version = 15;
+    },
+  ],
+  [
+    "missing authority field",
+    (a) => {
+      delete a.roles;
+    },
+  ],
+  [
+    "unknown authority field",
+    (a) => {
+      a.accepted = true;
+    },
+  ],
+  [
+    "malformed authority collection",
+    (a) => {
+      a.roles = {};
+    },
+  ],
+  [
+    "unknown relation field",
+    (a) => {
+      a.relations[0].accepted = true;
+    },
+  ],
+  [
+    "unknown ACL field",
+    (a) => {
+      a.schema.acl[0].accepted = true;
+    },
+  ],
+  [
+    "unknown function field",
+    (a) => {
+      a.functions[0].accepted = true;
+    },
+  ],
+  [
+    "unsafe capability role",
+    (a) => {
+      a.roles[0].superuser = true;
+    },
+  ],
+  [
+    "changed relation owner",
+    (a) => {
+      a.relations[0].owner = "different_owner";
+    },
+  ],
+  [
+    "changed authority constraint",
+    (a) => {
+      a.authorityConstraints[0].validated = false;
+    },
+  ],
+  [
+    "changed view definition",
+    (a) => {
+      a.authorityViews[0].definitionMatches = false;
+    },
+  ],
+  [
+    "changed function semantics",
+    (a) => {
+      a.functions[0].source_sha256 = "0".repeat(64);
+    },
+  ],
+]) {
+  test(`backup evidence delegates rejection of ${name}`, () => {
+    const bytes = backupEvidenceWire((record) => backupFingerprintChange(record, change));
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  });
+}
+
+test("backup evidence accepts exact PostgreSQL int8 upper count and rejects changed caller owner", () => {
+  const bytes = backupEvidenceWire((record) => {
+    record.tableCounts[0].count = "9223372036854775807";
+  });
+  assert.equal(
+    [...parsePostgresBackupEvidence(bytes, expectedOwner).tableCounts.values()][0],
+    "9223372036854775807",
+  );
+  rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, "different_owner"));
+  rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, "owner;secret"));
+});
+
+test("backup evidence closes missing or unknown serializer fields and rejects non-map counts", () => {
+  const evidence = completeBackupEvidence();
+  for (const input of [
+    { ...evidence, accepted: true },
+    { ...evidence, authorityFingerprint: undefined },
+    { ...evidence, tableCounts: [...evidence.tableCounts] },
+  ])
+    rejectsBackupEvidence(() => serializePostgresBackupEvidence(input, expectedOwner));
+});
+
+test("backup evidence rejects noncanonical encodings, duplicate fields, invalid UTF8 and trailing data", () => {
+  const bytes = backupEvidenceWire();
+  const text = bytes.toString("utf8");
+  const duplicate = `{"expectedOwner":"${expectedOwner}",${text.slice(1)}`;
+  for (const input of [
+    Buffer.alloc(0),
+    new Uint8Array(bytes),
+    bytes.toString("utf8"),
+    Buffer.concat([Buffer.from([0xff]), bytes]),
+    Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), bytes]),
+    Buffer.from(` ${text}`),
+    Buffer.from(`${text}\n`),
+    Buffer.from(`${text}null`),
+    Buffer.from(duplicate),
+    Buffer.from(text.replace('"formatVersion"', '"format\\u0056ersion"')),
+  ])
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(input, expectedOwner));
+});
+
+test("backup evidence rejects oversized bytes and deeply nested input before canonicalization", () => {
+  rejectsBackupEvidence(() =>
+    parsePostgresBackupEvidence(
+      Buffer.alloc(POSTGRES_BACKUP_EVIDENCE_LIMITS.bytes + 1, 32),
+      expectedOwner,
+    ),
+  );
+  const depth = POSTGRES_BACKUP_EVIDENCE_LIMITS.depth + 1;
+  rejectsBackupEvidence(() =>
+    parsePostgresBackupEvidence(
+      Buffer.from(`${"[".repeat(depth)}0${"]".repeat(depth)}`),
+      expectedOwner,
+    ),
+  );
+  const row = `[${new Array(4096).fill("0").join(",")}]`;
+  rejectsBackupEvidence(() =>
+    parsePostgresBackupEvidence(
+      Buffer.from(`[${new Array(13).fill(row).join(",")}]`),
+      expectedOwner,
+    ),
+  );
+  rejectsBackupEvidence(() =>
+    parsePostgresBackupEvidence(
+      Buffer.from(`[${new Array(4097).fill("0").join(",")}]`),
+      expectedOwner,
+    ),
+  );
+});
+
+test("backup evidence bounds nested fingerprint input and never echoes private rejected input", () => {
+  const depth = POSTGRES_BACKUP_EVIDENCE_LIMITS.depth + 1;
+  const privateValue = "private-credential-sentinel";
+  const bytes = backupEvidenceWire((record) => {
+    record.authorityFingerprint = `${"[".repeat(depth)}${JSON.stringify(privateValue)}${"]".repeat(depth)}`;
+  });
+  rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  const cyclic = completeBackupEvidence();
+  cyclic.authorityFingerprint = privateValue;
+  rejectsBackupEvidence(() => serializePostgresBackupEvidence(cyclic, expectedOwner));
+});
+
+test("backup evidence rejects cyclic in-memory records and object-valued table keys without coercion", () => {
+  const evidence = completeBackupEvidence();
+  const cycle = {};
+  cycle.self = cycle;
+  rejectsBackupEvidence(() => serializePostgresBackupEvidence(evidence, cycle));
+  let coerced = false;
+  const table = {
+    toString() {
+      coerced = true;
+      return "private_table";
+    },
+  };
+  rejectsBackupEvidence(() =>
+    serializePostgresBackupEvidence(
+      {
+        ...evidence,
+        tableCounts: new Map([
+          [table, "0"],
+          ["app_user", "0"],
+        ]),
+      },
+      expectedOwner,
+    ),
+  );
+  assert.equal(coerced, false);
+});
+
+test("backup evidence rejects malformed nested field projections and lone surrogate strings", () => {
+  for (const mutate of [
+    (entry) => {
+      entry["arguments,config"] = "private-input";
+      delete entry.arguments;
+      delete entry.config;
+    },
+    (entry) => {
+      entry.arguments = "\ud800";
+    },
+  ]) {
+    const bytes = backupEvidenceWire((record) =>
+      backupFingerprintChange(record, (authority) => {
+        const ordinary = authority.functions.find(
+          (entry) => !entry.security_definer && entry.acl_is_default,
+        );
+        assert.ok(ordinary);
+        const entry = { ...structuredClone(ordinary), name: "custom_ordinary_function" };
+        mutate(entry);
+        authority.functions.push(entry);
+      }),
+    );
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  }
+});
+
+for (const [field, invalid] of [
+  ["arguments", {}],
+  ["config", {}],
+  ["config", [false]],
+  ["source_sha256", "not-a-sha256"],
+  ["strict", "false"],
+  ["language", null],
+]) {
+  test(`backup evidence rejects malformed ordinary-function ${field} projection ${JSON.stringify(invalid)}`, () => {
+    const bytes = backupEvidenceWire((record) =>
+      backupFingerprintChange(record, (authority) => {
+        const ordinary = authority.functions.find(
+          (entry) => !entry.security_definer && entry.acl_is_default,
+        );
+        assert.ok(ordinary);
+        authority.functions.push({
+          ...structuredClone(ordinary),
+          name: "custom_ordinary_function",
+          [field]: invalid,
+        });
+      }),
+    );
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  });
+}
+
+test("backup evidence rejects malformed ordinary-trigger fields and unknown relation or type kinds", () => {
+  for (const change of [
+    (authority) => {
+      authority.triggers.push({
+        ...authority.triggers[0],
+        name: "custom_trigger",
+        table_name: "app_user",
+        function_name: "custom_trigger_function",
+        definition: {},
+      });
+    },
+    (authority) => {
+      authority.relations[0].kind = "unknown";
+    },
+    (authority) => {
+      authority.types[0].kind = "unknown";
+    },
+  ]) {
+    const bytes = backupEvidenceWire((record) => backupFingerprintChange(record, change));
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  }
+});
+
+test("backup evidence rejects a duplicate protected function concealing a missing required function", () => {
+  const bytes = backupEvidenceWire((record) =>
+    backupFingerprintChange(record, (authority) => {
+      const protectedNames = new Set(pagedAuthorityPolicy.functions.map(({ name }) => name));
+      const required = authority.functions.filter(({ name }) => protectedNames.has(name));
+      assert.ok(required.length > 1 && required[0].name !== required[1].name);
+      const missingIndex = authority.functions.indexOf(required[1]);
+      authority.functions[missingIndex] = structuredClone(required[0]);
+      // The existing policy validator counts required rows but does not establish
+      // uniqueness. The wire adapter must close this independently of SQL policy.
+      assert.doesNotThrow(() => validateRestoreAuthorityEvidence(authority, expectedOwner));
+    }),
+  );
+  rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+});
+
+for (const [name, mutate] of [
+  [
+    "ordinary function",
+    (authority) => {
+      const ordinary = authority.functions.find(
+        (entry) => !entry.security_definer && entry.acl_is_default,
+      );
+      assert.ok(ordinary);
+      const row = { ...structuredClone(ordinary), name: "custom_duplicate_function" };
+      authority.functions.push(row, structuredClone(row));
+    },
+  ],
+  [
+    "type",
+    (authority) => {
+      authority.types.push(structuredClone(authority.types[0]));
+    },
+  ],
+  [
+    "ordinary trigger",
+    (authority) => {
+      const row = {
+        ...structuredClone(authority.triggers[0]),
+        name: "custom_duplicate_trigger",
+        table_name: "app_user",
+        function_name: "custom_trigger_function",
+      };
+      authority.triggers.push(row, structuredClone(row));
+    },
+  ],
+]) {
+  test(`backup evidence rejects duplicate ${name} wire identities`, () => {
+    const bytes = backupEvidenceWire((record) =>
+      backupFingerprintChange(record, (authority) => {
+        mutate(authority);
+        assert.doesNotThrow(() => validateRestoreAuthorityEvidence(authority, expectedOwner));
+      }),
+    );
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  });
+}
+
+test("backup evidence preserves legitimate ordinary-function overload identities", () => {
+  const bytes = backupEvidenceWire((record) =>
+    backupFingerprintChange(record, (authority) => {
+      const ordinary = authority.functions.find(
+        (entry) => !entry.security_definer && entry.acl_is_default,
+      );
+      assert.ok(ordinary);
+      for (const arguments_ of ["", "value integer"]) {
+        authority.functions.push({
+          ...structuredClone(ordinary),
+          name: "custom_overloaded_function",
+          arguments: arguments_,
+        });
+      }
+    }),
+  );
+  const parsed = parsePostgresBackupEvidence(bytes, expectedOwner);
+  const overloads = JSON.parse(parsed.authorityFingerprint).functions.filter(
+    (entry) => entry.name === "custom_overloaded_function",
+  );
+  assert.deepEqual(
+    overloads.map((entry) => entry.arguments),
+    ["", "value integer"],
+  );
+});
+
+test("backup evidence rejects duplicate ACL identities even when grantability differs", () => {
+  for (const target of ["ordinary function", "type"]) {
+    const bytes = backupEvidenceWire((record) =>
+      backupFingerprintChange(record, (authority) => {
+        let row;
+        if (target === "type") row = authority.types[0];
+        else {
+          const ordinary = authority.functions.find(
+            (entry) => !entry.security_definer && entry.acl_is_default,
+          );
+          assert.ok(ordinary);
+          row = { ...structuredClone(ordinary), name: "custom_duplicate_acl_function" };
+          authority.functions.push(row);
+        }
+        row.acl.push({ ...row.acl[0], grantable: !row.acl[0].grantable });
+        assert.doesNotThrow(() => validateRestoreAuthorityEvidence(authority, expectedOwner));
+      }),
+    );
+    rejectsBackupEvidence(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+  }
+});
+
+test("backup evidence keeps tuple identity components distinct without delimiter collisions", () => {
+  const bytes = backupEvidenceWire((record) =>
+    backupFingerprintChange(record, (authority) => {
+      const ordinary = authority.functions.find(
+        (entry) => !entry.security_definer && entry.acl_is_default,
+      );
+      assert.ok(ordinary);
+      for (const [name, arguments_] of [
+        ["custom|scope", "value integer"],
+        ["custom", "scope|value integer"],
+      ]) {
+        authority.functions.push({ ...structuredClone(ordinary), name, arguments: arguments_ });
+      }
+    }),
+  );
+  assert.doesNotThrow(() => parsePostgresBackupEvidence(bytes, expectedOwner));
+});
+
+// Complete synthetic data exercises the shared SQL adapters without a database.
+const preservedRestoreQueryHashes = {
+  authorityConstraints: "3d5718ddb86dedca6831b7b8a517a93973136e3f78184235c991b4a32c35a106",
+  referenceIntegrityConstraints: "8fca639035fd4af820a9dc404bec44625ecd5da379cc779e040390f7deb9272f",
+  authorityFrozenColumns: "1a12a02aaf3360f041d3bb37f092819bfc29b556eba8c6f03e6a55fd537792f2",
+  authorityIndexes: "f8369fb1826e10872640fd547a5f96fb37d844f7430035918b2297f1fc64954b",
+  columnAcls: "fff8e3114559bf5f2c69ce7ab3083b781cdef13c5f1177fc9d80ce2b7ccf2264",
+  explicitColumnAclAttributeCount:
+    "00043dd2876de75d53f13faa8b599a4424896c4a12524c11e07d13aa178d3f3d",
+  defaultAcls: "a0d619a0b2ae7dea4552f3f1eb140fe0cabddef3ad6bde7bc9802c28dcab9a18",
+  functions: "89bf80b1e38caaed74468e11e76ad7f94f5354844197842402ac509538340e0b",
+  relations: "45e1cbfc2d99cf8107d42954d94d48e5d69f5760819e15e9a8e6377a5402df06",
+  roles: "449cc456c774a58e2ad985ecd18d9993288c4200e28fec1be6270b3bbe19b0b6",
+  schema: "74b478328fca562a9496b392ac72b38936346fa54c5cafaced568bb98914ae5d",
+  triggers: "13b9ee7b1dfede9fdfa8798d2ab04c601f95f27203a03e7306c7fe640049da4e",
+  types: "b8aef2a36a56fb90274e30e0ec05b2939c20be0e335dd01a93c63af8de178c27",
+  ledger: "d5afbde5d5961a5ca5c5adf32b0c8357c5cc188048a835b7a9415b4c4fcd0761",
+  tables: "17acb52a530de6ec3068f81fec38fe8dfc582cd9c23043daf4b6454ed5ad4e4f",
+  unvalidated: "1d567f05254c618ee227a5ef397d981d4c6cfe317f2857986235671ef44191fb",
+  count: "6bf675f30acd845341cf4d511b1d89dd354146d666a4599730e356907d51386c",
+};
+
+async function sharedCollectorModules() {
+  return {
+    ...(await import("./postgres-restore-evidence-queries.mjs")),
+    ...(await import("./postgres-restore-evidence-collector.mjs")),
+  };
+}
+
+function sharedCollectorAdapter({ mutateEvidence = () => undefined, respond, onQuery } = {}) {
+  const source = completeBackupEvidence();
+  const authority = JSON.parse(source.authorityFingerprint);
+  mutateEvidence(authority);
+  const calls = [];
+  const temporary = new Map();
+  const identity = {
+    backend: "1234",
+    database: "nutrition",
+    principal: expectedOwner,
+    sessionPrincipal: expectedOwner,
+    isolation: "repeatable read",
+    readOnly: "on",
+    snapshot: "100:110:105",
+    transactionStartedAt: "2026-09-30 00:00:00+00",
+    virtualTransaction: "3/21",
+  };
+  let phase = "idle";
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  const query = async (config) => {
+    const call = { ...config, values: [...config.values], phase };
+    calls.push(call);
+    maximumInFlight = Math.max(maximumInFlight, ++inFlight);
+    try {
+      if (onQuery) await onQuery(call);
+      let result;
+      if (config.text === "begin read write") {
+        phase = "prepare";
+        result = { rows: [] };
+      } else if (config.text === "rollback") {
+        phase = "idle";
+        temporary.clear();
+        result = { rows: [] };
+      } else if (config.text.startsWith("set local ")) result = { rows: [] };
+      else if (config.text.includes("json_build_object('backend'")) {
+        const observed = { ...identity, readOnly: phase === "prepare" ? "off" : identity.readOnly };
+        if (!config.text.includes("virtualTransaction")) delete observed.virtualTransaction;
+        result = { rows: [[JSON.stringify(observed)]] };
+      } else if (config.text.startsWith("create temporary view ")) {
+        const name = config.text.split(" ")[3];
+        const expected = RESTORE_EVIDENCE_VIEW_QUERIES.find((entry) =>
+          config.text.endsWith(` as ${entry.query};`),
+        );
+        assert.ok(expected, "temporary view uses an exact reviewed query");
+        temporary.set(`pg_temp.${name}`, `normalized:${expected.name}`);
+        result = { rows: [] };
+      } else if (config.text === "select pg_catalog.pg_get_viewdef($1::regclass,false)") {
+        result = { rows: [[temporary.get(config.values[0])]] };
+      } else if (
+        config.text.startsWith("select pg_catalog.set_config('nutrition.expected_restore_owner'")
+      ) {
+        result = { rows: [[config.values[0]]] };
+      } else if (config.text.startsWith("select pg_catalog.json_build_object('definition'")) {
+        const view = authority.authorityViews.find((entry) => entry.name === config.values[0]);
+        result = view
+          ? {
+              rows: [
+                [JSON.stringify({ definition: `normalized:${view.name}`, options: view.options })],
+              ],
+            }
+          : { rows: [] };
+      } else {
+        const entry = Object.entries(RESTORE_EVIDENCE_QUERIES).find(
+          ([, value]) => value.parts.join(" ") === config.text,
+        );
+        if (entry)
+          result = {
+            rows: [
+              [
+                entry[1].kind === "json"
+                  ? JSON.stringify(authority[entry[0]])
+                  : authority[entry[0]],
+              ],
+            ],
+          };
+        else if (config.text.includes("json_agg(row_to_json(m)"))
+          result = { rows: [[source.migrationLedger]] };
+        else if (config.text === "select count(*) from pg_constraint where not convalidated")
+          result = { rows: [[source.unvalidatedConstraints]] };
+        else if (config.text.includes("string_agg(tablename"))
+          result = { rows: [[[...source.tableCounts.keys()].sort().join(",")]] };
+        else {
+          const table = config.text.match(/^select count\(\*\) from public\."([a-z0-9_]+)"$/u)?.[1];
+          assert.ok(table, "only reviewed evidence SQL executes");
+          result = { rows: [[source.tableCounts.get(table)]] };
+        }
+      }
+      return respond ? await respond(call, result) : result;
+    } finally {
+      inFlight--;
+    }
+  };
+  return {
+    query,
+    calls,
+    source,
+    identity,
+    snapshot() {
+      phase = "collect";
+    },
+    get maximumInFlight() {
+      return maximumInFlight;
+    },
+    get inFlight() {
+      return inFlight;
+    },
+  };
+}
+
+async function preparedSharedCollector(options) {
+  const adapter = sharedCollectorAdapter(options);
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const collector = await preparePostgresRestoreEvidence(adapter.query, { expectedOwner });
+  adapter.snapshot();
+  return { adapter, collector };
+}
+
+test("shared collector conserves every extracted SQL byte and synchronous authority result", async () => {
+  const modules = await sharedCollectorModules();
+  const queries = {
+    ...Object.fromEntries(
+      Object.entries(RESTORE_EVIDENCE_QUERIES).map(([key, value]) => [key, value.parts]),
+    ),
+    ledger: modules.RESTORE_MIGRATION_LEDGER_QUERY,
+    tables: modules.RESTORE_TABLE_LIST_QUERY,
+    unvalidated: modules.RESTORE_UNVALIDATED_CONSTRAINTS_QUERY,
+    count: modules.restoreTableCountQuery("nutrition_test"),
+  };
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(queries).map(([key, parts]) => [
+        key,
+        createHash("sha256").update(parts.join(" ")).digest("hex"),
+      ]),
+    ),
+    preservedRestoreQueryHashes,
+  );
+  assert.ok(Object.isFrozen(RESTORE_EVIDENCE_QUERIES));
+  for (const value of Object.values(RESTORE_EVIDENCE_QUERIES)) {
+    assert.ok(Object.isFrozen(value));
+    assert.ok(Object.isFrozen(value.parts));
+  }
+  const authority = validAuthorityEvidence();
+  const observed = [];
+  const result = collectAuthorityFingerprint(
+    (_command, args, options) => {
+      if (options?.input) {
+        const view = authority.authorityViews.find((entry) =>
+          options.input.includes(`'${entry.name}'`),
+        );
+        assert.ok(view);
+        return JSON.stringify(view);
+      }
+      const text = args.at(-1);
+      const entry = Object.entries(RESTORE_EVIDENCE_QUERIES).find(
+        ([, value]) => value.parts.join(" ") === text,
+      );
+      assert.ok(entry);
+      observed.push(entry[0]);
+      return entry[1].kind === "json" ? JSON.stringify(authority[entry[0]]) : authority[entry[0]];
+    },
+    { expectedOwner, container: "fixture", user: expectedOwner },
+    "nutrition",
+  );
+  assert.deepEqual(observed, Object.keys(RESTORE_EVIDENCE_QUERIES));
+  assert.equal(result.fingerprint, canonicalizeRestoreAuthorityEvidence(authority));
+});
+
+test("shared collector produces canonical backup evidence parity with serial read-only queries", async () => {
+  const { adapter, collector } = await preparedSharedCollector();
+  const evidence = await collector.collect();
+  assert.deepEqual(
+    serializePostgresBackupEvidence(evidence, expectedOwner),
+    serializePostgresBackupEvidence(adapter.source, expectedOwner),
+  );
+  assert.equal(adapter.maximumInFlight, 1);
+  assert.equal(adapter.calls.filter((entry) => entry.text === "rollback").length, 1);
+  assert.ok(
+    adapter.calls
+      .filter((entry) => entry.phase === "collect")
+      .every((entry) => /^(?:select|set local) /u.test(entry.text)),
+  );
+  assert.ok(adapter.calls.every((entry) => entry.rowMode === "array"));
+  const count = adapter.calls.length;
+  await assert.rejects(collector.collect());
+  assert.equal(adapter.calls.length, count);
+});
+
+for (const [label, mutate] of [
+  [
+    "owner",
+    (e) => {
+      e.schema.owner = "wrong_owner";
+    },
+  ],
+  [
+    "policy",
+    (e) => {
+      e.authorityConstraints[0].validated = false;
+    },
+  ],
+  [
+    "duplicate function",
+    (e) => {
+      e.functions.push(e.functions[0]);
+    },
+  ],
+  [
+    "view options",
+    (e) => {
+      e.authorityViews[0].options = ["security_barrier=true"];
+    },
+  ],
+]) {
+  test(`shared collector rejects ${label} drift through existing validators`, async () => {
+    const { collector } = await preparedSharedCollector({ mutateEvidence: mutate });
+    await assert.rejects(collector.collect());
+  });
+}
+
+for (const [label, match, replacement] of [
+  ["ledger drift", (t) => t.includes("json_agg(row_to_json(m)"), "[]"],
+  [
+    "unvalidated constraint",
+    (t) => t === "select count(*) from pg_constraint where not convalidated",
+    "1",
+  ],
+  ["omitted table", (t) => t.includes("string_agg(tablename"), ""],
+  ["duplicate table", (t) => t.includes("string_agg(tablename"), "food,food"],
+  ["unsafe table", (t) => t.includes("string_agg(tablename"), 'food";drop table food;--'],
+  [
+    "view definition",
+    (t) => t.startsWith("select pg_catalog.json_build_object('definition'"),
+    JSON.stringify({ definition: "other", options: [] }),
+  ],
+  ["malformed JSON", (t) => t === RESTORE_EVIDENCE_QUERIES.schema.parts.join(" "), "{"],
+  [
+    "deep JSON",
+    (t) => t === RESTORE_EVIDENCE_QUERIES.schema.parts.join(" "),
+    "[".repeat(40) + "0" + "]".repeat(40),
+  ],
+  [
+    "oversized scalar",
+    (t) => t === RESTORE_EVIDENCE_QUERIES.schema.parts.join(" "),
+    "x".repeat(POSTGRES_BACKUP_EVIDENCE_LIMITS.bytes + 1),
+  ],
+]) {
+  test(`shared collector rejects ${label}`, async () => {
+    const { collector } = await preparedSharedCollector({
+      respond: (call, result) =>
+        call.phase === "collect" && match(call.text) ? { rows: [[replacement]] } : result,
+    });
+    await assert.rejects(collector.collect());
+  });
+}
+
+for (const rows of [[], [["{}"], ["{}"]], [["{}", "extra"]], [[{}]], [null]]) {
+  test(`shared collector rejects malformed scalar row shape ${JSON.stringify(rows)}`, async () => {
+    const { collector } = await preparedSharedCollector({
+      respond: (call, result) =>
+        call.phase === "collect" && call.text === RESTORE_EVIDENCE_QUERIES.schema.parts.join(" ")
+          ? { rows }
+          : result,
+    });
+    await assert.rejects(collector.collect());
+  });
+}
+
+for (const [field, value] of [
+  ["readOnly", "off"],
+  ["isolation", "read committed"],
+  ["backend", "5678"],
+  ["database", "other"],
+  ["principal", "other"],
+  ["sessionPrincipal", "other"],
+]) {
+  test(`shared collector rejects invalid starting ${field}`, async () => {
+    const { adapter, collector } = await preparedSharedCollector();
+    adapter.identity[field] = value;
+    await assert.rejects(collector.collect());
+  });
+}
+
+for (const [field, value] of [
+  ["snapshot", "100:111:105"],
+  ["transactionStartedAt", "2026-09-30 00:00:01+00"],
+  ["virtualTransaction", "3/22"],
+  ["backend", "5678"],
+  ["database", "other"],
+  ["readOnly", "off"],
+  ["isolation", "read committed"],
+]) {
+  test(`shared collector rejects ending ${field} change`, async () => {
+    let identities = 0;
+    const { collector } = await preparedSharedCollector({
+      respond: (call, result) => {
+        if (
+          call.phase === "collect" &&
+          call.text.includes("json_build_object('backend'") &&
+          ++identities === 2
+        ) {
+          const identity = JSON.parse(result.rows[0][0]);
+          if (field in identity) identity[field] = value;
+          return { rows: [[JSON.stringify(identity)]] };
+        }
+        return result;
+      },
+    });
+    await assert.rejects(collector.collect());
+  });
+}
+
+test("shared collector validates inputs before BEGIN and skips work on pre-abort", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const adapter = sharedCollectorAdapter();
+  for (const owner of [undefined, {}, "", 'owner";rollback', "A".repeat(64)]) {
+    await assert.rejects(preparePostgresRestoreEvidence(adapter.query, { expectedOwner: owner }));
+  }
+  await assert.rejects(preparePostgresRestoreEvidence(null, { expectedOwner }));
+  await assert.rejects(
+    preparePostgresRestoreEvidence(adapter.query, { expectedOwner, signal: AbortSignal.abort() }),
+  );
+  assert.equal(adapter.calls.length, 0);
+});
+
+test("shared collector preparation retains primary and awaited rollback errors", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const primary = new Error("synthetic prepare failure");
+  const cleanup = new Error("synthetic rollback failure");
+  let released;
+  const waiting = new Promise((resolve) => {
+    released = resolve;
+  });
+  let rollbackStarted;
+  const started = new Promise((resolve) => {
+    rollbackStarted = resolve;
+  });
+  const adapter = sharedCollectorAdapter({
+    onQuery: async (call) => {
+      if (call.text.startsWith("create temporary view")) throw primary;
+      if (call.text === "rollback") {
+        rollbackStarted();
+        await waiting;
+        throw cleanup;
+      }
+    },
+  });
+  let settled = false;
+  const promise = preparePostgresRestoreEvidence(adapter.query, { expectedOwner }).finally(() => {
+    settled = true;
+  });
+  const rejection = assert.rejects(promise, (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors, [primary, cleanup]);
+    return true;
+  });
+  await started;
+  assert.equal(settled, false);
+  released();
+  await rejection;
+});
+
+test("shared collector preparation abort waits for started query and uses independent cleanup signal", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const controller = new AbortController();
+  let release, start;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    start = resolve;
+  });
+  const adapter = sharedCollectorAdapter({
+    onQuery: async (call) => {
+      if (call.text.startsWith("create temporary view")) {
+        start();
+        await waiting;
+      }
+    },
+  });
+  const promise = preparePostgresRestoreEvidence(adapter.query, {
+    expectedOwner,
+    signal: controller.signal,
+  });
+  const rejection = assert.rejects(promise, /aborted/u);
+  await started;
+  controller.abort();
+  assert.equal(
+    adapter.calls.some((entry) => entry.text === "rollback"),
+    false,
+  );
+  release();
+  await rejection;
+  const cleanup = adapter.calls.at(-1);
+  assert.equal(cleanup.text, "rollback");
+  assert.notEqual(cleanup.signal, controller.signal);
+  assert.equal(cleanup.signal.aborted, false);
+  assert.equal(adapter.maximumInFlight, 1);
+});
+
+test("shared collector rejects concurrent collection and consumes aborted collector without transaction cleanup", async () => {
+  let release, start;
+  const waiting = new Promise((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise((resolve) => {
+    start = resolve;
+  });
+  const { adapter, collector } = await preparedSharedCollector({
+    onQuery: async (call) => {
+      if (
+        call.phase === "collect" &&
+        call.text === RESTORE_EVIDENCE_QUERIES.schema.parts.join(" ")
+      ) {
+        start();
+        await waiting;
+      }
+    },
+  });
+  const controller = new AbortController();
+  const pending = collector.collect({ signal: controller.signal });
+  const rejection = assert.rejects(pending, /aborted/u);
+  await started;
+  const count = adapter.calls.length;
+  await assert.rejects(collector.collect());
+  assert.equal(adapter.calls.length, count);
+  controller.abort();
+  assert.equal(adapter.inFlight, 1);
+  release();
+  await rejection;
+  assert.equal(adapter.inFlight, 0);
+  await assert.rejects(collector.collect());
+  assert.equal(adapter.calls.length, count);
+  assert.ok(
+    adapter.calls
+      .filter((entry) => entry.phase === "collect")
+      .every((entry) => /^(?:select|set local) /u.test(entry.text)),
+  );
+});
+
+test("shared collector never returns preparation when successful work has failed rollback", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const failure = new Error("synthetic rollback failure");
+  const adapter = sharedCollectorAdapter({
+    onQuery: (call) => {
+      if (call.text === "rollback") throw failure;
+    },
+  });
+  await assert.rejects(
+    preparePostgresRestoreEvidence(adapter.query, { expectedOwner }),
+    (error) => error === failure,
+  );
+});
+
+test("shared collector preserves even non-Error preparation failures after cleanup", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const adapter = sharedCollectorAdapter({
+    onQuery: (call) => {
+      if (call.text.startsWith("create temporary view")) throw null;
+    },
+  });
+  let resolved = false;
+  await preparePostgresRestoreEvidence(adapter.query, { expectedOwner }).then(
+    () => {
+      resolved = true;
+    },
+    (error) => {
+      assert.equal(error, null);
+    },
+  );
+  assert.equal(resolved, false);
+  assert.equal(adapter.calls.at(-1).text, "rollback");
+});
+
+for (const value of [undefined, "", "x".repeat(POSTGRES_BACKUP_EVIDENCE_LIMITS.bytes + 1)]) {
+  test(`shared collector rejects invalid prepared definition ${typeof value}:${value?.length}`, async () => {
+    const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+    const adapter = sharedCollectorAdapter({
+      respond: (call, result) =>
+        call.text === "select pg_catalog.pg_get_viewdef($1::regclass,false)"
+          ? { rows: [[value]] }
+          : result,
+    });
+    await assert.rejects(preparePostgresRestoreEvidence(adapter.query, { expectedOwner }));
+    assert.equal(adapter.calls.at(-1).text, "rollback");
+  });
+}
+
+test("shared collector rejects non-array query rows and nonempty command rows", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  for (const result of [null, {}, { rows: {} }, { rows: [["unexpected command data"]] }]) {
+    const adapter = sharedCollectorAdapter({
+      respond: (call, ordinary) => (call.text === "begin read write" ? result : ordinary),
+    });
+    await assert.rejects(preparePostgresRestoreEvidence(adapter.query, { expectedOwner }));
+    assert.equal(adapter.calls.at(-1).text, "rollback");
+  }
+});
+
+test("shared collector consumes a pre-aborted collection without issuing queries", async () => {
+  const { adapter, collector } = await preparedSharedCollector();
+  const count = adapter.calls.length;
+  await assert.rejects(collector.collect({ signal: AbortSignal.abort() }), /aborted/u);
+  await assert.rejects(collector.collect());
+  assert.equal(adapter.calls.length, count);
+});
+
+test("shared collector rejects cancellation that arrives while preparation rollback completes", async () => {
+  const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+  const controller = new AbortController();
+  const adapter = sharedCollectorAdapter({
+    respond: (call, result) => {
+      if (call.text === "rollback") controller.abort();
+      return result;
+    },
+  });
+  await assert.rejects(
+    preparePostgresRestoreEvidence(adapter.query, { expectedOwner, signal: controller.signal }),
+    /aborted/u,
+  );
+  assert.equal(adapter.calls.at(-1).text, "rollback");
+});
+
+test("shared collector rejects an oversized table list before any table-count query", async () => {
+  const { adapter, collector } = await preparedSharedCollector({
+    respond: (call, result) =>
+      call.text.includes("string_agg(tablename")
+        ? { rows: [[Array.from({ length: 4097 }, (_, index) => `table_${index}`).join(",")]] }
+        : result,
+  });
+  await assert.rejects(collector.collect());
+  assert.equal(
+    adapter.calls.some((call) => call.text.startsWith('select count(*) from public."')),
+    false,
+  );
+});
+
+test("shared collector rejects missing virtual transaction identity", async () => {
+  const { adapter, collector } = await preparedSharedCollector();
+  adapter.identity.virtualTransaction = "";
+  await assert.rejects(collector.collect());
+});
+
+for (const failure of [null, undefined, 0]) {
+  for (const stage of ["primary", "cleanup"]) {
+    test(`shared collector retains falsey ${stage} rejection ${String(failure)}`, async () => {
+      const { preparePostgresRestoreEvidence } = await sharedCollectorModules();
+      const adapter = sharedCollectorAdapter({
+        onQuery: (call) => {
+          if (
+            (stage === "primary" && call.text.startsWith("create temporary view")) ||
+            (stage === "cleanup" && call.text === "rollback")
+          )
+            throw failure;
+        },
+      });
+      let rejected = false;
+      await preparePostgresRestoreEvidence(adapter.query, { expectedOwner }).then(
+        () => {
+          assert.fail("a failed preparation must not return a collector");
+        },
+        (error) => {
+          rejected = true;
+          assert.equal(error, failure);
+        },
+      );
+      assert.equal(rejected, true);
+      assert.equal(adapter.calls.at(-1).text, "rollback");
+    });
+  }
+}
+
+// Only the db import is replaced. The snapshot orchestration, shared collector,
+// policy validators and complete authority/migration fixture remain real code.
+const snapshotOwnerMock = Symbol.for("nutrition.test.postgresSnapshotOwner");
+let snapshotModule;
+async function ownedSnapshotModule(open) {
+  globalThis[snapshotOwnerMock] = open;
+  if (!snapshotModule) {
+    const { registerHooks } = await import("node:module");
+    const hooks = registerHooks({
+      resolve(specifier, context, next) {
+        if (
+          specifier === "../packages/db/dist/index.js" &&
+          context.parentURL?.endsWith("/scripts/postgres-backup-snapshot.mjs")
+        ) {
+          return { url: "nutrition-synthetic:owned-postgres-session", shortCircuit: true };
+        }
+        return next(specifier, context);
+      },
+      load(url, context, next) {
+        if (url === "nutrition-synthetic:owned-postgres-session")
+          return {
+            format: "module",
+            source:
+              'export const openOwnedPostgresSession = (...args) => globalThis[Symbol.for("nutrition.test.postgresSnapshotOwner")](...args);',
+            shortCircuit: true,
+          };
+        return next(url, context);
+      },
+    });
+    try {
+      snapshotModule = await import("./postgres-backup-snapshot.mjs");
+    } finally {
+      hooks.deregister();
+    }
+  }
+  return snapshotModule;
+}
+
+function snapshotOwnerFixture({ onQuery, close, exportResult, mutateEvidence } = {}) {
+  const adapter = sharedCollectorAdapter({ mutateEvidence });
+  const controller = new AbortController();
+  const calls = [];
+  let transaction = false;
+  let closed = false;
+  return {
+    adapter,
+    calls,
+    controller,
+    get transaction() {
+      return transaction;
+    },
+    get closed() {
+      return closed;
+    },
+    session: {
+      signal: controller.signal,
+      async query(input) {
+        assert.equal(closed, false);
+        calls.push(input.text);
+        if (onQuery) await onQuery(input);
+        if (input.signal?.aborted) throw new Error("synthetic query cancellation");
+        if (input.text === "begin isolation level repeatable read read only") {
+          transaction = true;
+          adapter.snapshot();
+          return { rows: [] };
+        }
+        if (input.text === "select pg_catalog.pg_export_snapshot()") {
+          assert.equal(transaction, true);
+          return exportResult === undefined ? { rows: [["00000003-000000A1-1"]] } : exportResult;
+        }
+        if (input.text === "rollback") transaction = false;
+        return adapter.query(input);
+      },
+      async close() {
+        calls.push("close");
+        if (close) await close();
+        transaction = false;
+        closed = true;
+      },
+    },
+  };
+}
+const snapshotOptions = {
+  expectedOwner,
+  connection: Object.freeze({ syntheticNormalizedConnection: true }),
+};
+
+test("owned snapshot uses real collector before export and retains transaction until consumer and cleanup settle", async () => {
+  let finishConsumer, finishClose;
+  const consumerWait = new Promise((resolve) => {
+    finishConsumer = resolve;
+  });
+  const closeWait = new Promise((resolve) => {
+    finishClose = resolve;
+  });
+  const fixture = snapshotOwnerFixture({ close: () => closeWait });
+  let opened = 0,
+    consumed;
+  const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async (options) => {
+    opened++;
+    assert.deepEqual(options, {
+      connection: snapshotOptions.connection,
+    });
+    return fixture.session;
+  });
+  let complete = false;
+  const work = withPostgresBackupSnapshot(snapshotOptions, async (value) => {
+    consumed = value;
+    assert.equal(fixture.transaction, true);
+    assert.equal(fixture.closed, false);
+    const evidence = parsePostgresBackupEvidence(value.sourceEvidence, expectedOwner);
+    assert.deepEqual(evidence, fixture.adapter.source);
+    assert.equal(value.snapshotId, "00000003-000000A1-1");
+    assert.equal(value.signal, fixture.controller.signal);
+    await consumerWait;
+    assert.equal(fixture.transaction, true);
+    return "consumer result";
+  }).then((result) => {
+    complete = true;
+    return result;
+  });
+  while (!consumed) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(opened, 1);
+  assert.equal(complete, false);
+  const firstRollback = fixture.calls.indexOf("rollback");
+  const begin = fixture.calls.indexOf("begin isolation level repeatable read read only");
+  assert.ok(firstRollback > 0 && firstRollback < begin);
+  assert.equal(fixture.calls[begin + 1], "select pg_catalog.pg_export_snapshot()");
+  assert.ok(fixture.calls.slice(begin + 2).every((sql) => /^(select|set local) /u.test(sql)));
+  finishConsumer();
+  while (fixture.calls.at(-1) !== "close") await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(fixture.calls.at(-2), "rollback");
+  assert.equal(complete, false);
+  finishClose();
+  assert.equal(await work, "consumer result");
+  assert.equal(fixture.closed, true);
+});
+
+for (const phase of ["preparation", "export", "collection", "consumer"]) {
+  test(`owned snapshot closes and sanitizes ${phase} failure`, async () => {
+    const fixture = snapshotOwnerFixture({
+      onQuery(input) {
+        if (
+          (phase === "preparation" && input.text.startsWith("create temporary view")) ||
+          (phase === "export" && input.text.includes("pg_export_snapshot")) ||
+          (phase === "collection" && input.text === RESTORE_EVIDENCE_QUERIES.schema.parts.join(" "))
+        )
+          throw new Error("private URL and SQL parameters");
+      },
+    });
+    const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+    let called = false;
+    await assert.rejects(
+      withPostgresBackupSnapshot(snapshotOptions, () => {
+        called = true;
+        throw new Error("private consumer URL");
+      }),
+      (error) =>
+        error.message === `PostgreSQL backup snapshot ${phase} failed` && error.cause === undefined,
+    );
+    assert.equal(called, phase === "consumer");
+    assert.equal(fixture.closed, true);
+    assert.deepEqual(fixture.calls.slice(-2), ["rollback", "close"]);
+  });
+}
+for (const exported of [
+  { rows: [] },
+  { rows: [["00000003-000000A1-1"], ["extra"]] },
+  { rows: [["00000003-000000A1-1", "extra"]] },
+  { rows: [["wrong"]] },
+  { rows: [["00000003-000000A1-0"]] },
+  { rows: [[123]] },
+]) {
+  test(`owned snapshot rejects malformed exported identity ${JSON.stringify(exported)}`, async () => {
+    const fixture = snapshotOwnerFixture({ exportResult: exported });
+    const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+    await assert.rejects(
+      withPostgresBackupSnapshot(snapshotOptions, () => assert.fail("must not consume")),
+      /export failed/u,
+    );
+    assert.equal(fixture.closed, true);
+  });
+}
+for (const value of [null, undefined, 0]) {
+  test(`owned snapshot preserves falsey consumer and cleanup failure ${String(value)}`, async () => {
+    const fixture = snapshotOwnerFixture({
+      onQuery(input) {
+        if (
+          input.text === "rollback" &&
+          fixture.calls.includes("select pg_catalog.pg_export_snapshot()")
+        )
+          throw value;
+      },
+      close() {
+        throw value;
+      },
+    });
+    const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+    await assert.rejects(
+      withPostgresBackupSnapshot(snapshotOptions, () => {
+        throw value;
+      }),
+      (error) => {
+        assert.ok(error instanceof AggregateError);
+        assert.deepEqual(
+          error.errors.map((failure) => failure.message),
+          [
+            "PostgreSQL backup snapshot consumer failed",
+            "PostgreSQL backup snapshot rollback failed",
+            "PostgreSQL backup snapshot closure failed",
+          ],
+        );
+        return true;
+      },
+    );
+    assert.equal(fixture.calls.at(-1), "close");
+  });
+}
+for (const failure of ["rollback", "closure"]) {
+  test(`owned snapshot never reports success after ${failure} failure`, async () => {
+    const fixture = snapshotOwnerFixture({
+      onQuery(input) {
+        if (
+          failure === "rollback" &&
+          input.text === "rollback" &&
+          fixture.calls.includes("select pg_catalog.pg_export_snapshot()")
+        )
+          throw undefined;
+      },
+      close() {
+        if (failure === "closure") throw null;
+      },
+    });
+    const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+    await assert.rejects(
+      withPostgresBackupSnapshot(snapshotOptions, () => "not accepted"),
+      (error) =>
+        error instanceof AggregateError &&
+        error.errors[0].message === `PostgreSQL backup snapshot ${failure} failed`,
+    );
+    assert.equal(fixture.calls.at(-1), "close");
+  });
+}
+test("owned snapshot cancellation signals consumer and still waits for its owned work", async () => {
+  const fixture = snapshotOwnerFixture();
+  const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+  let release,
+    entered = false,
+    settled = false;
+  const wait = new Promise((resolve) => {
+    release = resolve;
+  });
+  const work = withPostgresBackupSnapshot(snapshotOptions, async ({ signal }) => {
+    entered = true;
+    await wait;
+    assert.equal(signal.aborted, true);
+  }).finally(() => {
+    settled = true;
+  });
+  const rejected = assert.rejects(work, /consumer failed/u);
+  while (!entered) await new Promise((resolve) => setImmediate(resolve));
+  fixture.controller.abort();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(settled, false);
+  assert.equal(fixture.closed, false);
+  release();
+  await rejected;
+  assert.equal(fixture.closed, true);
+});
+test("owned snapshot retains the complete evidence-policy rejection", async () => {
+  const fixture = snapshotOwnerFixture({
+    mutateEvidence(authority) {
+      authority.schema.owner = "wrong_owner";
+    },
+  });
+  const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+  await assert.rejects(
+    withPostgresBackupSnapshot(snapshotOptions, () => assert.fail("must not consume")),
+    /collection failed/u,
+  );
+  assert.equal(fixture.closed, true);
+});
+test("owned snapshot rejects invalid owner/consumer before opening any session", async () => {
+  let opened = false;
+  const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => {
+    opened = true;
+    assert.fail("must not open");
+  });
+  for (const owner of [undefined, {}, "PUBLIC", "a;b", "x".repeat(64)])
+    await assert.rejects(
+      withPostgresBackupSnapshot({ ...snapshotOptions, expectedOwner: owner }, () => undefined),
+      /configuration/u,
+    );
+  await assert.rejects(withPostgresBackupSnapshot(snapshotOptions, null), /configuration/u);
+  assert.equal(opened, false);
+});
+
+test("owned snapshot preserves separate preparation and preparation-cleanup failures without raw details", async () => {
+  const fixture = snapshotOwnerFixture({
+    onQuery(input) {
+      if (input.text.startsWith("create temporary view")) throw null;
+      if (input.text === "rollback") throw new Error("private rollback URL");
+    },
+  });
+  const { withPostgresBackupSnapshot } = await ownedSnapshotModule(async () => fixture.session);
+  await assert.rejects(
+    withPostgresBackupSnapshot(snapshotOptions, () => assert.fail("must not consume")),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.ok(error.errors[0] instanceof AggregateError);
+      assert.deepEqual(
+        error.errors[0].errors.map((item) => item.message),
+        [
+          "PostgreSQL backup snapshot preparation failed",
+          "PostgreSQL backup snapshot preparation cleanup failed",
+        ],
+      );
+      assert.equal(error.errors[1].message, "PostgreSQL backup snapshot rollback failed");
+      assert.equal(JSON.stringify(error).includes("private"), false);
+      return true;
+    },
+  );
+  assert.equal(fixture.closed, true);
+});
+
+test("shared target boundary definitions conserve exact existing SQL and immutable arrays", async () => {
+  const { RESTORE_TARGET_BOUNDARY_QUERIES, AUTHORITY_POLICY_SQL } = await import(
+    "./postgres-restore-drill.mjs"
+  );
+  assert.ok(Object.isFrozen(RESTORE_TARGET_BOUNDARY_QUERIES));
+  const observed = Object.fromEntries(
+    Object.entries(RESTORE_TARGET_BOUNDARY_QUERIES).map(([name, parts]) => {
+      assert.ok(Object.isFrozen(parts));
+      return [name, createHash("sha256").update(parts.join(" ")).digest("hex")];
+    }),
+  );
+  assert.deepEqual(observed, {
+    acl: "f4fad8a70a42a8ce7971d7c3ea8664b2664cfc51712b04d244525d9b63b21ef7",
+    effectiveConnectRoles: "2d24c6f29ca7e630e90472cd3a32e61fe641a5b77695ae9c7f13e1a4537adb53",
+    otherClientSessions: "50ea81bd8ea21bb7bd7b78f74360e0651ceae0c37fe667ce45858d19b8e93bd1",
+    owner: "77cc81b85d545032087342443e9009937c9952e071e69f84d245aebab467ec8a",
+  });
+  assert.equal(
+    createHash("sha256").update(AUTHORITY_POLICY_SQL).digest("hex"),
+    "36a171d19a95ba183dc99269694fe7c48f7b13826499850b01a82492905ec3dc",
+  );
 });

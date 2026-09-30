@@ -16,12 +16,49 @@ const ENVELOPE_MAGIC = Buffer.from("NTAE0001", "ascii");
 const NONCE_BYTES = 12;
 const AUTH_TAG_BYTES = 16;
 const MAX_KEY_ID_BYTES = 64;
+export const MAX_ARTIFACT_ENVELOPE_OVERHEAD_BYTES =
+  ENVELOPE_MAGIC.byteLength + 1 + MAX_KEY_ID_BYTES + NONCE_BYTES + AUTH_TAG_BYTES;
 const MAX_OBJECT_KEY_BYTES = 1_024;
 const DEFAULT_MAX_PLAINTEXT_BYTES = 107_374_182_400;
 const KEY_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 export type ExportArtifactMediaType = "application/json" | "application/zip";
-export type ArtifactEncryptionPurpose = "export" | "erasure_replay_ledger";
+export const POSTGRES_BACKUP_MEDIA_TYPE = "application/vnd.nourishing.postgres-backup-v1" as const;
+export type ArtifactMediaType = ExportArtifactMediaType | typeof POSTGRES_BACKUP_MEDIA_TYPE;
+export type ArtifactEncryptionPurpose = "export" | "erasure_replay_ledger" | "postgres_backup";
+
+const PURPOSE_CONFIGURATION = {
+  export: {
+    current: "EXPORT_ARTIFACT_CURRENT_KEY_ID",
+    keys: "EXPORT_ARTIFACT_ENCRYPTION_KEYS",
+    domain: "nutrition-tracker-export-artifact-v1",
+  },
+  erasure_replay_ledger: {
+    current: "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID",
+    keys: "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS",
+    domain: "nutrition-tracker-erasure-replay-ledger-v1",
+  },
+  postgres_backup: {
+    current: "POSTGRES_BACKUP_CURRENT_KEY_ID",
+    keys: "POSTGRES_BACKUP_ENCRYPTION_KEYS",
+    domain: "nutrition-tracker-postgres-backup-v1",
+  },
+} as const;
+
+function purposeConfiguration(purpose: ArtifactEncryptionPurpose) {
+  if (!Object.hasOwn(PURPOSE_CONFIGURATION, purpose)) {
+    throw new ArtifactEncryptionConfigurationError("purpose");
+  }
+  return PURPOSE_CONFIGURATION[purpose];
+}
+
+function validMediaType(value: unknown): value is ArtifactMediaType {
+  return (
+    value === "application/json" ||
+    value === "application/zip" ||
+    value === POSTGRES_BACKUP_MEDIA_TYPE
+  );
+}
 
 export interface ArtifactEncryptionKeyRing {
   readonly purpose: ArtifactEncryptionPurpose;
@@ -47,7 +84,7 @@ export interface EncryptedArtifactMetadata {
   readonly envelopeVersion: 1;
   readonly encryptionKeyId: string;
   readonly objectKey: string;
-  readonly mediaType: ExportArtifactMediaType;
+  readonly mediaType: ArtifactMediaType;
   readonly plaintextBytes: number;
   readonly plaintextSha256: string;
   readonly ciphertextBytes: number;
@@ -95,14 +132,9 @@ export function parseArtifactEncryptionKeyRing(input: {
   readonly currentKeyId: string | undefined;
   readonly serializedKeys: string | undefined;
 }): ArtifactEncryptionKeyRing {
-  const currentKeyField =
-    input.purpose === "export"
-      ? "EXPORT_ARTIFACT_CURRENT_KEY_ID"
-      : "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID";
-  const keysField =
-    input.purpose === "export"
-      ? "EXPORT_ARTIFACT_ENCRYPTION_KEYS"
-      : "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS";
+  const configuration = purposeConfiguration(input.purpose);
+  const currentKeyField = configuration.current;
+  const keysField = configuration.keys;
   if (!input.currentKeyId || !KEY_ID_PATTERN.test(input.currentKeyId)) {
     throw new ArtifactEncryptionConfigurationError(currentKeyField);
   }
@@ -158,7 +190,7 @@ function checkedObjectKey(objectKey: string): string {
   return objectKey;
 }
 
-function envelopeHeader(keyId: string, nonce: Buffer): Buffer {
+function envelopeHeader(keyId: string, nonce: Buffer, purpose: ArtifactEncryptionPurpose): Buffer {
   const encodedKeyId = Buffer.from(keyId, "ascii");
   if (
     encodedKeyId.byteLength < 1 ||
@@ -166,7 +198,7 @@ function envelopeHeader(keyId: string, nonce: Buffer): Buffer {
     !KEY_ID_PATTERN.test(keyId) ||
     nonce.byteLength !== NONCE_BYTES
   ) {
-    throw new ArtifactEncryptionConfigurationError("EXPORT_ARTIFACT_CURRENT_KEY_ID");
+    throw new ArtifactEncryptionConfigurationError(purposeConfiguration(purpose).current);
   }
   return Buffer.concat([
     ENVELOPE_MAGIC,
@@ -179,13 +211,10 @@ function envelopeHeader(keyId: string, nonce: Buffer): Buffer {
 function additionalAuthenticatedData(
   header: Buffer,
   objectKey: string,
-  mediaType: ExportArtifactMediaType,
+  mediaType: ArtifactMediaType,
   purpose: ArtifactEncryptionPurpose,
 ): Buffer {
-  const domain =
-    purpose === "export"
-      ? "nutrition-tracker-export-artifact-v1"
-      : "nutrition-tracker-erasure-replay-ledger-v1";
+  const domain = purposeConfiguration(purpose).domain;
   return Buffer.concat([
     header,
     Buffer.from(`\0${domain}\0`, "ascii"),
@@ -289,6 +318,7 @@ export class EncryptedArtifactStore {
     readonly temporaryDirectory?: string;
     readonly maxPlaintextBytes?: number;
   }) {
+    purposeConfiguration(input.keyRing.purpose);
     checkedKey(input.keyRing, input.keyRing.currentKeyId);
     this.#keyRing = input.keyRing;
     this.#rawStore = input.rawStore;
@@ -302,11 +332,12 @@ export class EncryptedArtifactStore {
 
   async put(input: {
     readonly objectKey: string;
-    readonly mediaType: ExportArtifactMediaType;
+    readonly mediaType: ArtifactMediaType;
     readonly source: Readable;
     readonly plaintextBytes: number;
     readonly signal?: AbortSignal;
   }): Promise<EncryptedArtifactMetadata> {
+    if (!validMediaType(input.mediaType)) throw new ArtifactAuthenticationError();
     const objectKey = checkedObjectKey(input.objectKey);
     if (
       !Number.isSafeInteger(input.plaintextBytes) ||
@@ -318,7 +349,7 @@ export class EncryptedArtifactStore {
     const keyId = this.#keyRing.currentKeyId;
     const key = checkedKey(this.#keyRing, keyId);
     const nonce = this.#nonce();
-    const header = envelopeHeader(keyId, nonce);
+    const header = envelopeHeader(keyId, nonce, this.#keyRing.purpose);
     const cipher = createCipheriv("aes-256-gcm", key, nonce);
     cipher.setAAD(
       additionalAuthenticatedData(header, objectKey, input.mediaType, this.#keyRing.purpose),
@@ -403,7 +434,7 @@ export class EncryptedArtifactStore {
     const objectKey = checkedObjectKey(metadata.objectKey);
     if (
       metadata.envelopeVersion !== 1 ||
-      (metadata.mediaType !== "application/json" && metadata.mediaType !== "application/zip") ||
+      !validMediaType(metadata.mediaType) ||
       !KEY_ID_PATTERN.test(metadata.encryptionKeyId) ||
       !Number.isSafeInteger(metadata.plaintextBytes) ||
       metadata.plaintextBytes < 1 ||
@@ -435,10 +466,10 @@ export class EncryptedArtifactStore {
    */
   async openAuthenticatedByObject(input: {
     readonly objectKey: string;
-    readonly mediaType: ExportArtifactMediaType;
+    readonly mediaType: ArtifactMediaType;
     readonly signal?: AbortSignal;
   }): Promise<DiscoveredAuthenticatedArtifactRead | null> {
-    if (input.mediaType !== "application/json" && input.mediaType !== "application/zip") {
+    if (!validMediaType(input.mediaType)) {
       throw new ArtifactAuthenticationError();
     }
     return this.#openAuthenticatedEnvelope({
@@ -455,14 +486,14 @@ export class EncryptedArtifactStore {
    */
   async verifyAuthenticatedByObject(input: {
     readonly objectKey: string;
-    readonly mediaType: ExportArtifactMediaType;
+    readonly mediaType: ArtifactMediaType;
     readonly expectedPlaintextBytes: number;
     readonly expectedPlaintextSha256: string;
     readonly signal?: AbortSignal;
   }): Promise<EncryptedArtifactMetadata | null> {
     const objectKey = checkedObjectKey(input.objectKey);
     if (
-      (input.mediaType !== "application/json" && input.mediaType !== "application/zip") ||
+      !validMediaType(input.mediaType) ||
       !Number.isSafeInteger(input.expectedPlaintextBytes) ||
       input.expectedPlaintextBytes < 1 ||
       input.expectedPlaintextBytes > this.#maxPlaintextBytes ||
@@ -556,7 +587,7 @@ export class EncryptedArtifactStore {
 
   async #openAuthenticatedEnvelope(input: {
     readonly objectKey: string;
-    readonly mediaType: ExportArtifactMediaType;
+    readonly mediaType: ArtifactMediaType;
     readonly expected?: EncryptedArtifactMetadata;
     readonly signal?: AbortSignal;
   }): Promise<DiscoveredAuthenticatedArtifactRead | null> {
@@ -581,12 +612,15 @@ export class EncryptedArtifactStore {
       raw.stream.destroy();
       throw new ArtifactAuthenticationError();
     }
-    const directory = await mkdtemp(join(this.#temporaryDirectory, "nutrition-artifact-read-"));
-    await chmod(directory, 0o700);
-    const path = join(directory, "artifact.plaintext");
-    const output = createWriteStream(path, { flags: "wx", mode: 0o600 });
+    let cleanupDirectory: string | undefined;
+    let output: ReturnType<typeof createWriteStream> | undefined;
     let succeeded = false;
     try {
+      const directory = await mkdtemp(join(this.#temporaryDirectory, "nutrition-artifact-read-"));
+      cleanupDirectory = directory;
+      await chmod(directory, 0o700);
+      const path = join(directory, "artifact.plaintext");
+      output = createWriteStream(path, { flags: "wx", mode: 0o600 });
       const reader = new ChunkReader(raw.stream);
       const prefix = await reader.exactly(ENVELOPE_MAGIC.byteLength + 1);
       if (!prefix.subarray(0, ENVELOPE_MAGIC.byteLength).equals(ENVELOPE_MAGIC)) {
@@ -665,7 +699,9 @@ export class EncryptedArtifactStore {
         })();
         await disposePromise;
       };
-      stream.once("close", () => void dispose());
+      stream.once("close", () => {
+        void dispose().catch(() => undefined);
+      });
       return {
         contentLength: plaintextBytes,
         dispose,
@@ -684,13 +720,14 @@ export class EncryptedArtifactStore {
       // A writable can still be waiting for its asynchronous open when an
       // envelope is rejected. Attach a terminal listener before removing the
       // private directory so the expected open failure cannot escape cleanup.
-      output.on("error", () => undefined);
+      output?.on("error", () => undefined);
       raw.stream.destroy();
-      output.destroy();
+      output?.destroy();
       if (error instanceof ArtifactAuthenticationError) throw error;
       throw new ArtifactAuthenticationError();
     } finally {
-      if (!succeeded) await rm(directory, { force: true, recursive: true });
+      if (!succeeded && cleanupDirectory)
+        await rm(cleanupDirectory, { force: true, recursive: true });
     }
   }
 }

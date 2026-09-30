@@ -19,6 +19,50 @@ export interface CompleteDatabaseRestoreReplayAttestationInput {
   readonly completedAt: string;
 }
 
+export class DatabaseRestoreReplayNotReadyError extends Error {
+  constructor() {
+    super("Database restore replay attestation is not current");
+    this.name = "DatabaseRestoreReplayNotReadyError";
+  }
+}
+
+export interface DatabaseRestoreReplayObservation {
+  readonly databaseName: string;
+  readonly databaseOid: string;
+  readonly attestation:
+    | {
+        readonly restore_epoch_hash: string;
+        readonly database_oid: string;
+        readonly database_name: string;
+      }
+    | undefined;
+}
+
+/** The observation must come from the target, not an operator-supplied acceptance flag. */
+export function assertDatabaseRestoreReplayObservation(
+  observation: DatabaseRestoreReplayObservation,
+  input: { readonly restoreEpoch: string },
+): void {
+  const epochHash = restoreEpochHash(input.restoreEpoch);
+  if (!observation?.databaseName || !/^[1-9][0-9]*$/u.test(observation.databaseOid))
+    throw new Error("Database identity is unavailable");
+  assertRestoreReplayIdentity(observation, observation.attestation, epochHash);
+}
+
+function assertRestoreReplayIdentity(
+  identity: { readonly databaseName: string; readonly databaseOid: string },
+  attestation: DatabaseRestoreReplayObservation["attestation"],
+  epochHash: string,
+): void {
+  if (
+    !attestation ||
+    attestation.restore_epoch_hash !== epochHash ||
+    attestation.database_oid !== identity.databaseOid ||
+    attestation.database_name !== identity.databaseName
+  )
+    throw new DatabaseRestoreReplayNotReadyError();
+}
+
 /** Fails closed unless this exact database instance was reconciled for the supplied restore epoch. */
 export async function assertDatabaseRestoreReplayReady(
   database: Kysely<Database>,
@@ -31,13 +75,7 @@ export async function assertDatabaseRestoreReplayReady(
     .select(["restore_epoch_hash", "database_oid", "database_name"])
     .where("singleton", "=", true)
     .executeTakeFirst();
-  if (
-    !attestation ||
-    attestation.restore_epoch_hash !== epochHash ||
-    attestation.database_oid !== identity.databaseOid ||
-    attestation.database_name !== identity.databaseName
-  )
-    throw new Error("Database restore replay attestation is not current");
+  assertRestoreReplayIdentity(identity, attestation, epochHash);
 }
 
 /**

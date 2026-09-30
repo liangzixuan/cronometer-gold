@@ -333,7 +333,16 @@ test("required named step policies follow the actual repository workflow definit
   }
 });
 
-function apiFixture(change?: "rerun" | "missing-page" | "wrong-tree" | "missing-cleanup") {
+function apiFixture(
+  change?:
+    | "rerun"
+    | "missing-page"
+    | "wrong-tree"
+    | "missing-cleanup"
+    | "branch-advanced"
+    | "default-branch"
+    | "final-branch-drift",
+) {
   const calls: { url: string; authorization: string | null }[] = [];
   const lookups = new Map<string, number>();
   const lockBytes = Buffer.from("lockfileVersion: '9.0'\n");
@@ -351,6 +360,25 @@ function apiFixture(change?: "rerun" | "missing-page" | "wrong-tree" | "missing-
     assert.equal(init?.redirect, "manual");
     assert.equal(init?.method, "GET");
     const path = url.pathname.replace(`/repos/${REPOSITORY}`, "");
+    if (path === "")
+      return json({
+        full_name: REPOSITORY,
+        default_branch: change === "default-branch" ? "other" : BRANCH,
+      });
+    if (path === `/git/ref/heads/${BRANCH}`) {
+      const count = (lookups.get("branch") ?? 0) + 1;
+      lookups.set("branch", count);
+      return json({
+        ref: `refs/heads/${BRANCH}`,
+        object: {
+          type: "commit",
+          sha:
+            change === "branch-advanced" || (change === "final-branch-drift" && count > 1)
+              ? "f".repeat(40)
+              : SHA,
+        },
+      });
+    }
     if (path === `/git/commits/${SHA}`)
       return json({
         sha: SHA,
@@ -412,7 +440,11 @@ test("collects actual latest attempts, complete jobs, source tree/lock bytes and
   assert.equal(result.lockfileSha256, fixture.lockHash);
   assert.equal(result.requiredRuns.length, 3);
   assert.equal(fixture.calls.filter((c) => c.url.includes("/workflows/")).length, 6);
-  assert.equal(fixture.calls.at(-4)?.authorization, null);
+  assert.equal(
+    fixture.calls.find((c) => c.url.startsWith("https://results.blob.core.windows.net"))
+      ?.authorization,
+    null,
+  );
   assert.ok(
     fixture.calls
       .filter((c) => c.url.startsWith("https://api.github.com"))
@@ -424,7 +456,15 @@ test("collects actual latest attempts, complete jobs, source tree/lock bytes and
     validateGitHubEvidence(result, { ...context, lockfileSha256: "f".repeat(64) }),
   );
 });
-for (const change of ["rerun", "missing-page", "wrong-tree", "missing-cleanup"] as const) {
+for (const change of [
+  "rerun",
+  "missing-page",
+  "wrong-tree",
+  "missing-cleanup",
+  "branch-advanced",
+  "default-branch",
+  "final-branch-drift",
+] as const) {
   test(`assembled collection rejects ${change}`, async () => {
     await assert.rejects(
       collectGitHubEvidence({
@@ -462,85 +502,49 @@ test("the actual ESM CLI rejects a malformed selector before any network or outp
   );
 });
 
-test("the manual exact-source workflow retains bounded receipts across both release outcomes", () => {
+test("manual prepare and activate require the exact trusted source and private reviewed inputs", () => {
   const workflow = readFileSync(
     new URL("../../.github/workflows/appwrite-site-release.yml", import.meta.url),
     "utf8",
   );
-  const jobBlocks = workflow.split(/^ {2}(source|staging|production):\s*$/m);
-  assert.equal(jobBlocks.length, 7);
-  const header = first(jobBlocks);
-  assert.match(header, /on:\n {2}workflow_dispatch:\n/);
-  assert.doesNotMatch(header, /(?:push|pull_request|workflow_run|schedule):/);
-  assert.match(header, /promote:\n(?: +[^\n]+\n)* +default: false\n/);
-  assert.match(header, /permissions:\n {2}contents: read\n {2}actions: read\n/);
-  assert.match(
-    header,
-    /concurrency:\n {2}group: appwrite-site-release\n {2}cancel-in-progress: false/,
+  assert.match(workflow, /on:\n {2}workflow_dispatch:/);
+  assert.doesNotMatch(workflow, /(?:push|pull_request|workflow_run|schedule):/);
+  assert.match(workflow, /options: \[prepare, activate\]/);
+  assert.match(workflow, /options: \[staging, production\]/);
+  assert.match(workflow, /review_artifact_id:/);
+  assert.match(workflow, /permissions:\n {2}contents: read\n {2}actions: read/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.ok(
+    workflow.includes(
+      "github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features' && github.event_name == 'workflow_dispatch'",
+    ),
   );
-  const jobs = new Map<string, string>();
-  for (let i = 1; i < jobBlocks.length; i += 2) {
-    const name = jobBlocks[i];
-    const block = jobBlocks[i + 1];
-    assert.ok(name && block);
-    jobs.set(name, block);
-  }
-  const trusted =
-    "github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features' && github.event_name == 'workflow_dispatch'";
-  for (const [name, block] of jobs) {
-    assert.match(
-      block,
-      new RegExp(`^    if: ${name === "production" ? "inputs\\.promote && " : ""}${trusted}$`, "m"),
-    );
-    assert.match(block, /ref: \$\{\{ github\.sha \}\}\n +persist-credentials: false/);
-    assert.doesNotMatch(block, /continue-on-error:|secrets: inherit|permissions:/);
-    assert.match(block, /--revision "\$GITHUB_SHA"/);
-    const steps = block.split(/^ {6}- /m).slice(1);
-    const secretSteps = steps.filter((step) => step.includes("secrets.APPWRITE_DEPLOY_KEY"));
-    if (name === "source") {
-      assert.equal(secretSteps.length, 0);
-      continue;
-    }
-    assert.match(block, new RegExp(`^    environment: appwrite-${name}$`, "m"));
-    assert.equal(secretSteps.length, 1);
-    const release = first(secretSteps);
-    assert.match(release, /\n {8}id: release\n/);
-    assert.match(release, /APPWRITE_DEPLOY_KEY: \$\{\{ secrets\.APPWRITE_DEPLOY_KEY \}\}/);
-    assert.match(release, new RegExp(`site-release\\.ts deploy --target ${name}`));
-    assert.match(release, new RegExp(`--receipt "\\$RUNNER_TEMP/${name}-receipt\\.json"`));
-    assert.match(release, /--qualification "\$RUNNER_TEMP\/verified-managed-runtime\.json"/);
-    const receiptUploads = steps.filter((step) =>
-      step.includes(`path: $\{{ runner.temp }}/${name}-receipt.json`),
-    );
-    assert.equal(receiptUploads.length, 1);
-    const upload = first(receiptUploads);
-    assert.match(
-      upload,
-      /if: always\(\) && steps\.release\.outcome != 'skipped' && steps\.release\.outcome != ''/,
-    );
-    assert.match(upload, /uses: actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
-    assert.match(upload, /if-no-files-found: error\n +retention-days: 1/);
-    assert.doesNotMatch(upload, /env:|secrets\.|github-evidence|\.log|\*|qualification/);
-    const downloadSteps = steps.filter((step) => step.includes("actions/download-artifact@"));
-    for (const download of downloadSteps) {
-      assert.match(download, /actions\/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c/);
-      assert.match(download, /digest-mismatch: error/);
-      assert.match(
-        download,
-        /name: appwrite-(?:source|staging)-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
-      );
-      assert.doesNotMatch(download, /github-token:|repository:|run-id:|pattern:/);
-    }
-    assert.equal(downloadSteps.length, name === "staging" ? 1 : 2);
-  }
-  const staging = jobs.get("staging");
-  const production = jobs.get("production");
-  assert.ok(staging && production);
-  assert.match(staging, /^ {4}needs: source$/m);
-  assert.match(production, /^ {4}needs: \[source, staging\]$/m);
+  assert.ok(workflow.includes("inputs.target == 'staging' || inputs.promote"));
+  assert.match(workflow, /environment: appwrite-\$\{\{ inputs.target \}\}/);
+  assert.match(workflow, /ref: \$\{\{ github.sha \}\}\n +persist-credentials: false/);
+  assert.doesNotMatch(workflow, /continue-on-error:|secrets: inherit/);
+  assert.match(workflow, /review-artifact.py/);
+  assert.match(workflow, /--revision "\$GITHUB_SHA"/);
+  assert.match(workflow, /--qualification "\$RUNNER_TEMP\/appwrite-review\/qualification.json"/);
   assert.match(
-    production,
-    /--staging-receipt "\$RUNNER_TEMP\/appwrite-staging\/staging-receipt\.json"/,
+    workflow,
+    /--candidate-receipt "\$RUNNER_TEMP\/appwrite-review\/candidate-receipt.json"/,
   );
-  assert.match(production, /github-checks\.ts --target production/);
+  assert.match(workflow, /--staging-config "\$RUNNER_TEMP\/appwrite-review\/staging-config.json"/);
+  assert.match(
+    workflow,
+    /--staging-receipt "\$RUNNER_TEMP\/appwrite-review\/staging-receipt.json"/,
+  );
+  assert.match(workflow, /APPWRITE_DEPLOY_KEY: \$\{\{ secrets.APPWRITE_DEPLOY_KEY \}\}/);
+  assert.match(workflow, /APPWRITE_BACKEND_READINESS_TOKEN:/);
+  assert.match(workflow, /APPWRITE_STAGING_READINESS_TOKEN:/);
+  const uploads = workflow
+    .split(/^ {6}- /m)
+    .filter((step) => step.includes("actions/upload-artifact@"));
+  assert.equal(uploads.length, 1);
+  const upload = first(uploads);
+  assert.match(upload, /if: always\(\)/);
+  assert.match(upload, /path: \$\{\{ runner.temp \}\}\/release-receipt.json/);
+  assert.match(upload, /retention-days: 1/);
+  assert.doesNotMatch(upload, /secrets\.|github-evidence|\.log|qualification/);
 });

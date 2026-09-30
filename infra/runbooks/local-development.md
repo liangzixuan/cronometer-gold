@@ -39,6 +39,34 @@ keys to Turbo. The application graph does not receive the Meilisearch master or
 object-store admin credentials. A direct workspace-package launcher is not equivalent;
 it must be given the scoped-key overlay explicitly.
 
+## Select Doppler for the development launcher
+
+After the dependencies and migrations are ready, use the authenticated WSL CLI
+from the repository root to select `nourishing/dev` explicitly:
+
+```sh
+doppler run --no-read-env --no-fallback --project nourishing --config dev --only-secrets DATABASE_URL,SEARCH_CURSOR_SECRET -- node scripts/run-local-development.mjs --doppler
+```
+
+Append `--api-only` for the API-only profile. The launcher requires both injected
+values to be nonblank before opening `.env` or bootstrapping Meilisearch. It
+loads the same protected `.env` and generated object-store credentials, then
+replaces only `DATABASE_URL` and `SEARCH_CURSOR_SECRET` with the injected values.
+The selected database must still match the loopback PostgreSQL fixture. The
+application projection excludes Doppler tokens and configuration metadata.
+
+`--no-fallback` requires a successful Doppler fetch on every invocation. A failed
+fetch prevents the launcher from running; a missing selected value makes the
+launcher fail without reading a replacement from `.env`. The launcher consumes
+injected environment values and does not authenticate or fetch from Doppler.
+
+Keep `.env` unchanged: infrastructure, migrations and privacy commands still
+read it independently. To return this launcher to the file source, run the
+existing `pnpm dev` or `pnpm dev:api` command without Doppler. Check that the
+selected file values remain current before using that rollback. This migration
+covers the local-development launcher only; CI, staging, production and other
+development consumers retain their existing configuration.
+
 ## Verify
 
 ```sh

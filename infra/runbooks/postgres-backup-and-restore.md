@@ -50,6 +50,279 @@ Record the SHA-256, byte size, PostgreSQL version, database migration ledger,
 start/end timestamps, encryption/key reference, and retention expiry outside the
 dump. A successful exit alone is not restore proof.
 
+## Encrypted off-host artifact boundary
+
+`EncryptedPostgresBackupStore` in `@nutrition-tracker/artifact-store` binds a
+canonical manifest, source-evidence bytes and a custom-format dump inside the
+existing authenticated encryption envelope. It uses the distinct `postgres_backup`
+purpose and the `POSTGRES_BACKUP_CURRENT_KEY_ID` /
+`POSTGRES_BACKUP_ENCRYPTION_KEYS` configuration. Export and erasure-ledger key
+domains and artifact formats remain separate.
+
+The manifest records the backup UUID, deployment target, database name, exact
+source revision, exported snapshot identifier, capture timestamp, and the dump
+and source evidence's byte sizes and SHA-256 digests. The format marker is
+`nutrition-postgres-backup-v2`. Canonical bytes are compact UTF-8 JSON with these
+keys in order: `backupId`, `capturedAt`, `databaseName`, `deploymentTarget`,
+`dumpBytes`, `dumpSha256`, `formatVersion`, `snapshotId`, `sourceEvidenceBytes`,
+`sourceEvidenceSha256`, `sourceRevision`. Do not include a trailing newline,
+extra keys or duplicate keys. The frame is `NTPB0002`, a four-byte big-endian
+manifest length, the manifest, the source evidence, then the dump. The manifest
+is limited to 16 KiB and the evidence to 1 MiB; excess evidence fails without
+truncation. This replaces the unpublished v1 frame.
+
+Publication copies and validates the supplied evidence bytes against the
+manifest before starting the raw write. Recovery requires the expected backup,
+target, database, revision, snapshot and manifest SHA-256. It authenticates the
+complete envelope and checks the manifest, evidence and entire dump before
+returning `sourceEvidence` and a dump stream. Storage treats the evidence as
+opaque bytes. A `PGDMP` prefix is a preliminary format check; it does not establish
+that `pg_restore` will accept the archive.
+
+The separate `scripts/postgres-backup-evidence.mjs` adapter defines the canonical
+`nutrition-postgres-restore-evidence-v1` record. Use
+`serializePostgresBackupEvidence(evidence, expectedOwner)` before publication and
+`parsePostgresBackupEvidence(recovered.sourceEvidence, expectedOwner)` before
+accepting recovered evidence. The expected owner must come from the reviewed
+restore plan. The adapter retains the full authority fingerprint and migration
+ledger, checks their digests and the pinned policy, and calls the existing restore
+validators. It requires exact table coverage with canonical PostgreSQL int8 row
+counts and zero unvalidated constraints. Its returned record can be passed to
+`compareRestoreEvidence` with separately validated target evidence. Byte
+authentication alone does not establish these policy checks.
+
+The caller must supply an explicit temporary directory and maximum dump size.
+Choose a verified protected mount under the restore policy above; the library's
+private directory and file permissions do not prove tmpfs or volume encryption.
+Dispose the recovered artifact in a `finally` block after consuming or abandoning
+its stream. The library removes its owned plaintext spool on validation failure
+or cancellation. This is file cleanup, not a guarantee of physical media erasure.
+
+Use a create-only raw-store adapter that consumes each upload through EOF and
+rejects an existing object key. The existing file adapter publishes with an
+exclusive hard link, and the S3 adapter signs `If-None-Match: *`. An arbitrary
+injected `RawArtifactStore` does not prove those properties. Do not delete an
+object after a duplicate or ambiguous publication failure. Before cloud use,
+qualify the provider's create-only and exact-version behavior with the reviewed
+principal; keep retention, native version identity and capacity admission as
+separate requirements.
+
+This module authenticates caller-supplied evidence. It does not collect a
+PostgreSQL snapshot or verify that the dump came from the claimed database.
+Future collection must keep the exporting transaction open while `pg_dump
+--snapshot` and the source-evidence reads use that same exported snapshot. The
+identifier remains available only until the exporting transaction ends. Cluster-
+global roles require their separately reviewed policy because `pg_dump` covers
+one database. See the [PostgreSQL snapshot documentation](https://www.postgresql.org/docs/17/functions-admin.html#FUNCTIONS-SNAPSHOT-SYNCHRONIZATION)
+and [pg_dump reference](https://www.postgresql.org/docs/17/app-pgdump.html).
+
+The shared query definitions in `scripts/postgres-restore-evidence-queries.mjs`
+serve both the existing synchronous drill and
+`scripts/postgres-restore-evidence-collector.mjs`. The asynchronous collector
+uses one caller-owned query adapter and returns the complete validated source
+evidence for the backup serializer. It does not connect to a database, acquire a
+pooled connection, run pg_dump or publish an artifact.
+
+Prepare the collector on an exclusively owned, idle connection before starting
+the backup transaction. Preparation derives normalized expected view definitions
+from the reviewed source queries, then rolls back its temporary objects. Those
+definitions remain private to that collector. PostgreSQL forbids CREATE, ALTER
+and DROP in a read-only transaction, so this preparation cannot be moved into the
+exported snapshot or made legal by a savepoint. The existing synchronous view
+collector retains its original behavior. [Transaction restrictions](https://www.postgresql.org/docs/17/sql-set-transaction.html).
+
+Keep the same connection for preparation and collection. The adapter must enforce
+query bounds and actual cancellation; the collector passes cancellation through
+and awaits each started operation. It does not promise to stop a driver that
+ignores the signal or to close a connection it does not own. Collection performs
+read-only evidence queries without committing or rolling back the caller's
+snapshot. It checks the same backend, database and principals, read-only
+repeatable-read settings, snapshot and transaction identity before and after the
+reads. PostgreSQL holds an exclusive virtual transaction lock until a transaction
+ends; its identity distinguishes separate transactions even when their visible
+snapshots match. [PostgreSQL lock view](https://www.postgresql.org/docs/17/view-pg-locks.html).
+The backup operator still needs an owned, bounded connection and
+qualified pg_dump process, with cleanup awaited on every outcome. Do not infer
+snapshot provenance solely from a returned record or a caller-supplied identifier.
+
+The connection-owner layer is now `openOwnedPostgresSession` in the database
+package. It constructs one fresh `pg.Client` with a dedicated owned socket;
+callers cannot provide a pool or preconnected client. Its bounded query adapter
+uses public pg row events and closes the transport on cancellation or deadline.
+Results are bounded after pg decodes each row; this is not a protocol-parser
+memory limit. Verify-full TLS is the default. Disabled TLS requires a literal
+loopback address, and URL query/fragment overrides and process-wide TLS bypass
+are rejected. Driver errors are reported as bounded operation codes.
+
+`scripts/postgres-backup-snapshot.mjs` provides
+`withPostgresBackupSnapshot(options, consume)`. Supply `expectedOwner`, the
+connection record returned by `normalizePostgresBackupConnection` and reviewed
+operation bounds. The record contains credentials and explicit CA bytes; it belongs
+in private process configuration, never an evidence file or command log. The function prepares the
+unchanged collector on its newly idle connection, begins a read-only
+repeatable-read transaction, exports its snapshot and collects the validated
+source evidence. The awaited consumer receives `snapshotId`, canonical
+`sourceEvidence` bytes and `signal`. The transaction stays open until that
+consumer settles. Rollback and connection closure must finish before success;
+primary and cleanup failure phases remain distinct even for falsey rejections.
+A cancelled or closed session cannot be reused, and queries are serialized.
+
+The default lifetime is five minutes, with an explicit maximum of one hour;
+connect and query bounds default to five and fifteen seconds. Cleanup gets five
+seconds before forcing transport closure and reporting a cleanup failure. Select
+bounds that fit the reviewed operation and the current authorization window.
+The consumer must await its owned work and honor cancellation. Arbitrary
+JavaScript that ignores the signal cannot be terminated safely in-process.
+The local operator below owns the pg_dump process and applies its independent
+bounds; the snapshot wrapper alone does not run pg_dump or prove snapshot import. Synthetic
+transport and session tests do not establish live driver, TLS, snapshot or
+host-capacity qualification.
+
+### Local dump and encrypted publication
+
+Call `runPostgresBackup` from `scripts/postgres-backup.mjs` from a reviewed local
+operator. Its configuration includes `connection: { connectionString, sslMode,
+caCertificate }`, `expectedOwner`, `sourceRevision`, `deploymentTarget`, a new
+`backupId` UUID, private `tmpfsRoot` and `outputDirectory`, `maxDumpBytes`,
+`timeoutMs`, a distinct `postgres_backup` key ring and `tools` entries for
+`pgDump` and `pgRestore`. Each tool entry contains its reviewed absolute path,
+exact SHA-256 and exact PostgreSQL 17 version line. Both tools must have the same
+minor version. These input bindings do not establish native binary provenance or
+host qualification.
+
+The operator normalizes connection fields once, then supplies that same frozen
+record to the Node session and libpq environment. Verify-full requires an explicit
+PEM CA bundle, limited to 64 KiB and sixteen CA certificates, and a DNS hostname.
+Literal IPv4 and IPv6 addresses are rejected in verify-full mode because the
+installed Node driver and libpq do not authenticate the same IP identity. Identical normalized
+bytes go to `pg.ssl.ca` and the private libpq root-certificate file. Hostname and
+certificate verification stay enabled, with TLS 1.2–1.3 selected for both clients.
+Missing passwords, malformed escapes, control characters, multi-host/socket URLs,
+query/fragment overrides and process-wide TLS disablement are rejected. Disabled
+TLS is available only on literal loopback. The normalized record and key ring
+contain secrets and must never be logged.
+
+Child environments are built from an allowlist. The owned 0600 password file
+escapes backslashes and colons; no password is passed in argv or `PGPASSWORD`.
+Private HOME and explicit nonexistent client-certificate paths prevent ambient
+client certificates. GSS encryption is disabled so it cannot supersede TLS.
+
+Both placement roots must already exist as owner-private 0700 directories with
+no symlinked or untrusted-writable path components. The plaintext root must also
+report the Linux tmpfs filesystem type. The operator creates its own 0700
+directory, exclusive 0600 password/CA files and exclusive 0600 dump. It preserves
+the existing full custom dump flags (`--compress=9 --no-owner --no-privileges`)
+and adds the actual exported snapshot ID. No table or data filters are applied.
+The exporting transaction remains open while the bounded dump process and
+streams settle.
+
+After snapshot rollback and closure succeed, `pg_restore --list` must succeed
+before encryption. Its output is capped at 8 MiB; discarded stderr is capped at
+64 KiB. The dump limit is explicit and cannot exceed 2 GiB. The total operator
+deadline is explicit and cannot exceed thirty minutes. A fixed supervisor runs
+under the operator's current Node executable with the allowlisted environment,
+without inherited Node options or a shell. It remains the process-group leader
+until cleanup completes; its bounded IPC status distinguishes native exit from
+intentional supervisor shutdown. Missing, malformed or duplicate status fails.
+Cancellation sends TERM to this owned group, then KILL after two seconds even
+when the native leader has already exited. Normal native completion also closes
+the entire owned group. No signal is sent after the supervisor has been reaped.
+The operator awaits child/stdio closure and checks Linux process-group state for
+up to five seconds. Zombies are terminated processes whose parent still needs
+to reap them; a live member after the observation bound is a cleanup failure.
+Select bounds that fit the authorization window. An uninterruptible OS process
+cannot be made safe by abandoning its promise, and supervisor shutdown is not
+accepted without group cleanup. The current Node runtime also needs host and
+native-runtime qualification.
+
+The actual `EncryptedPostgresBackupStore` and `FileRawArtifactStore` publish a
+local ciphertext artifact under the v2 immutable object key. Publication binds
+actual dump size/hash, canonical same-snapshot evidence, source revision and
+capture time. The operator awaits the dump read stream and plaintext-directory
+cleanup before returning its bounded result. A duplicate or ambiguous
+publication failure preserves any existing ciphertext and is never retried or
+deleted automatically. Unlinking the tmpfs files is cleanup, not a claim of
+physical erasure.
+
+This layer does not provide an unattended service, choose a trusted host, publish
+off-host, recover a target database or establish release readiness. Mocked driver
+and protocol cases, bounded real synthetic leader/descendant cleanup regressions,
+and a real local encryption round trip do not qualify real TLS, snapshot import,
+representative capacity, native tools or recovery objectives.
+
+The existing restore drill creates its own local dump. Its successful result does
+not validate a downloaded off-host artifact. Deployment still requires the
+collector, actual encrypted publication/download, a new isolated restore target,
+the authority and erasure-replay checks below, and measured recovery objectives.
+A library round trip or upload must never grant application readiness.
+
+## Local authenticated restore operator
+
+`runPostgresRestore` in `scripts/postgres-restore.mjs` consumes the encrypted
+file artifact produced by the local backup operator. Its explicit inputs are
+`expectedBackup` (backup UUID, source database, deployment target, revision,
+snapshot and manifest SHA-256), `expectedOwner`, `keyRing`,
+`artifactDirectory`, `tmpfsRoot`, `maintenanceConnection`,
+`targetConnection`, `targetDatabase`, `connectAllowlist`,
+`deniedRuntimePrincipals`, `tools: { pgRestore, psql }`,
+`maxDumpBytes`, `timeoutMs` and optional `signal`. Each tool has an
+absolute protected path, SHA-256 and exact PostgreSQL 17 patch-version string;
+both versions must match. Those bindings do not qualify the native runtime.
+
+Both connections use the backup normalizer. Host, port, TLS mode and explicit
+CA must match; databases must differ. Verified TLS requires a DNS host because
+the installed driver does not reliably verify literal IP identities. Plaintext
+is allowed only for explicit loopback `127.0.0.1` or `::1`. No ambient
+libpq settings or URL overrides are inherited. Credentials stay in owned
+mode-0600 files below a verified private tmpfs directory.
+
+Before any database creation, the operator authenticates the entire encrypted
+artifact and validates its full source evidence against the independently
+supplied expected owner. It refuses source/existing targets and creates only a
+new `nutrition_restore_*` database from `template0`, initially with
+`ALLOW_CONNECTIONS false`. It records the new OID, revokes PUBLIC CONNECT,
+and runs the unchanged database owner, exact ACL, effective-login allowlist and
+zero-session checks. The allowlist must already have effective access through
+reviewed existing roles; this operator grants no maintenance privileges or role
+memberships. Every named runtime principal must exist, be disjoint from the
+allowlist and lack effective CONNECT, including inherited/superuser access.
+
+After that boundary passes, the operator enables maintenance connections.
+It feeds the authenticated `recovered.dump` stream to `pg_restore` with an
+explicit validated `--dbname`, `--single-transaction`,
+`--exit-on-error`, `--no-owner`, `--no-privileges` and `--role`.
+The recovered stream's filesystem path contains the envelope frame and must
+never be used as a dump filename. Shared process ownership counts the exact
+authenticated input length, applies backpressure, awaits input/output closure,
+and retains the existing pinned-supervisor group cleanup. A separate pinned
+`psql -X` invocation applies the unchanged authority SQL with
+`ON_ERROR_STOP=1`. Raw tool diagnostics are not returned.
+
+An owned target session then collects the full current authority, ledger and
+table evidence in a read-only repeatable-read transaction. It compares this to
+the authenticated snapshot evidence, not today's source database. The same
+production readiness predicate must reject the target's actual attestation
+for a freshly generated restore epoch. Only the distinct stale-attestation
+error is expected; malformed identity, SQL, transport or cleanup failures fail
+the operation.
+
+The operator closes target sessions before the final zero-session check,
+disposes plaintext, removes owned credential files and keeps ciphertext.
+On failure it retains the database. After owned activity settles, it re-fences
+only a target whose recorded name and OID still match. Unknown CREATE outcomes,
+identity replacement or failed re-fencing remain explicit cleanup failures;
+there is no automatic DROP or unrelated session termination. Unlinking files
+does not prove physical erasure.
+
+A successful result is `local-restore-verified`, `localOnly: true`,
+`erasureReplayRequired: true` and `applicationTrafficBlocked: true`.
+Keep its fresh `restoreEpoch` for the existing external-ledger replay and
+later API/worker configuration. This operation never writes an attestation,
+grants runtime CONNECT, starts applications or performs cutover. Live restore,
+native TLS/tools, actual identity isolation, external erasure replay, off-host
+recovery, capacity, recovery objectives and independent release acceptance
+remain required.
+
 ## Restore rehearsal
 
 The target must be a new empty database whose name includes the drill or incident
@@ -225,7 +498,7 @@ Run and save results without exporting payload values:
    remain blocked.
 
    Separately, the logical restore drill's internal canonical authority
-   fingerprint schema is version 13. It binds exact public-column ACL rows, the
+   fingerprint schema is version 16. It binds exact public-column ACL rows, the
    sixteen authority-evidence column definitions, all nine authority CHECKs, the unique
    activation-to-batch index, the independent count of non-NULL column ACL
    attributes, each trigger's table schema, every public-table trigger, and every

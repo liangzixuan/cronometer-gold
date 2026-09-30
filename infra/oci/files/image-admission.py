@@ -194,9 +194,20 @@ def read_env(filename):
     return values
 
 
-def validate(deploy_file):
+def profile_images(profile):
+    if profile is None:
+        return REPOSITORY_IMAGES
+    if profile == "appwrite-cloud-azure-v1":
+        return {key: value for key, value in REPOSITORY_IMAGES.items() if key != "WEB_IMAGE"}
+    fail("Unknown deployment image profile")
+
+
+def validate(deploy_file, profile=None):
+    images = profile_images(profile)
     deploy = read_env(deploy_file)
-    for variable, (repository, _component) in REPOSITORY_IMAGES.items():
+    if profile is not None and {key for key in deploy if key.endswith("_IMAGE")} != set(images):
+        fail("The Appwrite profile requires exactly its six backend image references")
+    for variable, (repository, _component) in images.items():
         reference = deploy.get(variable, "")
         if not REFERENCE.fullmatch(reference) or not reference.startswith(f"{repository}@"):
             fail(f"{variable} must use its exact GHCR package at an immutable digest")
@@ -361,14 +372,15 @@ def require_repository_source_contract(variable, config, revision):
         fail(f"{variable} source, revision, title, or version differs from the release contract")
 
 
-def inspect_images(deploy_file, runtime_file):
-    deploy = validate(deploy_file)
+def inspect_images(deploy_file, runtime_file, profile=None):
+    images = profile_images(profile)
+    deploy = validate(deploy_file, profile)
     runtime = read_env(runtime_file)
     revision = runtime.get("SERVICE_VERSION", "")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         fail("SERVICE_VERSION must be a full Git SHA before image inspection")
 
-    for variable in REPOSITORY_IMAGES:
+    for variable in images:
         inspected = command_json(["docker", "image", "inspect", deploy[variable]], variable)
         if len(inspected) != 1 or (inspected[0].get("Os"), inspected[0].get("Architecture")) != (
             "linux", "arm64",
@@ -379,12 +391,19 @@ def inspect_images(deploy_file, runtime_file):
 
 
 def main():
-    if len(sys.argv) == 3 and sys.argv[1] == "validate":
-        validate(sys.argv[2])
-    elif len(sys.argv) == 4 and sys.argv[1] == "inspect":
-        inspect_images(sys.argv[2], sys.argv[3])
+    arguments = sys.argv[1:]
+    profile = None
+    if arguments[:1] == ["--profile"] and len(arguments) >= 3:
+        profile = arguments[1]
+        profile_images(profile)
+        arguments = arguments[2:]
+    if len(arguments) == 2 and arguments[0] == "validate":
+        validate(arguments[1], profile)
+    elif len(arguments) == 3 and arguments[0] == "inspect":
+        inspect_images(arguments[1], arguments[2], profile)
     else:
-        fail("Usage: nutrition-image-admission validate <deploy.env> | inspect <deploy.env> <runtime.env>")
+        fail("Usage: nutrition-image-admission [--profile appwrite-cloud-azure-v1] "
+             "validate <deploy.env> | inspect <deploy.env> <runtime.env>")
 
 
 if __name__ == "__main__":

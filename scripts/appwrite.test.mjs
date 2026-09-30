@@ -5,13 +5,24 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-test("Appwrite deployment contracts and types", { timeout: 120_000 }, () => {
+test("Appwrite deployment contracts and types", { timeout: 180_000 }, () => {
   const env = { ...process.env };
   // Nested node:test runs must not inherit the parent's child protocol.
   delete env.NODE_TEST_CONTEXT;
+  const contracts = spawnSync("pnpm", ["--filter", "@nutrition-tracker/contracts", "build"], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    timeout: 25_000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.ifError(contracts.error);
+  assert.equal(contracts.status, 0, `${contracts.stdout}\n${contracts.stderr}`);
+
   const cases = [
     "scripts/appwrite/source-artifact.test.ts",
     "scripts/appwrite/site-release.test.ts",
+    "scripts/appwrite/qualification.test.ts",
     "scripts/appwrite/github-checks.test.ts",
     "scripts/appwrite/pack-site.test.mjs",
   ];
@@ -26,6 +37,16 @@ test("Appwrite deployment contracts and types", { timeout: 120_000 }, () => {
   for (const field of ["fail", "cancelled", "skipped", "todo"])
     assert.match(result.stdout, new RegExp(`# ${field} 0\\n`));
   assert.doesNotMatch(result.stderr, /skipping running files/);
+
+  const artifact = spawnSync("python3", ["scripts/appwrite/review-artifact.test.py"], {
+    cwd: root,
+    env,
+    encoding: "utf8",
+    timeout: 15_000,
+    maxBuffer: 1024 * 1024,
+  });
+  assert.ifError(artifact.error);
+  assert.equal(artifact.status, 0, `${artifact.stdout}\n${artifact.stderr}`);
 
   const types = spawnSync("pnpm", ["exec", "tsc", "-p", "scripts/appwrite/tsconfig.json"], {
     cwd: root,

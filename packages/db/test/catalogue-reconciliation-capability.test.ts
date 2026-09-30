@@ -11,13 +11,15 @@ import {
   type Selectable,
 } from "kysely";
 import { describe, expect, it } from "vitest";
+import type {
+  BatchRecordValidation,
+  BatchValidationPolicy,
+} from "../src/catalogue-batch-policy.js";
 import {
   type PreparedCatalogueValidationRequest,
   parsePreparedCatalogueValidationRequest,
 } from "../src/catalogue-capability-validation.js";
 import {
-  type BatchRecordValidation,
-  type BatchValidationPolicy,
   nutrientMappingRevisionDigest,
   reconcileCatalogueBatch,
 } from "../src/catalogue-ingestion.js";

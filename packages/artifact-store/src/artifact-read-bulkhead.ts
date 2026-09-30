@@ -187,7 +187,9 @@ export class ArtifactReadBulkhead {
         })();
         await disposePromise;
       };
-      opened.stream.once("close", () => void dispose());
+      opened.stream.once("close", () => {
+        void dispose().catch(() => undefined);
+      });
       return { contentLength: opened.contentLength, dispose, stream: opened.stream };
     } catch (error) {
       release();

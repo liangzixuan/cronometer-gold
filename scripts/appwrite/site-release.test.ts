@@ -1,28 +1,25 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { MockAgent } from "undici";
-import { BRANCH, REPOSITORY, WORKFLOW_POLICIES } from "./github-checks.ts";
 import {
   APPWRITE_TARGET,
+  activateSite,
   createSitesPort,
   exactHttpsOrigin,
-  MISSING_QUALIFICATIONS,
+  prepareSite,
   type QualificationVerifier,
+  qualificationOptionsFromEnvironment,
   RELEASE_LIMITS,
   ReleaseError,
+  type ReleaseOptions,
   type ReleaseReceipt,
-  releaseSite,
   SITE_COMMANDS,
   type SiteRecord,
   type SitesPort,
   type TargetConfig,
-  unavailableQualification,
   validateStaging,
   validateTarget,
   verifyOutputArchive,
@@ -213,7 +210,7 @@ function harness() {
       calls.push("close");
     },
   };
-  const options = {
+  const options: ReleaseOptions = {
     ...f,
     githubEvidence: {
       fixture: "GitHub verification is injected only for offline controller tests",
@@ -237,6 +234,7 @@ function harness() {
       assert.equal(expected.revision, f.source.revision);
       assert.equal(expected.tree, f.source.tree);
       assert.equal(expected.lockfileSha256, f.source.files[1]?.sha256);
+      return { verified: true };
     },
     createPort: () => {
       calls.push("create-port");
@@ -262,14 +260,23 @@ function harness() {
     },
   };
 }
-test("inactive upload, exact source/output verification, qualification and confirmed activation remain ordered", async () => {
+async function prepared(h: ReturnType<typeof harness>) {
+  const candidateReceipt = await prepareSite(h.options);
+  assert.equal(candidateReceipt.status, "candidate-prepared", candidateReceipt.failure ?? "");
+  h.calls.length = 0;
+  h.receipts.length = 0;
+  return { ...h.options, candidateReceipt };
+}
+test("preparation uploads once and verifies exact source/output without activation or final qualification", async () => {
   const h = harness();
-  const receipt = await releaseSite(h.options);
-  assert.equal(receipt.status, "accepted");
+  const receipt = await prepareSite(h.options);
+  assert.equal(receipt.schemaVersion, 2);
+  assert.equal(receipt.status, "candidate-prepared");
+  assert.equal(receipt.operation, "prepare");
+  assert.equal(receipt.activationOutcome, "not-attempted");
   assert.equal(receipt.previousDeploymentId, "previous-deploy");
   assert.equal(receipt.uploadedDeploymentId, "new-deploy");
-  assert.equal(receipt.activeDeploymentId, "new-deploy");
-  assert.equal(receipt.sourceArchiveSha256, h.source.archiveSha256);
+  assert.equal(receipt.activeDeploymentId, "previous-deploy");
   assert.equal(receipt.output?.outputArchiveSha256, sha256(h.output));
   assert.deepEqual(h.calls, [
     "verify-github",
@@ -280,34 +287,80 @@ test("inactive upload, exact source/output verification, qualification and confi
     "upload-inactive",
     "download:source",
     "download:output",
+    "get-site",
+    "close",
+  ]);
+  assert.equal(h.receipts.length, 1);
+});
+test("activation rereads the candidate and current authority before a single confirmed mutation", async () => {
+  const h = harness();
+  const options = await prepared(h);
+  h.options.qualification.beforeActivation = async (context) => {
+    h.calls.push("qualification-before-activation");
+    assert.deepEqual(context.githubEvidence, { verified: true });
+    assert.equal(context.deployment?.$id, "new-deploy");
+    assert.equal(context.site?.$id, h.config.siteId);
+    assert.equal(context.output?.outputArchiveSha256, sha256(h.output));
+  };
+  const receipt = await activateSite(options);
+  assert.equal(receipt.status, "activated");
+  assert.equal(receipt.operation, "activate");
+  assert.equal(receipt.activationOutcome, "confirmed-candidate");
+  assert.equal(receipt.activeDeploymentId, "new-deploy");
+  assert.deepEqual(h.calls, [
+    "verify-github",
+    "qualification-before-upload",
+    "create-port",
+    "get-site",
+    "get-deployment:previous-deploy",
+    "get-deployment:new-deploy",
+    "download:source",
+    "download:output",
+    "verify-github",
+    "qualification-before-upload",
     "qualification-before-activation",
     "get-site",
+    "get-deployment:previous-deploy",
     "activate",
     "get-site",
     "close",
   ]);
   assert.equal(h.receipts.length, 1);
 });
-test("real CLI qualification rejects before creating any provider transport", async () => {
+test("activation rejects absent, failed, cross-target, substituted and already active candidate receipts before provider access", async () => {
   const h = harness();
-  h.options.qualification = unavailableQualification;
-  const receipt = await releaseSite(h.options);
-  assert.equal(receipt.failure, "managed_runtime_qualification_unavailable");
-  assert.deepEqual(receipt.missingPrerequisites, MISSING_QUALIFICATIONS);
-  assert.deepEqual(h.calls, ["verify-github"]);
+  const { candidateReceipt } = await prepared(h);
+  for (const candidate of [
+    undefined,
+    { ...candidateReceipt, status: "failed" },
+    { ...candidateReceipt, operation: "activate" },
+    { ...candidateReceipt, configSha256: "0".repeat(64) },
+    { ...candidateReceipt, sourceArchiveSha256: "0".repeat(64) },
+    { ...candidateReceipt, siteId: "other-site" },
+    { ...candidateReceipt, cleanupFailure: "transport_cleanup_failed" },
+    { ...candidateReceipt, uploadedDeploymentId: "previous-deploy" },
+  ]) {
+    h.calls.length = 0;
+    const result = await activateSite({
+      ...h.options,
+      candidateReceipt: candidate as ReleaseReceipt | undefined,
+    });
+    assert.equal(result.failure, "candidate_receipt_mismatch");
+    assert.equal(h.calls.includes("create-port"), false);
+  }
 });
 test("bad GitHub evidence and backend qualification stop before provider mutation", async () => {
   const h = harness();
   h.options.verifyGitHub = () => {
     throw new Error("untrusted input and secret value");
   };
-  assert.equal((await releaseSite(h.options)).failure, "release_step_failed");
+  assert.equal((await prepareSite(h.options)).failure, "release_step_failed");
   assert.equal(h.calls.includes("create-port"), false);
   const other = harness();
   other.options.qualification.beforeUpload = async () => {
     throw new ReleaseError("backend_qualification_unavailable");
   };
-  assert.equal((await releaseSite(other.options)).failure, "backend_qualification_unavailable");
+  assert.equal((await prepareSite(other.options)).failure, "backend_qualification_unavailable");
   assert.equal(other.calls.includes("create-port"), false);
 });
 for (const origin of [
@@ -358,7 +411,7 @@ for (const update of [
   test(`reject changed Site configuration ${Object.keys(update)[0]}`, async () => {
     const h = harness();
     h.port.getSite = async () => ({ ...h.site, ...update });
-    const result = await releaseSite(h.options);
+    const result = await prepareSite(h.options);
     assert.equal(result.status, "failed");
     assert.equal(h.calls.includes("upload-inactive"), false);
   });
@@ -366,7 +419,7 @@ for (const update of [
 test("retained previous deployment must be ready and belong to the target", async () => {
   const h = harness();
   h.port.getDeployment = async () => ({ ...h.deployment, resourceId: "other-site" });
-  assert.equal((await releaseSite(h.options)).failure, "rollback_deployment_unavailable");
+  assert.equal((await prepareSite(h.options)).failure, "rollback_deployment_unavailable");
   assert.equal(h.calls.includes("upload-inactive"), false);
 });
 test("uncertain partial upload preserves the known ID, redacts errors and never retries", async () => {
@@ -377,7 +430,7 @@ test("uncertain partial upload preserves the known ID, redacts errors and never 
     progress("partial-deploy");
     throw new Error("APPWRITE_DEPLOY_KEY=fixture-secret provider body");
   };
-  const receipt = await releaseSite(h.options);
+  const receipt = await prepareSite(h.options);
   assert.equal(uploads, 1);
   assert.equal(receipt.uploadedDeploymentId, "partial-deploy");
   assert.equal(receipt.phase, "upload");
@@ -397,7 +450,7 @@ test("autoactivation or wrong upload identity is rejected", async () => {
       progress("new-deploy");
       return { ...h.deployment, ...update };
     };
-    assert.equal((await releaseSite(h.options)).status, "failed");
+    assert.equal((await prepareSite(h.options)).status, "failed");
     assert.equal(h.calls.includes("activate"), false);
   }
 });
@@ -410,7 +463,7 @@ test("readiness polling has a fixed bound with no new uploads", async () => {
     reads++;
     return { ...h.deployment, status: "building" };
   };
-  assert.equal((await releaseSite(h.options)).failure, "deployment_readiness_timeout");
+  assert.equal((await prepareSite(h.options)).failure, "deployment_readiness_timeout");
   assert.equal(reads, RELEASE_LIMITS.polls);
   assert.equal(h.calls.includes("activate"), false);
 });
@@ -418,90 +471,253 @@ test("failed and canceled deployments are retained without activation or retry",
   for (const status of ["failed", "canceled"]) {
     const h = harness();
     h.port.createDeployment = async () => ({ ...h.deployment, status });
-    assert.equal((await releaseSite(h.options)).failure, "deployment_build_failed");
+    assert.equal((await prepareSite(h.options)).failure, "deployment_build_failed");
     assert.equal(h.calls.includes("activate"), false);
   }
 });
 test("downloaded source bytes must exactly match the reviewed archive", async () => {
   const h = harness();
   h.port.download = async () => Buffer.from("different source");
-  assert.equal((await releaseSite(h.options)).failure, "uploaded_source_identity_mismatch");
+  assert.equal((await prepareSite(h.options)).failure, "uploaded_source_identity_mismatch");
   assert.equal(h.calls.includes("activate"), false);
 });
-test("hosted runtime/backend verifier failure prevents activation", async () => {
+test("hosted runtime/backend verifier failure prevents activation and preserves inactive candidate", async () => {
   const h = harness();
-  h.options.qualification.beforeActivation = async () => {
+  const options = await prepared(h);
+  options.qualification.beforeActivation = async () => {
     throw new ReleaseError("backend_restore_evidence_mismatch");
   };
-  assert.equal((await releaseSite(h.options)).failure, "backend_restore_evidence_mismatch");
+  assert.equal((await activateSite(options)).failure, "backend_restore_evidence_mismatch");
   assert.equal(h.calls.includes("activate"), false);
+  assert.equal(h.calls.includes("upload-inactive"), false);
+});
+test("activation rechecks current GitHub evidence and passes only the newly verified response to final qualification", async () => {
+  const h = harness();
+  const options = await prepared(h);
+  let calls = 0;
+  options.verifyGitHub = async () => ({ phase: ++calls });
+  options.qualification.beforeActivation = async (context) =>
+    assert.deepEqual(context.githubEvidence, { phase: 2 });
+  assert.equal((await activateSite(options)).status, "activated");
+  assert.equal(calls, 2);
+  const changed = harness();
+  const changedOptions = await prepared(changed);
+  let reads = 0;
+  changedOptions.verifyGitHub = async () => {
+    if (++reads === 2) throw new ReleaseError("github_state_changed");
+    return {};
+  };
+  assert.equal((await activateSite(changedOptions)).failure, "github_state_changed");
+  assert.equal(changed.calls.includes("activate"), false);
+});
+test("actual candidate must still be inactive, ready, source-identical and output-identical", async () => {
+  for (const mode of ["active", "building", "source", "output"] as const) {
+    const h = harness();
+    const options = await prepared(h);
+    if (mode === "active") h.setActive("new-deploy");
+    if (mode === "building") {
+      const original = h.port.getDeployment;
+      h.port.getDeployment = async (site, id) => ({
+        ...(await original(site, id)),
+        ...(id === "new-deploy" ? { status: "building" } : {}),
+      });
+    }
+    if (mode === "source") h.port.download = async () => Buffer.from("substituted");
+    if (mode === "output") {
+      const output = outputArchive(
+        h.source,
+        h.outputEntries.map((entry) =>
+          entry.path.endsWith("chunk.js")
+            ? { ...entry, data: Buffer.from("different build") }
+            : entry,
+        ),
+      );
+      h.port.download = async (_site, _id, type) => (type === "source" ? h.archive : output);
+    }
+    const receipt = await activateSite(options);
+    assert.equal(receipt.status, "failed");
+    assert.equal(h.calls.includes("activate"), false);
+  }
 });
 test("active deployment change after qualification stops promotion", async () => {
   const h = harness();
-  h.options.qualification.beforeActivation = async () => h.setActive("concurrent-deploy");
-  assert.equal((await releaseSite(h.options)).failure, "active_deployment_changed");
+  const options = await prepared(h);
+  options.qualification.beforeActivation = async () => h.setActive("concurrent-deploy");
+  assert.equal((await activateSite(options)).failure, "active_deployment_changed");
   assert.equal(h.calls.includes("activate"), false);
 });
-test("uncertain activation is never retried and retains rollback identity", async () => {
+for (const outcome of [
+  "confirmed-candidate",
+  "confirmed-previous",
+  "confirmed-other",
+  "unknown",
+] as const) {
+  test(`ambiguous activation reconciles ${outcome} with one read and never retries or rolls back`, async () => {
+    const h = harness();
+    const options = await prepared(h);
+    let attempts = 0;
+    let reconciliationReads = 0;
+    const getSite = h.port.getSite;
+    h.port.getSite = async (site) => {
+      if (attempts) {
+        reconciliationReads++;
+        if (outcome === "unknown") throw new Error("private transport details");
+      }
+      return getSite(site);
+    };
+    h.port.activate = async () => {
+      attempts++;
+      if (outcome === "confirmed-candidate") h.setActive("new-deploy");
+      if (outcome === "confirmed-other") h.setActive("other-deploy");
+      throw new Error("uncertain secret provider response");
+    };
+    const receipt = await activateSite(options);
+    assert.equal(attempts, 1);
+    assert.equal(reconciliationReads, 1);
+    assert.equal(receipt.status, "failed");
+    assert.equal(receipt.activationOutcome, outcome);
+    assert.equal(receipt.previousDeploymentId, "previous-deploy");
+    assert.equal(JSON.stringify(receipt).includes("secret"), false);
+  });
+}
+test("activation response and readback mismatches fail even when reconciliation finds the candidate", async () => {
   const h = harness();
-  let attempts = 0;
-  h.port.activate = async () => {
-    attempts++;
-    throw new Error("uncertain provider response");
-  };
-  const receipt = await releaseSite(h.options);
-  assert.equal(attempts, 1);
-  assert.equal(receipt.status, "failed");
-  assert.equal(receipt.phase, "activation");
-  assert.equal(receipt.previousDeploymentId, "previous-deploy");
-  assert.equal(receipt.activeDeploymentId, null);
-});
-test("activation response and readback must name the uploaded deployment", async () => {
-  const h = harness();
+  const options = await prepared(h);
   h.port.activate = async () => h.site;
-  assert.equal((await releaseSite(h.options)).failure, "activation_response_mismatch");
+  assert.equal((await activateSite(options)).failure, "activation_response_mismatch");
   const other = harness();
+  const otherOptions = await prepared(other);
   let reads = 0;
-  other.port.getSite = async () => {
-    reads++;
-    return { ...other.site, deploymentId: reads === 3 ? "concurrent" : "previous-deploy" };
-  };
-  assert.equal((await releaseSite(other.options)).failure, "activation_confirmation_mismatch");
+  other.port.getSite = async () => ({
+    ...other.site,
+    deploymentId: ++reads === 3 ? "concurrent" : "previous-deploy",
+  });
+  assert.equal((await activateSite(otherOptions)).failure, "activation_confirmation_mismatch");
 });
-test("production requires same source and actual verifier-backed staging acceptance", async () => {
+async function productionHarness() {
+  const staging = harness();
+  const staged = await activateSite(await prepared(staging));
+  assert.equal(staged.status, "activated");
   const h = harness();
-  h.options.config = {
+  const config: TargetConfig = {
     ...h.config,
     target: "production",
     siteId: "production-site",
     otherSiteId: "staging-site",
+    webOrigin: "https://nourishing.example.com",
+    apiOrigin: "https://api.nourishing.example.com",
   };
-  assert.equal((await releaseSite(h.options)).failure, "staging_acceptance_missing_or_mismatched");
-  assert.equal(h.calls.includes("create-port"), false);
-  const staging = harness();
-  const receipt = await releaseSite(staging.options);
-  assert.doesNotThrow(() => validateStaging(receipt, h.source, h.options.config));
-  assert.throws(() =>
-    validateStaging({ ...receipt, status: "failed" }, h.source, h.options.config),
-  );
-  assert.throws(() =>
-    validateStaging(
-      { ...receipt, sourceArchiveSha256: "0".repeat(64) },
-      h.source,
-      h.options.config,
-    ),
-  );
-  const next = harness();
-  next.options.qualification.verifyStaging = async () => {
-    throw new ReleaseError("staging_signature_invalid");
+  const site = {
+    ...h.site,
+    $id: config.siteId,
+    vars: [
+      { key: "WEB_PUBLIC_ORIGIN", value: config.webOrigin },
+      { key: "API_INTERNAL_URL", value: config.apiOrigin },
+      { key: "NODE_ENV", value: "production" },
+    ],
   };
-  const result = await releaseSite({
-    ...next.options,
-    config: h.options.config,
-    stagingReceipt: receipt,
+  let active = "previous-deploy";
+  h.port.getSite = async () => ({ ...site, deploymentId: active });
+  h.port.getDeployment = async (_site, id) => ({
+    ...h.deployment,
+    $id: id,
+    resourceId: config.siteId,
   });
-  assert.equal(result.failure, "staging_signature_invalid");
-  assert.equal(next.calls.includes("create-port"), false);
+  h.port.createDeployment = async (_site, _archive, progress) => {
+    h.calls.push("upload-inactive");
+    progress("new-deploy");
+    return { ...h.deployment, resourceId: config.siteId };
+  };
+  h.port.activate = async (_site, id) => {
+    h.calls.push("activate");
+    active = id;
+    return { ...site, deploymentId: active };
+  };
+  const options: ReleaseOptions = {
+    ...h.options,
+    config,
+    stagingConfig: staging.config,
+    stagingReceipt: staged,
+    createStagingPort: () => {
+      h.calls.push("create-staging-port");
+      return staging.port;
+    },
+  };
+  return { ...h, options, staging, staged };
+}
+test("production requires actual staging Site, deployment, source and output observations before upload", async () => {
+  const h = await productionHarness();
+  h.staging.calls.length = 0;
+  h.options.qualification.verifyStaging = async (receipt, context) => {
+    h.calls.push("verify-staging");
+    assert.equal(receipt.status, "activated");
+    assert.equal(context.staging?.site.deploymentId, receipt.activeDeploymentId);
+    assert.equal(context.staging?.deployment.$id, receipt.activeDeploymentId);
+    assert.deepEqual(context.staging?.output, receipt.output);
+  };
+  assert.equal((await prepareSite(h.options)).status, "candidate-prepared");
+  assert.ok(h.calls.indexOf("verify-staging") < h.calls.indexOf("upload-inactive"));
+  assert.deepEqual(h.staging.calls, [
+    "get-site",
+    "get-deployment:new-deploy",
+    "download:source",
+    "download:output",
+    "get-site",
+    "close",
+  ]);
+});
+test("production activation freshly rechecks staging rather than trusting earlier preparation", async () => {
+  const h = await productionHarness();
+  const candidateReceipt = await prepareSite(h.options);
+  h.calls.length = 0;
+  h.staging.setActive("staging-drift");
+  const result = await activateSite({ ...h.options, candidateReceipt });
+  assert.equal(result.failure, "staging_active_deployment_changed");
+  assert.equal(h.calls.includes("activate"), false);
+});
+for (const mode of [
+  "receipt",
+  "config",
+  "deployment",
+  "source",
+  "output",
+  "signature",
+  "concurrent",
+] as const) {
+  test(`production rejects staging ${mode} drift before upload`, async () => {
+    const h = await productionHarness();
+    assert.ok(h.staged.output);
+    if (mode === "receipt")
+      h.options.stagingReceipt = { ...h.staged, status: "candidate-prepared" };
+    if (mode === "config")
+      h.options.stagingConfig = { ...h.staging.config, apiOrigin: h.options.config.apiOrigin };
+    if (mode === "deployment")
+      h.staging.port.getDeployment = async () => ({ ...h.deployment, resourceId: "another-site" });
+    if (mode === "source") h.staging.port.download = async () => Buffer.from("swapped source");
+    if (mode === "output")
+      h.options.stagingReceipt = {
+        ...h.staged,
+        output: { ...h.staged.output, outputArchiveSha256: "0".repeat(64) },
+      };
+    if (mode === "signature")
+      h.options.qualification.verifyStaging = async () => {
+        throw new ReleaseError("staging_signature_invalid");
+      };
+    if (mode === "concurrent")
+      h.options.qualification.verifyStaging = async () => h.staging.setActive("concurrent-staging");
+    assert.equal((await prepareSite(h.options)).status, "failed");
+    assert.equal(h.calls.includes("upload-inactive"), false);
+    assert.equal(h.calls.includes("activate"), false);
+  });
+}
+test("saved staging acceptance must name the exact source and successful reviewed activation", async () => {
+  const h = await productionHarness();
+  assert.doesNotThrow(() => validateStaging(h.staged, h.source, h.options.config));
+  for (const receipt of [
+    { ...h.staged, status: "failed" },
+    { ...h.staged, sourceArchiveSha256: "0".repeat(64) },
+  ])
+    assert.throws(() => validateStaging(receipt as ReleaseReceipt, h.source, h.options.config));
 });
 test("deadline and transport cleanup failure never become accepted", async () => {
   const h = harness();
@@ -510,12 +726,12 @@ test("deadline and transport cleanup failure never become accepted", async () =>
   h.options.qualification.beforeUpload = async () => {
     now = RELEASE_LIMITS.totalMs;
   };
-  assert.equal((await releaseSite(h.options)).failure, "release_deadline");
+  assert.equal((await prepareSite(h.options)).failure, "release_deadline");
   const other = harness();
   other.port.close = async () => {
     throw new Error("private error");
   };
-  assert.equal((await releaseSite(other.options)).failure, "transport_cleanup_failed");
+  assert.equal((await prepareSite(other.options)).failure, "transport_cleanup_failed");
 });
 test("output archive validates complete entries and source identities independently", () => {
   const { output, source } = fixture();
@@ -594,191 +810,74 @@ test("official SDK rejects an alternate Site before any network request", async 
   assert.equal(APPWRITE_TARGET.endpoint, "https://nyc.cloud.appwrite.io/v1");
 });
 
-function cliEvidence(f: ReturnType<typeof fixture>) {
-  const SHA = f.source.revision;
-  const HASH = f.source.files[1]?.sha256 as string;
-  function run(workflow: string, id = 30, attempt = 1) {
-    return {
-      id,
-      run_number: id,
-      run_attempt: attempt,
-      head_sha: SHA,
-      head_branch: BRANCH,
-      path: `.github/workflows/${workflow}`,
-      event: "push",
-      status: "completed",
-      conclusion: "success",
-      repository: { full_name: REPOSITORY },
-      head_repository: { full_name: REPOSITORY },
-    };
-  }
-  function jobs(workflow: keyof typeof WORKFLOW_POLICIES, id = 30, attempt = 1) {
-    const policies = WORKFLOW_POLICIES[workflow] ?? {};
-    assert.ok(policies);
-    return Object.entries(policies).map(([name, policy], i) => ({
-      id: 100 + i,
-      name,
-      run_id: id,
-      run_attempt: attempt,
-      head_sha: SHA,
-      status: "completed",
-      conclusion: "success",
-      started_at: "2026-09-29T01:00:00Z",
-      completed_at: "2026-09-29T01:01:00Z",
-      steps: policy.required.map((step, number) => ({
-        name: step,
-        number: number + 1,
-        status: "completed",
-        conclusion: policy.skipped.includes(step) ? "skipped" : "success",
-      })),
-    }));
-  }
-  function browser() {
-    return {
-      kind: "synthetic-browser-ci",
-      accepted: true,
-      qualificationOrReleaseAcceptance: false,
-      build: {
-        sha: SHA,
-        tree: f.source.tree,
-        fileMapSha256: HASH,
-        lockSha256: HASH,
-        outputsSha256: HASH,
-        trackedFiles: 1113,
-        buildId: "build-id",
-        command:
-          "pnpm exec turbo run build --filter=@nutrition-tracker/web... --filter=@nutrition-tracker/api... --filter=@nutrition-tracker/worker... --force",
-        nodeVersion: "v22.23.2",
-        pnpmVersion: "11.19.0",
-      },
-      browser: {
-        sourceSha: SHA,
-        buildId: "build-id",
-        status: "passed",
-        sessionId: "session-1",
-        browserVersion: "141.0",
-        browserSessionsAttempted: 1,
-        retries: 0,
-        origin: "http://127.0.0.1:3287",
-        checks: [
-          "authenticated-session-persistence",
-          "real-search-and-single-add",
-          "saved-diary-entry-after-reload",
-          "report-agrees-with-saved-day",
-          "narrow-diary-remains-usable",
-        ],
-      },
-      terminal: {
-        sessionId: "session-1",
-        status: "passed",
-        browserstackStatus: "done",
-        durationSeconds: 40,
-        buildName: `nourishing-${SHA}-32-1`,
-        projectName: "Nourishing",
-        name: "synthetic-login-search-add-report",
-      },
-      capture: {
-        requested: {
-          video: false,
-          screenshots: false,
-          networkLogs: false,
-          console: "disable",
-          playwrightLogs: false,
-          maskCommands: "sendType,sendPress,setHTTPCredentials,setStorageState,setGeolocation",
-        },
-        observedArtifacts: {
-          video_url: "empty",
-          har_logs_url: "missing",
-          browser_console_logs_url: "null",
-          playwright_logs_url: "empty",
-        },
-        dashboardVerification: "pending-first-run-review",
-      },
-      cookieAttributesIndependentlyInspected: false,
-      cleanup: { failures: [], volumesRetainedUntilEphemeralRunnerTeardown: true },
-    };
-  }
-  function evidence() {
-    return {
-      schemaVersion: 1,
-      repository: REPOSITORY,
-      branch: BRANCH,
-      revision: SHA,
-      tree: f.source.tree,
-      lockfileSha256: HASH,
-      release: { runId: 900, attempt: 1 },
-      target: "staging",
-      checkedAt: "2026-09-29T01:02:00Z",
-      requiredRuns: Object.keys(WORKFLOW_POLICIES).map((workflow, i) => ({
-        workflow,
-        run: run(workflow, 30 + i),
-        jobs: jobs(workflow as keyof typeof WORKFLOW_POLICIES, 30 + i),
-      })),
-      browser: {
-        summarySha256: sha256(JSON.stringify(browser())),
-        summary: browser(),
-      },
-      productionReview: null,
-    };
-  }
-
-  return evidence();
-}
-test("actual deployment CLI reports missing managed runtime/backend qualification without a cloud request", () => {
-  const f = fixture();
-  const directory = mkdtempSync(join(tmpdir(), "nourishing-appwrite-cli-test-"));
-  try {
-    writeFileSync(join(directory, "source.tar.gz"), f.archive);
-    writeFileSync(join(directory, "source-artifact.json"), canonical(f.source));
-    writeFileSync(join(directory, "github.json"), canonical(cliEvidence(f)));
-    writeFileSync(
-      join(directory, "pretend-qualification.json"),
-      JSON.stringify({ accepted: true }),
-    );
+test("CLI rejects the removed deploy operation and requires explicit qualification before opening transport", () => {
+  for (const args of [
+    ["deploy"],
+    [
+      "prepare",
+      "--target",
+      "staging",
+      "--artifact",
+      "/unused",
+      "--github-evidence",
+      "/unused",
+      "--receipt",
+      "/unused",
+    ],
+  ]) {
     const result = spawnSync(
       process.execPath,
-      [
-        "--import",
-        "tsx",
-        fileURLToPath(new URL("./site-release.ts", import.meta.url)),
-        "deploy",
-        "--target",
-        "staging",
-        "--artifact",
-        directory,
-        "--github-evidence",
-        join(directory, "github.json"),
-        "--qualification",
-        join(directory, "pretend-qualification.json"),
-        "--receipt",
-        join(directory, "receipt.json"),
-      ],
+      ["--import", "tsx", fileURLToPath(new URL("./site-release.ts", import.meta.url)), ...args],
       {
         encoding: "utf8",
         timeout: 10000,
-        env: {
-          ...process.env,
-          APPWRITE_DEPLOY_KEY: "synthetic-offline-key",
-          APPWRITE_SITE_ID: f.config.siteId,
-          APPWRITE_OTHER_SITE_ID: f.config.otherSiteId,
-          WEB_PUBLIC_ORIGIN: f.config.webOrigin,
-          API_INTERNAL_URL: f.config.apiOrigin,
-          APPWRITE_BUILD_SPECIFICATION: f.config.buildSpecification,
-          APPWRITE_RUNTIME_SPECIFICATION: f.config.runtimeSpecification,
-          GITHUB_RUN_ID: "900",
-          GITHUB_RUN_ATTEMPT: "1",
-        },
+        env: { ...process.env, APPWRITE_DEPLOY_KEY: "synthetic-offline-key" },
       },
     );
     assert.equal(result.status, 1, result.stderr);
-    const receipt = JSON.parse(readFileSync(join(directory, "receipt.json"), "utf8"));
-    assert.equal(receipt.failure, "managed_runtime_qualification_unavailable");
-    assert.deepEqual(receipt.missingPrerequisites, MISSING_QUALIFICATIONS);
-    assert.equal(receipt.uploadedDeploymentId, null);
-    assert.equal(JSON.parse(result.stdout).failure, receipt.failure);
+    assert.match(result.stderr, /Appwrite release admission failed/);
     assert.equal((result.stdout + result.stderr).includes("synthetic-offline-key"), false);
+  }
+});
+test("read-only staging SDK port rejects both upload and activation before any request", async () => {
+  const h = harness();
+  const mock = new MockAgent();
+  mock.disableNetConnect();
+  const port = createSitesPort(h.config, "synthetic-offline-key", mock, { readOnly: true });
+  try {
+    await assert.rejects(port.activate(h.config.siteId, "new-deploy"), /provider_target_rejected/);
+    await assert.rejects(
+      port.createDeployment(h.config.siteId, h.archive, () => {}),
+      /provider_target_rejected/,
+    );
   } finally {
-    rmSync(directory, { recursive: true, force: true });
+    await port.close();
+  }
+});
+test("provider request budget is shared across target and staging transports", async () => {
+  const h = harness();
+  const mock = new MockAgent();
+  mock.disableNetConnect();
+  mock
+    .get("https://nyc.cloud.appwrite.io")
+    .intercept({ path: `/v1/sites/${h.config.siteId}`, method: "GET" })
+    .reply(200, JSON.stringify(h.site), { headers: { "content-type": "application/json" } });
+  const budget = { requests: RELEASE_LIMITS.requests - 1, deadlineAt: Date.now() + 30000 };
+  const first = createSitesPort(h.config, "synthetic-offline-key", mock, { budget });
+  const secondMock = new MockAgent();
+  secondMock.disableNetConnect();
+  const second = createSitesPort(h.config, "synthetic-offline-key", secondMock, {
+    readOnly: true,
+    budget,
+  });
+  try {
+    await first.getSite(h.config.siteId);
+    await assert.rejects(second.getSite(h.config.siteId), /provider_request/);
+    assert.equal(budget.requests, RELEASE_LIMITS.requests + 1);
+    mock.assertNoPendingInterceptors();
+  } finally {
+    await first.close();
+    await second.close();
   }
 });
 test("official SDK transport bounds and redacts provider responses without network access", async () => {
@@ -842,7 +941,7 @@ test("invalid admission identities never enter a retained receipt", async () => 
   const marker = "synthetic-private-marker".repeat(1000);
   for (const section of ["source", "config"] as const) {
     const h = harness();
-    const options = {
+    const options: ReleaseOptions = {
       ...h.options,
       [section]:
         section === "source"
@@ -855,7 +954,7 @@ test("invalid admission identities never enter a retained receipt", async () => 
             }
           : { ...h.options.config, siteId: marker },
     };
-    const receipt = await releaseSite(options);
+    const receipt = await prepareSite(options);
     assert.equal(receipt.status, "failed");
     assert.equal(JSON.stringify(receipt).includes("synthetic-private-marker"), false);
     assert.equal(JSON.stringify(receipt).length < 2048, true);
@@ -873,7 +972,7 @@ test("transport cleanup failure preserves the primary upload failure", async () 
   h.port.close = async () => {
     throw new Error("synthetic provider cleanup detail");
   };
-  const receipt = await releaseSite(h.options);
+  const receipt = await prepareSite(h.options);
   assert.equal(receipt.status, "failed");
   assert.equal(receipt.failure, "provider_request_failed");
   assert.equal(receipt.cleanupFailure, "transport_cleanup_failed");
@@ -903,4 +1002,43 @@ test("provider metadata exception accepts only a bounded regular file with safe 
       /output_unexpected_file/,
     );
   }
+});
+
+test("CLI optional readiness secrets treat GitHub empty values as absent without sharing target credentials", () => {
+  assert.deepEqual(qualificationOptionsFromEnvironment("/review.json", {}), {
+    qualificationPath: "/review.json",
+  });
+  assert.deepEqual(
+    qualificationOptionsFromEnvironment("/review.json", {
+      APPWRITE_BACKEND_READINESS_TOKEN: "",
+      APPWRITE_STAGING_READINESS_TOKEN: "",
+    }),
+    { qualificationPath: "/review.json" },
+  );
+  const target = "a".repeat(64),
+    staging = "b".repeat(64);
+  assert.deepEqual(
+    qualificationOptionsFromEnvironment("/review.json", {
+      APPWRITE_BACKEND_READINESS_TOKEN: target,
+      APPWRITE_STAGING_READINESS_TOKEN: staging,
+    }),
+    { qualificationPath: "/review.json", readinessToken: target, stagingReadinessToken: staging },
+  );
+  assert.deepEqual(
+    qualificationOptionsFromEnvironment("/review.json", {
+      APPWRITE_BACKEND_READINESS_TOKEN: target,
+      APPWRITE_STAGING_READINESS_TOKEN: "",
+    }),
+    { qualificationPath: "/review.json", readinessToken: target },
+  );
+});
+test("CLI preserves nonempty malformed readiness credentials for fail-closed qualification", () => {
+  for (const token of [" ", "a".repeat(63), "A".repeat(64), "a".repeat(64).concat("\n")])
+    assert.deepEqual(
+      qualificationOptionsFromEnvironment("/review.json", {
+        APPWRITE_BACKEND_READINESS_TOKEN: token,
+        APPWRITE_STAGING_READINESS_TOKEN: token,
+      }),
+      { qualificationPath: "/review.json", readinessToken: token, stagingReadinessToken: token },
+    );
 });

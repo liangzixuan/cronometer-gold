@@ -1,193 +1,42 @@
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { canonicalJson } from "@nutrition-tracker/contracts";
-
 import { describe, expect, it, vi } from "vitest";
-
+import { fixture, NOW, REVISION } from "../../../scripts/appwrite/qualification-fixture.mjs";
+import { canonicalEvidence } from "../../../scripts/deployment/managed-evidence.mjs";
+import unconfirmedDeployment from "../config/release-deployment.json";
 import { checkCiReleaseState } from "./check-ci-release-state.mjs";
 import {
-  RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
-  RELEASE_DEPLOYMENT_SCHEMA,
+  MOBILE_RELEASE_BUNDLE_SCHEMA,
   RELEASE_DEPLOYMENT_UNCONFIRMED_CODE,
   RELEASE_EXPECTED_BLOCK_EXIT_CODE,
-  RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA,
   RELEASE_NUMBERING_UNCONFIRMED_CODE,
-  RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA,
 } from "./check-release-env.mjs";
 
-const serviceGitCommit = "a".repeat(40);
-const deploymentOperator = "deployment.operator@example.test";
-const reviewerKeys = generateKeyPairSync("ed25519");
-const reviewerPrincipal = "independent.deployment.reviewer@example.test";
-const reviewerKeyId = "deployment-reviewer-2026-01";
-const externalHttpsReport = Buffer.from(
-  `${canonicalJson({
-    schemaVersion: RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA,
-    apiOrigin: "https://api.nourishing.app",
-    serviceGitCommit,
-    observedAt: "2026-08-25T17:30:00.000Z",
-    tls: {
-      publicChainValidation: "passed",
-      hostnameValidation: "passed",
-      leafCertificateSha256: "7".repeat(64),
-      notAfter: "2026-08-27T18:00:00.000Z",
-    },
-    ready: {
-      method: "GET",
-      path: "/ready",
-      httpStatus: 200,
-      response: { status: "ok" },
-    },
-  })}\n`,
-);
-const reviewerAccessReport = Buffer.from(
-  `${canonicalJson({
-    schemaVersion: RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA,
-    apiOrigin: "https://api.nourishing.app",
-    serviceGitCommit,
-    startedAt: "2026-08-25T17:40:00.000Z",
-    completedAt: "2026-08-25T17:50:00.000Z",
-    accessPolicySha256: "8".repeat(64),
-    accessPolicyShape: {
-      addressFamily: "IPv4",
-      allowedNetworkCount: 1,
-      networkScope: "globally-routable-unicast",
-      prefixLength: 32,
-    },
-    policyUnchangedDuringProbes: "passed",
-    approvedSourceProbe: {
-      method: "GET",
-      path: "/ready",
-      httpStatus: 200,
-      response: { status: "ok" },
-    },
-    unapprovedSourceProbe: {
-      method: "GET",
-      path: "/ready",
-      connectionOutcome: "blocked",
-    },
-  })}\n`,
-);
-const deploymentReviewerTrustStore = {
-  schemaVersion: RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
-  reviewers: [
-    {
-      keyId: reviewerKeyId,
-      principal: reviewerPrincipal,
-      algorithm: "Ed25519",
-      publicKeySpkiDerBase64: reviewerKeys.publicKey
-        .export({ format: "der", type: "spki" })
-        .toString("base64"),
-      validFrom: "2026-01-01T00:00:00.000Z",
-      validUntil: "2027-01-01T00:00:00.000Z",
-    },
-  ],
-};
-const serviceImages = Object.fromEntries(
-  ["api", "web", "worker", "migrator", "caddy", "postgres", "meilisearch"].map(
-    (component, index) => [
-      component,
-      `ghcr.io/liangzixuan/cronometer-gold-${component}@sha256:${String(index + 1).repeat(64)}`,
-    ],
-  ),
-);
-const unconfirmedDeployment = {
-  schemaVersion: RELEASE_DEPLOYMENT_SCHEMA,
-  deploymentPlatform: "azure",
-  deploymentConfirmed: false,
-  apiOrigin: null,
-  serviceGitCommit: null,
-  serviceImages: null,
-  deployedBy: null,
-  externalHttpsEvidenceSha256: null,
-  reviewerAccessEvidenceSha256: null,
-  reviewedBy: null,
-  reviewerAttestation: null,
-  reviewedAt: null,
-};
-const unsignedConfirmedDeployment = {
-  schemaVersion: RELEASE_DEPLOYMENT_SCHEMA,
-  deploymentPlatform: "azure",
-  deploymentConfirmed: true,
-  apiOrigin: "https://api.nourishing.app",
-  serviceGitCommit,
-  serviceImages,
-  deployedBy: deploymentOperator,
-  externalHttpsEvidenceSha256: createHash("sha256").update(externalHttpsReport).digest("hex"),
-  reviewerAccessEvidenceSha256: createHash("sha256").update(reviewerAccessReport).digest("hex"),
-  reviewedBy: reviewerPrincipal,
-  reviewedAt: "2026-08-25T18:00:00.000Z",
-  reviewerAttestation: {
-    keyId: reviewerKeyId,
-    algorithm: "Ed25519",
-  },
-};
-const confirmedDeployment = {
-  ...unsignedConfirmedDeployment,
-  reviewerAttestation: {
-    ...unsignedConfirmedDeployment.reviewerAttestation,
-    signatureBase64: sign(
-      null,
-      Buffer.from(canonicalJson(unsignedConfirmedDeployment), "utf8"),
-      reviewerKeys.privateKey,
-    ).toString("base64"),
-  },
-};
+const f = fixture("production");
+const confirmedDeployment = f.deployment;
+const deploymentReviewerTrustStore = f.trust;
 const deploymentRuntime = {
-  gitHead: () => serviceGitCommit,
+  gitHead: () => REVISION,
   gitStatus: () => "",
-  now: () => new Date("2026-08-25T18:30:00.000Z"),
-  readEvidence: () => "",
-  readReport: () => Buffer.alloc(0),
-  statEvidence: () => ({ isFile: () => true, size: 1 }),
+  now: () => new Date(NOW),
 };
-const deploymentEvidenceJson = JSON.stringify({
-  schemaVersion: RELEASE_DEPLOYMENT_SCHEMA,
-  deploymentPlatform: confirmedDeployment.deploymentPlatform,
-  deploymentConfirmed: true,
-  apiOrigin: confirmedDeployment.apiOrigin,
-  serviceGitCommit,
-  serviceImages,
-  deployedBy: confirmedDeployment.deployedBy,
-  externalHttpsEvidenceSha256: confirmedDeployment.externalHttpsEvidenceSha256,
-  reviewerAccessEvidenceSha256: confirmedDeployment.reviewerAccessEvidenceSha256,
-  reviewedBy: confirmedDeployment.reviewedBy,
-  reviewedAt: confirmedDeployment.reviewedAt,
-  reviewerAttestation: confirmedDeployment.reviewerAttestation,
+const deploymentEvidenceJson = canonicalEvidence({
+  schemaVersion: MOBILE_RELEASE_BUNDLE_SCHEMA,
+  qualification: f.bundle,
+  activation: f.activation,
 });
-const deploymentReportEnvironment = {
-  NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64: externalHttpsReport.toString("base64"),
-  NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64: reviewerAccessReport.toString("base64"),
-};
 const ciWorkflow = readFileSync(
   new URL("../../../.github/workflows/ci.yml", import.meta.url),
   "utf8",
 );
-
-describe("mobile CI release-state gate", () => {
-  it("maps inline deployment evidence from a non-secret CI variable and keeps paths local-only", () => {
-    const releaseStateStep = ciWorkflow.match(
-      /- name: Exercise the mobile release readiness state[\s\S]*?(?=\n {6}- name:)/u,
-    )?.[0];
-
-    expect(releaseStateStep).toBeDefined();
-    expect(releaseStateStep).toContain(`EXPO_PUBLIC_API_URL: \${{ vars.EXPO_PUBLIC_API_URL }}`);
-    expect(releaseStateStep).toContain(
-      `NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: \${{ vars.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON }}`,
+describe("CI release state", () => {
+  it("takes the complete signed private bundle from a secret and keeps local paths out of CI", () => {
+    expect(ciWorkflow).toContain(
+      `NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: \${{ secrets.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON }}`,
     );
-    expect(releaseStateStep).toContain(
-      `NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64: \${{ secrets.NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64 }}`,
-    );
-    expect(releaseStateStep).toContain(
-      `NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64: \${{ secrets.NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64 }}`,
-    );
-    expect(releaseStateStep).not.toContain(`vars.NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64`);
-    expect(releaseStateStep).not.toContain(`vars.NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64`);
+    expect(ciWorkflow).not.toContain("vars.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON");
     expect(ciWorkflow).not.toContain("NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_PATH:");
-    expect(ciWorkflow).not.toContain("NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_PATH:");
-    expect(ciWorkflow).not.toContain("NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_PATH:");
+    expect(ciWorkflow).not.toContain("NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64:");
   });
-
   it("passes only after observing the exact unconfirmed-numbering blocker", () => {
     const runCommand = vi.fn(() => ({
       status: RELEASE_EXPECTED_BLOCK_EXIT_CODE,
@@ -276,7 +125,6 @@ describe("mobile CI release-state gate", () => {
         unconfirmedDeployment,
         {
           NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: deploymentEvidenceJson,
-          ...deploymentReportEnvironment,
         },
         runCommand,
         deploymentRuntime,
@@ -295,7 +143,6 @@ describe("mobile CI release-state gate", () => {
         {
           EXPO_PUBLIC_API_URL: "https://api.github.com",
           NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: deploymentEvidenceJson,
-          ...deploymentReportEnvironment,
         },
         runCommand,
         deploymentRuntime,
@@ -314,7 +161,6 @@ describe("mobile CI release-state gate", () => {
         {
           EXPO_PUBLIC_API_URL: confirmedDeployment.apiOrigin,
           NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: deploymentEvidenceJson,
-          ...deploymentReportEnvironment,
         },
         runCommand,
         deploymentRuntime,

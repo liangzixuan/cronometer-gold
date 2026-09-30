@@ -78,9 +78,7 @@ jobs:
       - name: Exercise the mobile release readiness state
         env:
           EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
-          NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: ${{ vars.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON }}
-          NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64: ${{ secrets.NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64 }}
-          NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64: ${{ secrets.NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64 }}
+          NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: ${{ secrets.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON }}
         run: pnpm --filter @nutrition-tracker/mobile ci:release-state
 
       - name: Reject high-severity production dependency advisories

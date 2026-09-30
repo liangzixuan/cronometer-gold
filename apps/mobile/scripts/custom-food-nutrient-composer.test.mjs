@@ -298,6 +298,8 @@ function setup(handler = () => undefined, overrides = {}) {
 function rawText(value) {
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (Array.isArray(value)) return value.map(rawText).join(" ");
+  if (value && typeof value === "object" && typeof value.type === "function")
+    return rawText(value.type(value.props));
   return value && typeof value === "object" ? rawText(value.props?.children) : "";
 }
 const text = (value) => rawText(value).replace(/\s+/gu, " ").trim();

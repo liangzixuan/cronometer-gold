@@ -232,16 +232,28 @@ function exactPort(environment, field) {
 }
 
 function selectedProfile(arguments_) {
-  if (arguments_.length === 0) return localDevelopmentProfiles.full;
   if (
-    arguments_.length === localDevelopmentProfiles.apiOnly.cliArguments.length &&
-    arguments_.every(
-      (argument, index) => argument === localDevelopmentProfiles.apiOnly.cliArguments[index],
-    )
+    arguments_.some((argument) => !["--api-only", "--doppler"].includes(argument)) ||
+    new Set(arguments_).size !== arguments_.length
   ) {
-    return localDevelopmentProfiles.apiOnly;
+    throw new Error("Unsupported local development invocation");
   }
-  throw new Error("Unsupported local development invocation");
+  return arguments_.includes("--api-only")
+    ? localDevelopmentProfiles.apiOnly
+    : localDevelopmentProfiles.full;
+}
+
+function selectedDopplerEnvironment(arguments_, environment) {
+  if (!arguments_.includes("--doppler")) return {};
+  const selected = {};
+  for (const field of ["DATABASE_URL", "SEARCH_CURSOR_SECRET"]) {
+    const value = Object.hasOwn(environment, field) ? environment[field] : undefined;
+    if (typeof value !== "string" || !value.trim()) {
+      throw new Error(`Local development Doppler mode requires injected ${field}`);
+    }
+    selected[field] = value;
+  }
+  return selected;
 }
 
 function pickEnvironment(environment, fields) {
@@ -768,6 +780,7 @@ export async function runLocalDevelopment(arguments_ = [], dependencies = {}) {
   const environment = dependencies.environment ?? process.env;
   const bootstrap = dependencies.bootstrap ?? bootstrapScopedMeiliKeys;
   const profile = selectedProfile(arguments_);
+  selectedDopplerEnvironment(arguments_, environment);
   assertLocalDevelopmentEnvironment(environment);
   const supervisorGraceMs =
     dependencies.terminationGraceMs ??
@@ -810,6 +823,8 @@ export async function runLocalDevelopment(arguments_ = [], dependencies = {}) {
 
 export async function runLocalDevelopmentWithPrivateEnv(arguments_ = [], dependencies = {}) {
   selectedProfile(arguments_);
+  const suppliedEnvironment = dependencies.environment ?? process.env;
+  const injectedEnvironment = selectedDopplerEnvironment(arguments_, suppliedEnvironment);
   const open = dependencies.open ?? openSync;
   const fstat = dependencies.fstat ?? fstatSync;
   const close = dependencies.close ?? closeSync;
@@ -873,8 +888,9 @@ export async function runLocalDevelopmentWithPrivateEnv(arguments_ = [], depende
   await runLocalDevelopment(arguments_, {
     ...dependencies,
     environment: {
-      ...(dependencies.environment ?? process.env),
+      ...suppliedEnvironment,
       ...privateEnvironment,
+      ...injectedEnvironment,
     },
   });
 }

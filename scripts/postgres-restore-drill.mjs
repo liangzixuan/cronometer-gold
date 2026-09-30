@@ -5,6 +5,14 @@ import { lstat, open, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  createRestoreEvidenceQueries,
+  RESTORE_MIGRATION_LEDGER_QUERY,
+  RESTORE_TABLE_LIST_QUERY,
+  RESTORE_UNVALIDATED_CONSTRAINTS_QUERY,
+  restoreTableCountQuery,
+} from "./postgres-restore-evidence-queries.mjs";
+
 const pagedPolicyBytes = readFileSync(
   new URL("../packages/db/src/catalogue-paged-authority-policy.json", import.meta.url),
 );
@@ -1483,7 +1491,16 @@ const REVIEWED_AUTHORITY_TRIGGER_FUNCTION_SQL_LIST = [...REVIEWED_AUTHORITY_TRIG
   .sort()
   .map((functionName) => `'${functionName}'`)
   .join(",");
-const AUTHORITY_POLICY_SQL = readFileSync(AUTHORITY_POLICY_PATH, "utf8");
+export const RESTORE_EVIDENCE_QUERIES = createRestoreEvidenceQueries(
+  REVIEWED_AUTHORITY_TRIGGER_FUNCTION_SQL_LIST,
+);
+// Copies bind view preparation to the same reviewed policy as the synchronous drill.
+export const RESTORE_EVIDENCE_VIEW_QUERIES = Object.freeze(
+  PAGED_AUTHORITY_POLICY.views.map(({ name, query, sourceSha256 }) =>
+    Object.freeze({ name, query, sourceSha256 }),
+  ),
+);
+export const AUTHORITY_POLICY_SQL = readFileSync(AUTHORITY_POLICY_PATH, "utf8");
 
 export const RESTORE_AUTHORITY_POLICY_SHA256 = assertRestoreAuthorityPolicyDigest(
   AUTHORITY_POLICY_SQL,
@@ -1715,20 +1732,17 @@ export function runPostgresRestoreDrill(options, dependencies = {}) {
 function collectEvidence(run, options, database) {
   const authority = collectAuthorityFingerprint(run, options, database);
   const migrationLedger = collectRestoreMigrationLedger(run, options, database);
-  const unvalidatedConstraints = psqlScalar(run, options, database, [
-    "select count(*) from pg_constraint where not convalidated",
-  ]);
-  const tables = psqlScalar(run, options, database, [
-    "select coalesce(string_agg(tablename, ',' order by tablename), '')",
-    "from pg_tables where schemaname = 'public'",
-  ]);
+  const unvalidatedConstraints = psqlScalar(
+    run,
+    options,
+    database,
+    RESTORE_UNVALIDATED_CONSTRAINTS_QUERY,
+  );
+  const tables = psqlScalar(run, options, database, RESTORE_TABLE_LIST_QUERY);
   const tableCounts = new Map();
   for (const table of tables === "" ? [] : tables.split(",")) {
     if (!SAFE_DATABASE.test(table)) throw new Error("Database returned an unsafe table name");
-    tableCounts.set(
-      table,
-      psqlScalar(run, options, database, [`select count(*) from public."${table}"`]),
-    );
+    tableCounts.set(table, psqlScalar(run, options, database, restoreTableCountQuery(table)));
   }
   return {
     authorityFingerprint: authority.fingerprint,
@@ -1741,10 +1755,7 @@ function collectEvidence(run, options, database) {
 }
 
 export function collectRestoreMigrationLedger(run, options, database) {
-  const migrationLedger = psqlScalar(run, options, database, [
-    "select coalesce(json_agg(row_to_json(m) order by m.name)::text, '[]')",
-    "from (select name, checksum from public.app_schema_migration order by name) m",
-  ]);
+  const migrationLedger = psqlScalar(run, options, database, RESTORE_MIGRATION_LEDGER_QUERY);
   return validateRestoreMigrationLedger(migrationLedger);
 }
 
@@ -1819,215 +1830,44 @@ export function collectAuthorityViews(run, options, database) {
 
 export function collectAuthorityFingerprint(run, options, database) {
   const evidence = {
-    authorityConstraints: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(authority_constraint_policy) order by authority_constraint_policy.name)::text, '[]')",
-      "from (",
-      "select constraint_row.conname as name, class_row.relname as table_name,",
-      "constraint_row.contype as constraint_type, constraint_row.convalidated as validated,",
-      "pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition",
-      "from pg_catalog.pg_constraint as constraint_row",
-      "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "where namespace_row.nspname = 'public'",
-      "and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check'))",
-      ") authority_constraint_policy",
-    ]),
-    referenceIntegrityConstraints: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(reference_constraint_policy) order by reference_constraint_policy.name)::text, '[]')",
-      "from (",
-      "select constraint_row.conname as name, class_row.relname as table_name,",
-      "constraint_row.contype as constraint_type, constraint_row.convalidated as validated,",
-      "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.pg_get_constraintdef(constraint_row.oid, true), 'UTF8')), 'hex') as definition_sha256",
-      "from pg_catalog.pg_constraint as constraint_row",
-      "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "where namespace_row.nspname = 'public'",
-      "and constraint_row.conname in ('nutrition_goal_target_reference_metadata_v1','nutrition_goal_version_reference_identity_v1')",
-      ") reference_constraint_policy",
-    ]),
-    authorityFrozenColumns: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(authority_frozen_column_policy) order by authority_frozen_column_policy.table_name, authority_frozen_column_policy.column_name)::text, '[]')",
-      "from (",
-      "select namespace_row.nspname as schema_name, class_row.relname as table_name, attribute_row.attname as column_name,",
-      "pg_catalog.format_type(attribute_row.atttypid, attribute_row.atttypmod) as data_type,",
-      "attribute_row.attnotnull as not_null, attribute_row.attidentity::text as identity_kind, attribute_row.attgenerated::text as generated_kind,",
-      "pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true) as default_expression",
-      "from pg_catalog.pg_attribute as attribute_row",
-      "join pg_catalog.pg_class as class_row on class_row.oid = attribute_row.attrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "left join pg_catalog.pg_attrdef as default_row on default_row.adrelid = attribute_row.attrelid and default_row.adnum = attribute_row.attnum",
-      "where namespace_row.nspname = 'public'",
-      "and attribute_row.attnum>0 and not attribute_row.attisdropped and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or (class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','staged_database_principal','staged_database_capability_role','staging_seal_sha256','staging_sealed_at','validated_database_principal','validated_database_capability_role'))",
-      "or (class_row.relname = 'food_import_record' and attribute_row.attname in ('nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','validated_food_document','validated_food_sha256'))) ",
-      ") authority_frozen_column_policy",
-    ]),
-    authorityIndexes: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(authority_index_policy) order by authority_index_policy.schema_name, authority_index_policy.table_name, authority_index_policy.name)::text, '[]')",
-      "from (",
-      "select namespace_row.nspname as schema_name, table_row.relname as table_name, index_row.relname as name,",
-      "pg_catalog.pg_get_userbyid(index_row.relowner) as owner, access_method.amname as access_method,",
-      "index_metadata.indisunique as is_unique, index_metadata.indisprimary as is_primary,",
-      "index_metadata.indisvalid as is_valid, index_metadata.indisready as is_ready,",
-      "index_metadata.indnkeyatts as key_attribute_count, index_metadata.indnatts as total_attribute_count,",
-      "pg_catalog.pg_get_indexdef(index_metadata.indexrelid, 1, true) as key_expression,",
-      "pg_catalog.pg_get_expr(index_metadata.indpred, index_metadata.indrelid, index_row.relname = 'food_source_release_activation_import_batch_unique') as predicate,",
-      "pg_catalog.pg_get_indexdef(index_metadata.indexrelid) as definition",
-      "from pg_catalog.pg_index as index_metadata",
-      "join pg_catalog.pg_class as index_row on index_row.oid = index_metadata.indexrelid",
-      "join pg_catalog.pg_class as table_row on table_row.oid = index_metadata.indrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = table_row.relnamespace",
-      "join pg_catalog.pg_am as access_method on access_method.oid = index_row.relam",
-      "where namespace_row.nspname = 'public'",
-      "and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))",
-      ") authority_index_policy",
-    ]),
-    columnAcls: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(column_acl_policy) order by column_acl_policy.relation_name, column_acl_policy.column_name, column_acl_policy.grantee, column_acl_policy.grantor, column_acl_policy.privilege, column_acl_policy.grantable)::text, '[]')",
-      "from (",
-      "select class_row.relname as relation_name, attribute_row.attname as column_name,",
-      "coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-      "acl.privilege_type as privilege, acl.is_grantable as grantable",
-      "from pg_catalog.pg_attribute as attribute_row",
-      "join pg_catalog.pg_class as class_row on class_row.oid = attribute_row.attrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "cross join lateral pg_catalog.aclexplode(attribute_row.attacl) as acl",
-      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-      "where namespace_row.nspname = 'public'",
-      "and attribute_row.attnum > 0 and not attribute_row.attisdropped",
-      "and attribute_row.attacl is not null",
-      ") column_acl_policy",
-    ]),
-    explicitColumnAclAttributeCount: psqlScalar(run, options, database, [
-      "select count(*)::text as explicit_column_acl_attribute_count",
-      "from pg_catalog.pg_attribute as attribute_row",
-      "join pg_catalog.pg_class as class_row on class_row.oid = attribute_row.attrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "where namespace_row.nspname = 'public'",
-      "and attribute_row.attnum > 0 and not attribute_row.attisdropped",
-      "and attribute_row.attacl is not null",
-    ]),
-    defaultAcls: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(default_policy) order by default_policy.owner, default_policy.schema_name, default_policy.object_type)::text, '[]')",
-      "from (",
-      "select owner_role.rolname as owner, coalesce(namespace_row.nspname, '*') as schema_name,",
-      "default_acl.defaclobjtype as object_type,",
-      "coalesce((select json_agg(row_to_json(acl_policy) order by acl_policy.grantee, acl_policy.privilege, acl_policy.grantable) from (",
-      "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-      "acl.privilege_type as privilege, acl.is_grantable as grantable",
-      "from pg_catalog.aclexplode(default_acl.defaclacl) as acl",
-      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-      ") acl_policy), '[]'::json) as acl",
-      "from pg_catalog.pg_default_acl as default_acl",
-      "join pg_catalog.pg_roles as owner_role on owner_role.oid = default_acl.defaclrole",
-      "left join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = default_acl.defaclnamespace",
-      "where default_acl.defaclnamespace = 0 or namespace_row.nspname = 'public'",
-      ") default_policy",
-    ]),
-    functions: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(function_policy) order by function_policy.name, function_policy.arguments)::text, '[]')",
-      "from (",
-      "select procedure_row.proname as name, pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) as arguments,",
-      "pg_catalog.pg_get_userbyid(procedure_row.proowner) as owner, procedure_row.prosecdef as security_definer,",
-      "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(procedure_row.prosrc, 'UTF8')), 'hex') as source_sha256,",
-      "pg_catalog.pg_get_function_result(procedure_row.oid) as result_type, language_row.lanname as language,",
-      "procedure_row.provolatile as volatility, procedure_row.proisstrict as strict,",
-      "procedure_row.proleakproof as leakproof, procedure_row.proparallel as parallel,",
-      "coalesce(procedure_row.proconfig, array[]::text[]) as config, procedure_row.proacl is null as acl_is_default,",
-      "coalesce((select json_agg(row_to_json(acl_policy) order by acl_policy.grantee, acl_policy.privilege, acl_policy.grantable) from (",
-      "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-      "acl.privilege_type as privilege, acl.is_grantable as grantable",
-      "from pg_catalog.aclexplode(coalesce(procedure_row.proacl, pg_catalog.acldefault('f', procedure_row.proowner))) as acl",
-      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-      ") acl_policy), '[]'::json) as acl",
-      "from pg_catalog.pg_proc as procedure_row",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = procedure_row.pronamespace",
-      "join pg_catalog.pg_language as language_row on language_row.oid = procedure_row.prolang",
-      "where namespace_row.nspname = 'public'",
-      ") function_policy",
-    ]),
-    relations: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(relation_policy) order by relation_policy.name, relation_policy.kind)::text, '[]')",
-      "from (",
-      "select class_row.relname as name, class_row.relkind as kind, pg_catalog.pg_get_userbyid(class_row.relowner) as owner,",
-      "class_row.relacl is null as acl_is_default,",
-      "coalesce((select json_agg(row_to_json(acl_policy) order by acl_policy.grantee, acl_policy.privilege, acl_policy.grantable) from (",
-      "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-      "acl.privilege_type as privilege, acl.is_grantable as grantable",
-      "from pg_catalog.aclexplode(coalesce(class_row.relacl, pg_catalog.acldefault((case when class_row.relkind = 'S' then 's' else 'r' end)::\"char\", class_row.relowner))) as acl",
-      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-      ") acl_policy), '[]'::json) as acl",
-      "from pg_catalog.pg_class as class_row",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "where namespace_row.nspname = 'public' and class_row.relkind in ('r', 'p', 'S', 'v', 'm', 'f')",
-      ") relation_policy",
-    ]),
-    roles: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(role_policy) order by role_policy.name)::text, '[]')",
-      "from (",
-      "select role_row.rolname as name, role_row.rolcanlogin as can_login, role_row.rolsuper as superuser,",
-      "role_row.rolcreatedb as create_database, role_row.rolcreaterole as create_role,",
-      "role_row.rolreplication as replication, role_row.rolbypassrls as bypass_rls,",
-      "coalesce((select json_agg(json_build_object('role', parent_role.rolname, 'admin_option', membership.admin_option, 'inherit_option', membership.inherit_option, 'set_option', membership.set_option) order by parent_role.rolname) from pg_catalog.pg_auth_members membership join pg_catalog.pg_roles parent_role on parent_role.oid = membership.roleid where membership.member = role_row.oid), '[]'::json) as outgoing_memberships,",
-      "coalesce((select json_agg(json_build_object('member', member_role.rolname, 'admin_option', membership.admin_option, 'inherit_option', membership.inherit_option, 'set_option', membership.set_option) order by member_role.rolname) from pg_catalog.pg_auth_members membership join pg_catalog.pg_roles member_role on member_role.oid = membership.member where membership.roleid = role_row.oid), '[]'::json) as incoming_memberships,",
-      "(select count(*)::text from pg_catalog.pg_shdepend dependency where dependency.refclassid = 'pg_catalog.pg_authid'::pg_catalog.regclass and dependency.refobjid = role_row.oid and dependency.deptype = 'o') as owned_object_count",
-      "from pg_catalog.pg_roles as role_row",
-      "where role_row.rolname = any (array['nutrition_catalogue_stage','nutrition_catalogue_validate','nutrition_catalogue_approve_data','nutrition_catalogue_approve_quality','nutrition_catalogue_approve_rights','nutrition_catalogue_promote_activate','nutrition_catalogue_rollback'])",
-      ") role_policy",
-    ]),
-    schema: psqlJson(run, options, database, [
-      "select row_to_json(schema_policy)::text",
-      "from (",
-      "select namespace_row.nspname as name, pg_catalog.pg_get_userbyid(namespace_row.nspowner) as owner,",
-      "namespace_row.nspacl is null as acl_is_default,",
-      "coalesce((select json_agg(row_to_json(acl_policy) order by acl_policy.grantee, acl_policy.privilege, acl_policy.grantable) from (",
-      "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-      "acl.privilege_type as privilege, acl.is_grantable as grantable",
-      "from pg_catalog.aclexplode(coalesce(namespace_row.nspacl, pg_catalog.acldefault('n', namespace_row.nspowner))) as acl",
-      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-      ") acl_policy), '[]'::json) as acl",
-      "from pg_catalog.pg_namespace as namespace_row where namespace_row.nspname = 'public'",
-      ") schema_policy",
-    ]),
-    triggers: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(trigger_policy) order by trigger_policy.table_schema, trigger_policy.name, trigger_policy.table_name, trigger_policy.function_schema, trigger_policy.function_name)::text, '[]')",
-      "from (",
-      "select trigger_row.tgname as name, namespace_row.nspname as table_schema, class_row.relname as table_name, procedure_namespace.nspname as function_schema, procedure_row.proname as function_name,",
-      "pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) as function_arguments,",
-      "trigger_row.tgenabled as enabled, pg_catalog.pg_get_triggerdef(trigger_row.oid, true) as definition",
-      "from pg_catalog.pg_trigger as trigger_row",
-      "join pg_catalog.pg_class as class_row on class_row.oid = trigger_row.tgrelid",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
-      "join pg_catalog.pg_proc as procedure_row on procedure_row.oid = trigger_row.tgfoid",
-      "join pg_catalog.pg_namespace as procedure_namespace on procedure_namespace.oid = procedure_row.pronamespace",
-      "where not trigger_row.tgisinternal and (",
-      "namespace_row.nspname = 'public' or (",
-      "procedure_namespace.nspname = 'public'",
-      `and procedure_row.proname in (${REVIEWED_AUTHORITY_TRIGGER_FUNCTION_SQL_LIST})`,
-      "))",
-      ") trigger_policy",
-    ]),
-    types: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(type_policy) order by type_policy.name, type_policy.kind)::text, '[]')",
-      "from (",
-      "select type_row.typname as name, type_row.typtype as kind, pg_catalog.pg_get_userbyid(type_row.typowner) as owner,",
-      "type_row.typacl is null as acl_is_default,",
-      "coalesce((select json_agg(row_to_json(acl_policy) order by acl_policy.grantee, acl_policy.privilege, acl_policy.grantable) from (",
-      "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-      "acl.privilege_type as privilege, acl.is_grantable as grantable",
-      "from pg_catalog.aclexplode(coalesce(type_row.typacl, pg_catalog.acldefault('T', type_row.typowner))) as acl",
-      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-      ") acl_policy), '[]'::json) as acl",
-      "from pg_catalog.pg_type as type_row",
-      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = type_row.typnamespace",
-      "where namespace_row.nspname = 'public'",
-      ") type_policy",
-    ]),
+    authorityConstraints: psqlJson(
+      run,
+      options,
+      database,
+      RESTORE_EVIDENCE_QUERIES.authorityConstraints.parts,
+    ),
+    referenceIntegrityConstraints: psqlJson(
+      run,
+      options,
+      database,
+      RESTORE_EVIDENCE_QUERIES.referenceIntegrityConstraints.parts,
+    ),
+    authorityFrozenColumns: psqlJson(
+      run,
+      options,
+      database,
+      RESTORE_EVIDENCE_QUERIES.authorityFrozenColumns.parts,
+    ),
+    authorityIndexes: psqlJson(
+      run,
+      options,
+      database,
+      RESTORE_EVIDENCE_QUERIES.authorityIndexes.parts,
+    ),
+    columnAcls: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.columnAcls.parts),
+    explicitColumnAclAttributeCount: psqlScalar(
+      run,
+      options,
+      database,
+      RESTORE_EVIDENCE_QUERIES.explicitColumnAclAttributeCount.parts,
+    ),
+    defaultAcls: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.defaultAcls.parts),
+    functions: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.functions.parts),
+    relations: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.relations.parts),
+    roles: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.roles.parts),
+    schema: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.schema.parts),
+    triggers: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.triggers.parts),
+    types: psqlJson(run, options, database, RESTORE_EVIDENCE_QUERIES.types.parts),
     authorityViews: collectAuthorityViews(run, options, database),
     version: 16,
   };
@@ -2664,61 +2504,56 @@ export function removeDumpArtifact(run, options, dumpPath) {
   ]);
 }
 
+export const RESTORE_TARGET_BOUNDARY_QUERIES = Object.freeze({
+  acl: Object.freeze([
+    "select coalesce(json_agg(row_to_json(database_acl) order by database_acl.grantee, database_acl.privilege)::text, '[]')",
+    "from (",
+    "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
+    "acl.privilege_type as privilege, acl.is_grantable as grantable",
+    "from pg_catalog.pg_database as database_row",
+    "cross join lateral pg_catalog.aclexplode(coalesce(database_row.datacl, pg_catalog.acldefault('d', database_row.datdba))) as acl",
+    "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
+    "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
+    "where database_row.datname = current_setting('nutrition.restore_target')",
+    ") database_acl",
+  ]),
+  effectiveConnectRoles: Object.freeze([
+    "select coalesce(json_agg(role_policy.name order by role_policy.name)::text, '[]')",
+    "from (select role_row.rolname as name from pg_catalog.pg_roles as role_row",
+    "where role_row.rolcanlogin",
+    "and pg_catalog.has_database_privilege(role_row.oid, current_setting('nutrition.restore_target'), 'CONNECT')) role_policy",
+  ]),
+  otherClientSessions: Object.freeze([
+    "select count(*) from pg_catalog.pg_stat_activity",
+    "where datname = current_setting('nutrition.restore_target')",
+    "and backend_type = 'client backend' and pid <> pg_catalog.pg_backend_pid()",
+  ]),
+  owner: Object.freeze([
+    "select pg_catalog.pg_get_userbyid(database_row.datdba)",
+    "from pg_catalog.pg_database as database_row",
+    "where database_row.datname = current_setting('nutrition.restore_target')",
+  ]),
+});
+
 export function assertTargetDatabaseBoundary(run, options) {
   const environment = [["PGOPTIONS", `-c nutrition.restore_target=${options.targetDatabase}`]];
   const boundary = {
-    acl: psqlJson(
-      run,
-      options,
-      "postgres",
-      [
-        "select coalesce(json_agg(row_to_json(database_acl) order by database_acl.grantee, database_acl.privilege)::text, '[]')",
-        "from (",
-        "select coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
-        "acl.privilege_type as privilege, acl.is_grantable as grantable",
-        "from pg_catalog.pg_database as database_row",
-        "cross join lateral pg_catalog.aclexplode(coalesce(database_row.datacl, pg_catalog.acldefault('d', database_row.datdba))) as acl",
-        "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
-        "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
-        "where database_row.datname = current_setting('nutrition.restore_target')",
-        ") database_acl",
-      ],
-      environment,
-    ),
+    acl: psqlJson(run, options, "postgres", RESTORE_TARGET_BOUNDARY_QUERIES.acl, environment),
     effectiveConnectRoles: psqlJson(
       run,
       options,
       "postgres",
-      [
-        "select coalesce(json_agg(role_policy.name order by role_policy.name)::text, '[]')",
-        "from (select role_row.rolname as name from pg_catalog.pg_roles as role_row",
-        "where role_row.rolcanlogin",
-        "and pg_catalog.has_database_privilege(role_row.oid, current_setting('nutrition.restore_target'), 'CONNECT')) role_policy",
-      ],
+      RESTORE_TARGET_BOUNDARY_QUERIES.effectiveConnectRoles,
       environment,
     ),
     otherClientSessions: psqlScalar(
       run,
       options,
       "postgres",
-      [
-        "select count(*) from pg_catalog.pg_stat_activity",
-        "where datname = current_setting('nutrition.restore_target')",
-        "and backend_type = 'client backend' and pid <> pg_catalog.pg_backend_pid()",
-      ],
+      RESTORE_TARGET_BOUNDARY_QUERIES.otherClientSessions,
       environment,
     ),
-    owner: psqlScalar(
-      run,
-      options,
-      "postgres",
-      [
-        "select pg_catalog.pg_get_userbyid(database_row.datdba)",
-        "from pg_catalog.pg_database as database_row",
-        "where database_row.datname = current_setting('nutrition.restore_target')",
-      ],
-      environment,
-    ),
+    owner: psqlScalar(run, options, "postgres", RESTORE_TARGET_BOUNDARY_QUERIES.owner, environment),
   };
   validateTargetDatabaseBoundary(boundary, options);
   return boundary;

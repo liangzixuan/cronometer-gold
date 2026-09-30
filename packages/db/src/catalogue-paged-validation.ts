@@ -1,9 +1,9 @@
 import { type Kysely, sql } from "kysely";
+import type { BatchValidationPolicy } from "./catalogue-batch-policy.js";
 import {
   assertCatalogueValidatePrincipal,
   validateCatalogueValidationPolicy,
 } from "./catalogue-capability-validation.js";
-import type { BatchValidationPolicy } from "./catalogue-ingestion.js";
 import {
   assertCatalogueSha256V2,
   assertCatalogueTextV2,

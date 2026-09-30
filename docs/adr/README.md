@@ -110,7 +110,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0102](./0102-fdc-csv-independent-validation.md) | Prepare and submit bounded full-CSV validation as a separate login | Delivered at `af65b98`; approved bounded PostgreSQL proof, final local and all three CI/nine container jobs passed; C1 and release acceptance remain open |
 | [0103](./0103-catalogue-review-handoff.md) | Reconcile retained validation and submit restricted reviewer decisions | Delivered at `007a17d`; approved bounded PostgreSQL proof and final local/automatic gates passed; one approved web-job retry preserved; all beta exits open |
 | [0104](./0104-paged-catalogue-preparation.md) | Bounded paged catalogue preparation through restricted review | Delivered at `3816726`; bounded synthetic proof and final local/automatic gates passed after reviewed CI corrections and one approved quality retry; all beta exits open |
-| [0105](./0105-catalogue-paged-publication.md) | Publish reviewed V2 catalogue batches with atomic visibility, rollback and successor baselines | Source review/offline checks and approved 251-record rehearsal 2 passed: all 12 cases, zero skips, cleanup complete. Attempt 1 failure retained; final delivery/automatic evidence pending; full-candidate acceptance open |
+| [0105](./0105-catalogue-paged-publication.md) | Publish reviewed V2 catalogue batches with atomic visibility, rollback and successor baselines | Delivered at `0b6208df`; reviewed local and exact-commit automatic gates passed after one approved database-only retry; original failures preserved; full-candidate acceptance open |
+| [0107](./0107-appwrite-managed-deployment.md) | Appwrite managed web evidence, split activation and public application API | Policy approved; implementation validation pending; no hosted release acceptance |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

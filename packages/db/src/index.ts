@@ -128,6 +128,13 @@ export {
   runCatalogueReviewerCanaries,
 } from "./catalogue-authority-deployment-runtime.js";
 export {
+  type BatchPolicyEvaluation,
+  type BatchRecordValidation,
+  type BatchValidationPolicy,
+  evaluateBatchPolicy,
+  type ParserCountEvidence,
+} from "./catalogue-batch-policy.js";
+export {
   type CatalogueApprovalReceipt,
   type CatalogueApprovalRole,
   type SubmitCatalogueApprovalInput,
@@ -147,14 +154,9 @@ export {
   type ApproveBatchInput,
   approveBatch,
   type BatchCheckpoint,
-  type BatchPolicyEvaluation,
-  type BatchRecordValidation,
-  type BatchValidationPolicy,
   type BatchValidationSummary,
-  evaluateBatchPolicy,
   getBatchCheckpoint,
   getSourceNutrientMappingDigest,
-  type ParserCountEvidence,
   type PromoteBatchOptions,
   type PromoteBatchResult,
   previewBatchValidation,
@@ -419,6 +421,22 @@ export {
   NutritionReportValidationError,
 } from "./nutrition-reports.js";
 export {
+  type OwnedPostgresQuery,
+  type OwnedPostgresSession,
+  OwnedPostgresSessionError,
+  type OwnedPostgresSessionOptions,
+  openOwnedPostgresSession,
+} from "./owned-postgres-session.js";
+export {
+  normalizePostgresBackupConnection,
+  type PostgresBackupConnection,
+  PostgresBackupConnectionError,
+  type PostgresBackupConnectionInput,
+  postgresBackupClientConfig,
+  postgresBackupLibpqEnvironment,
+  postgresBackupPasswordFile,
+} from "./postgres-backup-connection.js";
+export {
   type CreateRecipeInput,
   createRecipe,
   getRecipe,
@@ -463,10 +481,13 @@ export {
   referenceTargetPolicy,
 } from "./reference-targets.js";
 export {
+  assertDatabaseRestoreReplayObservation,
   assertDatabaseRestoreReplayReady,
   type CompleteDatabaseRestoreReplayAttestationInput,
   completeDatabaseRestoreReplayAttestation,
   type DatabaseRestoreAttestationRecord,
+  DatabaseRestoreReplayNotReadyError,
+  type DatabaseRestoreReplayObservation,
 } from "./restore.js";
 export * from "./retention.js";
 export type * from "./types.js";

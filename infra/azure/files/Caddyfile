@@ -2,45 +2,103 @@
 	email {$ACME_EMAIL}
 	admin off
 	auto_https disable_redirects
+	servers {
+		timeouts {
+			read_header 5s
+			read_body 15s
+			idle 30s
+		}
+	}
+}
+
+(applicationProxy) {
+	request_body {
+		max_size 1MB
+	}
+	reverse_proxy api:4000 {
+		header_up -Forwarded
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		header_up -X-Real-IP
+	}
+}
+
+(readinessProxy) {
+	reverse_proxy api:4000 {
+		header_up -Authorization
+		header_up -Forwarded
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		header_up -X-Real-IP
+	}
 }
 
 http://{$API_FQDN} {
 	respond "Not Found" 404
 }
 
-http://{$WEB_FQDN} {
-	respond "Not Found" 404
-}
-
 {$API_FQDN} {
-	@internalReady {
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+	@reviewerReady {
 		method GET
 		path /ready
-		remote_ip private_ranges
+		remote_ip {$BETA_ALLOWED_CIDRS}
 	}
-	handle @internalReady {
-		reverse_proxy api:4000
+	handle @reviewerReady {
+		import readinessProxy
 	}
-	@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}
-	handle @betaAllowed {
-		encode zstd gzip
-		reverse_proxy api:4000
-		header {
-			-Server
-			X-Content-Type-Options nosniff
-			X-Frame-Options DENY
-			Referrer-Policy no-referrer
-		}
+	@tokenReady {
+		method GET
+		path /ready
+		vars_regexp readinessToken {env.DEPLOYMENT_READINESS_TOKEN} ^[0-9a-f]{64}$
+		header Authorization "Bearer {$DEPLOYMENT_READINESS_TOKEN}"
 	}
-	respond "Not Found" 404
-}
-
-{$WEB_FQDN} {
-	@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}
-	handle @betaAllowed {
-		encode zstd gzip
-		reverse_proxy api:3000
-		header -Server
+	handle @tokenReady {
+		import readinessProxy
+	}
+	# These public transport routes retain the API's account/capability checks.
+	# Anonymous auth and search have separate process-wide limits in the API.
+	@applicationGet {
+		method GET
+		path_regexp applicationGet ^/v1/(auth/me|foods/(search|autocomplete|barcodes/([0-9]{8}|[0-9]{12}|[0-9]{13}|[0-9]{14}))|activities|profile|diary|diary/day-notes/[0-9]{4}-[0-9]{2}-[0-9]{2}|hydration|recipes|recipes/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|goals/(reference-target-sets|current|progress)|nutrients/targetable|reports/nutrition|trends/(nutrients|biometrics)|custom-foods|custom-foods/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|biometrics/(definitions|events)|reminders|integrations/health|exports/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|exports/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/artifacts/(json|csv)|account/erasure/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})/?$
+	}
+	handle @applicationGet {
+		import applicationProxy
+	}
+	@applicationPost {
+		method POST
+		path_regexp applicationPost ^/v1/(auth/(register|login|reauthenticate|logout|email-verification/(request|confirm)|password-recovery/(request|confirm))|activities/entries|diary/entries|diary/corrections/entries/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/repeat|diary/entries/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/repeat|hydration/entries|recipes|recipes/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/(revisions|log)|goals|goals/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/revisions|custom-foods|custom-foods/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}/(revisions|log)|biometrics/(definitions|events)|reminders|devices|devices/challenges|integrations/health/(consents|imports)|integrations/health/(apple_healthkit|android_health_connect)/(disconnect|rebind)|exports|account/erasure)/?$
+	}
+	handle @applicationPost {
+		import applicationProxy
+	}
+	@applicationPut {
+		method PUT
+		path_regexp applicationPut ^/v1/diary/(day-notes/[0-9]{4}-[0-9]{2}-[0-9]{2}|days/[0-9]{4}-[0-9]{2}-[0-9]{2}/order)/?$
+	}
+	handle @applicationPut {
+		import applicationProxy
+	}
+	@applicationPatch {
+		method PATCH
+		path_regexp applicationPatch ^/v1/(profile|(activities|diary|hydration)/entries/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|biometrics/(definitions|events)/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|reminders/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})/?$
+	}
+	handle @applicationPatch {
+		import applicationProxy
+	}
+	@applicationDelete {
+		method DELETE
+		path_regexp applicationDelete ^/v1/((activities|diary|hydration)/entries/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|custom-foods/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|biometrics/(definitions|events)/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|reminders/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|devices/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})/?$
+	}
+	handle @applicationDelete {
+		import applicationProxy
 	}
 	respond "Not Found" 404
 }

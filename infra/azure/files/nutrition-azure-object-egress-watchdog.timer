@@ -1,0 +1,11 @@
+[Unit]
+Description=Periodically verify Nourishing Azure Object Storage egress
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=15s
+AccuracySec=1s
+Unit=nutrition-azure-object-egress-watchdog.service
+
+[Install]
+WantedBy=timers.target

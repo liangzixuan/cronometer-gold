@@ -1026,3 +1026,360 @@ test("refuses an invalid generated object-store overlay before bootstrap or laun
   );
   assert.equal(launched, false);
 });
+
+function privateEnvironmentFixture(privateEnvironment, overrides = {}) {
+  const source = Object.entries(privateEnvironment)
+    .map(([field, value]) => `${field}=${JSON.stringify(value)}`)
+    .join("\n");
+  return {
+    close: () => {},
+    fstat: () => ({
+      isFile: () => true,
+      mode: 0o100600,
+      nlink: 1,
+      size: Buffer.byteLength(source),
+      uid: 1000,
+    }),
+    getuid: () => 1000,
+    open: () => 81,
+    read: () => source,
+    readObjectStoreEnvironment: () => ({}),
+    ...overrides,
+  };
+}
+
+for (const arguments_ of [
+  ["--doppler"],
+  ["--doppler", "--api-only"],
+  ["--api-only", "--doppler"],
+]) {
+  test(`uses only selected Doppler inputs after protected loaders: ${arguments_.join(" ")}`, async () => {
+    const profile = arguments_.includes("--api-only")
+      ? localDevelopmentProfiles.apiOnly
+      : localDevelopmentProfiles.full;
+    const privateEnvironment = Object.freeze(
+      environment({
+        POSTGRES_PASSWORD: "doppler-synthetic-password",
+        SEARCH_CURSOR_SECRET: "file-cursor-secret",
+        SERVICE_VERSION: "file-version",
+      }),
+    );
+    const injected = Object.freeze({
+      API_HOST: "192.0.2.1",
+      DATABASE_URL:
+        "postgresql://nutrition_local:doppler-synthetic-password@127.0.0.1:5432/nutrition_tracker",
+      DOPPLER_CONFIG: "dev",
+      DOPPLER_PROJECT: "nourishing",
+      DOPPLER_TOKEN: "synthetic-token-excluded",
+      EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: "ambient-reader-secret-excluded",
+      SEARCH_CURSOR_SECRET: "  injected-cursor-secret  ",
+      SERVICE_VERSION: "ambient-version-excluded",
+      VAULT_TOKEN: "synthetic-vault-token-excluded",
+    });
+    const objectStore = Object.freeze({
+      DATABASE_URL: "postgresql://overlay.invalid/must-not-win",
+      EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: "generated-reader-id",
+      EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: "generated-reader-secret",
+      EXPORT_ARTIFACT_STORE: "s3",
+      SEARCH_CURSOR_SECRET: "overlay-cursor-secret-excluded",
+    });
+    const order = [];
+    const calls = [];
+    const fixture = privateEnvironmentFixture(privateEnvironment);
+    await runLocalDevelopmentWithPrivateEnv(arguments_, {
+      ...fixture,
+      environment: injected,
+      open: (path, flags) => {
+        order.push("open");
+        assert.equal(path.endsWith("/.env"), true);
+        assert.equal((flags & constants.O_NOFOLLOW) !== 0, true);
+        return 81;
+      },
+      read: (descriptor) => {
+        order.push("read");
+        assert.equal(descriptor, 81);
+        return fixture.read();
+      },
+      close: (descriptor) => {
+        order.push("close");
+        assert.equal(descriptor, 81);
+      },
+      readObjectStoreEnvironment: () => {
+        order.push("object-store");
+        return objectStore;
+      },
+      bootstrap: async (options) => {
+        order.push("bootstrap");
+        assert.deepEqual(options, { endpoint: "http://127.0.0.1:7700", masterKey, port: "7700" });
+        return scopedKeys();
+      },
+      spawn: (command, childArguments, options) => {
+        order.push("spawn");
+        calls.push({ command, childArguments, options });
+        return completedChild();
+      },
+    });
+    assert.deepEqual(order, ["open", "read", "close", "object-store", "bootstrap", "spawn"]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].command, "pnpm");
+    assert.deepEqual(calls[0].childArguments, profile.turboArguments);
+    const childEnvironment = calls[0].options.env;
+    assert.deepEqual(
+      childEnvironment,
+      localDevelopmentChildEnvironment(
+        {
+          ...privateEnvironment,
+          ...objectStore,
+          DATABASE_URL: injected.DATABASE_URL,
+          SEARCH_CURSOR_SECRET: injected.SEARCH_CURSOR_SECRET,
+        },
+        scopedKeys(),
+        profile,
+      ),
+    );
+    assert.equal(childEnvironment.DATABASE_URL, injected.DATABASE_URL);
+    assert.equal(childEnvironment.SEARCH_CURSOR_SECRET, injected.SEARCH_CURSOR_SECRET);
+    assert.equal(childEnvironment.SERVICE_VERSION, "file-version");
+    assert.equal(
+      childEnvironment.EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY,
+      "generated-reader-secret",
+    );
+    for (const field of [
+      "DOPPLER_TOKEN",
+      "DOPPLER_CONFIG",
+      "DOPPLER_PROJECT",
+      "VAULT_TOKEN",
+      "MEILI_MASTER_KEY",
+      "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
+      "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+    ]) {
+      assert.equal(Object.hasOwn(childEnvironment, field), false, `${field} must be excluded`);
+    }
+    assert.equal(privateEnvironment.SEARCH_CURSOR_SECRET, "file-cursor-secret");
+    assert.equal(objectStore.SEARCH_CURSOR_SECRET, "overlay-cursor-secret-excluded");
+    assert.equal(injected.API_HOST, "192.0.2.1");
+  });
+}
+
+for (const arguments_ of [["--doppler"], ["--api-only", "--doppler"]]) {
+  for (const field of ["DATABASE_URL", "SEARCH_CURSOR_SECRET"]) {
+    for (const value of [undefined, "", " \t "]) {
+      test(`refuses ${field} ${value === undefined ? "missing" : value === "" ? "empty" : "blank"} before private loading: ${arguments_.join(" ")}`, async () => {
+        let sideEffects = 0;
+        const privateEnvironment = environment({ SEARCH_CURSOR_SECRET: "file-fallback-forbidden" });
+        await assert.rejects(
+          runLocalDevelopmentWithPrivateEnv(
+            arguments_,
+            privateEnvironmentFixture(privateEnvironment, {
+              environment: { ...privateEnvironment, [field]: value },
+              open: () => {
+                sideEffects += 1;
+                return 81;
+              },
+              readObjectStoreEnvironment: () => {
+                sideEffects += 1;
+                return {};
+              },
+              bootstrap: async () => {
+                sideEffects += 1;
+                return scopedKeys();
+              },
+              spawn: () => {
+                sideEffects += 1;
+                return completedChild();
+              },
+            }),
+          ),
+          { message: `Local development Doppler mode requires injected ${field}` },
+        );
+        assert.equal(sideEffects, 0);
+      });
+    }
+  }
+}
+
+for (const arguments_ of [[], ["--api-only"]]) {
+  test(`keeps the private file source without Doppler selection: ${arguments_.join(" ") || "full"}`, async () => {
+    const privateEnvironment = Object.freeze(
+      environment({ SEARCH_CURSOR_SECRET: "file-cursor-secret" }),
+    );
+    let childEnvironment;
+    await runLocalDevelopmentWithPrivateEnv(
+      arguments_,
+      privateEnvironmentFixture(privateEnvironment, {
+        environment: {
+          DATABASE_URL: "postgresql://ambient.invalid/excluded",
+          SEARCH_CURSOR_SECRET: "",
+        },
+        bootstrap: async () => scopedKeys(),
+        spawn: (_command, _arguments, options) => {
+          childEnvironment = options.env;
+          return completedChild();
+        },
+      }),
+    );
+    assert.equal(childEnvironment.DATABASE_URL, privateEnvironment.DATABASE_URL);
+    assert.equal(childEnvironment.SEARCH_CURSOR_SECRET, privateEnvironment.SEARCH_CURSOR_SECRET);
+  });
+}
+
+test("rejects duplicate and unsupported Doppler arguments before private loading", async () => {
+  let opened = false;
+  for (const arguments_ of [
+    ["--doppler", "--doppler"],
+    ["--api-only", "--api-only", "--doppler"],
+    ["--doppler", "--api-only", "--other"],
+    ["--doppler=dev"],
+  ]) {
+    await assert.rejects(
+      runLocalDevelopmentWithPrivateEnv(arguments_, {
+        open: () => {
+          opened = true;
+        },
+      }),
+      /Unsupported local development invocation/u,
+    );
+  }
+  assert.equal(opened, false);
+});
+
+test("Doppler selection retains private descriptor and object-store failures", async () => {
+  const privateEnvironment = environment({ SEARCH_CURSOR_SECRET: "synthetic-cursor-secret" });
+  let bootstrapped = false;
+  let launched = false;
+  let closed = 0;
+  for (const failure of ["metadata", "close", "object-store"]) {
+    const fixture = privateEnvironmentFixture(privateEnvironment);
+    await assert.rejects(
+      runLocalDevelopmentWithPrivateEnv(["--doppler"], {
+        ...fixture,
+        environment: privateEnvironment,
+        fstat: () => ({
+          ...fixture.fstat(),
+          ...(failure === "metadata" ? { mode: 0o100644 } : {}),
+        }),
+        close: () => {
+          closed += 1;
+          if (failure === "close") throw new Error("synthetic-close-failure");
+        },
+        readObjectStoreEnvironment: () => {
+          throw new Error("synthetic-object-store-failure");
+        },
+        bootstrap: async () => {
+          bootstrapped = true;
+          return scopedKeys();
+        },
+        spawn: () => {
+          launched = true;
+          return completedChild();
+        },
+      }),
+      {
+        message:
+          failure === "metadata"
+            ? "Local development requires an owner-only regular .env file"
+            : failure === "close"
+              ? "Unable to close the private local development environment"
+              : "Unable to load the private local development environment",
+      },
+    );
+  }
+  assert.equal(closed, 3);
+  assert.equal(bootstrapped, false);
+  assert.equal(launched, false);
+});
+
+test("validates the selected Doppler database before bootstrap without a private fallback", async () => {
+  let bootstrapped = false;
+  let launched = false;
+  const privateEnvironment = environment({ SEARCH_CURSOR_SECRET: "synthetic-cursor-secret" });
+  await assert.rejects(
+    runLocalDevelopmentWithPrivateEnv(
+      ["--doppler"],
+      privateEnvironmentFixture(privateEnvironment, {
+        environment: {
+          DATABASE_URL:
+            "postgresql://nutrition_local:nutrition_local_only@192.0.2.1:5432/nutrition_tracker",
+          SEARCH_CURSOR_SECRET: "synthetic-injected-cursor-secret",
+        },
+        bootstrap: async () => {
+          bootstrapped = true;
+          return scopedKeys();
+        },
+        spawn: () => {
+          launched = true;
+          return completedChild();
+        },
+      }),
+    ),
+    /loopback PostgreSQL fixture/u,
+  );
+  assert.equal(bootstrapped, false);
+  assert.equal(launched, false);
+});
+
+test("the runtime seam also rejects missing Doppler inputs before bootstrap", async () => {
+  let bootstrapped = false;
+  let launched = false;
+  await assert.rejects(
+    runLocalDevelopment(["--doppler"], {
+      environment: environment({ SEARCH_CURSOR_SECRET: " \t" }),
+      bootstrap: async () => {
+        bootstrapped = true;
+        return scopedKeys();
+      },
+      spawn: () => {
+        launched = true;
+        return completedChild();
+      },
+    }),
+    { message: "Local development Doppler mode requires injected SEARCH_CURSOR_SECRET" },
+  );
+  assert.equal(bootstrapped, false);
+  assert.equal(launched, false);
+});
+
+for (const field of ["DATABASE_URL", "SEARCH_CURSOR_SECRET"]) {
+  test(`rejects inherited Doppler ${field} before private loading`, async () => {
+    const privateEnvironment = environment({
+      SEARCH_CURSOR_SECRET: "synthetic-file-cursor-secret",
+    });
+    const injected = {
+      DATABASE_URL: privateEnvironment.DATABASE_URL,
+      SEARCH_CURSOR_SECRET: "synthetic-injected-cursor-secret",
+    };
+    const suppliedEnvironment = Object.assign(
+      Object.create({ [field]: injected[field] }),
+      injected,
+    );
+    delete suppliedEnvironment[field];
+    assert.equal(Object.hasOwn(suppliedEnvironment, field), false);
+    let sideEffects = 0;
+    await assert.rejects(
+      runLocalDevelopmentWithPrivateEnv(
+        ["--doppler"],
+        privateEnvironmentFixture(privateEnvironment, {
+          environment: suppliedEnvironment,
+          open: () => {
+            sideEffects += 1;
+            return 81;
+          },
+          readObjectStoreEnvironment: () => {
+            sideEffects += 1;
+            return {};
+          },
+          bootstrap: async () => {
+            sideEffects += 1;
+            return scopedKeys();
+          },
+          spawn: () => {
+            sideEffects += 1;
+            return completedChild();
+          },
+        }),
+      ),
+      { message: `Local development Doppler mode requires injected ${field}` },
+    );
+    assert.equal(sideEffects, 0);
+  });
+}

@@ -163,7 +163,7 @@ describe("EAS signed build configuration", () => {
   it("rejects an API origin claim before deployment confirmation", () => {
     const config = configuration();
     config.releaseDeployment.apiOrigin = "https://api.github.com";
-    expect(() => validateEasReleaseConfig(config)).toThrow(/must not claim/u);
+    expect(() => validateEasReleaseConfig(config)).toThrow(/unconfirmed v8/u);
   });
 
   it("rejects bypassing the mandatory release checks", () => {

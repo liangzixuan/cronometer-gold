@@ -15,7 +15,6 @@ import {
   localDateInTimeZone,
   localTimeInTimeZone,
   type MealSlot,
-  nutrientDisplay,
   parseDiaryMutation,
   parseSession,
   type SessionSummary,
@@ -52,9 +51,9 @@ import { Icon } from "../ui/Icon";
 
 import { MyFoodIngredientPicker } from "./MyFoodIngredientPicker";
 import { PastedIngredientReview } from "./PastedIngredientReview";
+import { type NutritionBasis, SavedRecipeInspection } from "./SavedRecipeInspection";
 
 type LoadState = "loading" | "ready" | "error";
-type NutritionBasis = "per100Grams" | "perServing";
 
 interface BuilderState {
   readonly recipeId: string | null;
@@ -2243,96 +2242,13 @@ export function RecipesClient() {
             </form>
             {selected ? (
               <>
-                <section className="workspaceSection" aria-labelledby="warnings-heading">
-                  <h3 id="warnings-heading">Calculation assumptions & warnings</h3>
-                  <ul className="warningList">
-                    <li>
-                      <strong>{selected.retentionPolicy.code.replaceAll("-", " ")}</strong>
-                      <br />
-                      {selected.retentionPolicy.assumption}
-                    </li>
-                    {selected.warnings.map((warning) => (
-                      <li key={warning.code}>
-                        <strong>{warning.code.replaceAll("_", " ")}</strong>
-                        <br />
-                        {warning.message}
-                      </li>
-                    ))}
-                  </ul>
-                  <p className="coverageCopy">
-                    Retention factors default to one unless a warning identifies a named, reviewed
-                    factor set. This is not a claim that cooking retained every nutrient.
-                  </p>
-                </section>
-                <section className="workspaceSection" aria-labelledby="nutrition-heading">
-                  <h3 id="nutrition-heading">Saved recipe nutrition</h3>
-                  <p className="coverageCopy">
-                    {selected.name} · Saved version {selected.versionNumber}. Unsaved recipe edits
-                    and the diary logging amount do not change these values.
-                  </p>
-                  <fieldset disabled={busy !== null || state !== "ready"}>
-                    <legend>Nutrition basis</legend>
-                    <button
-                      aria-pressed={nutritionBasis === "per100Grams"}
-                      className={nutritionBasis === "per100Grams" ? "buttonPrimary" : "buttonQuiet"}
-                      onClick={() => selectNutritionBasis("per100Grams")}
-                      type="button"
-                    >
-                      Per 100 g
-                    </button>{" "}
-                    {selected.nutrientsPerServing !== null ? (
-                      <button
-                        aria-pressed={nutritionBasis === "perServing"}
-                        className={
-                          nutritionBasis === "perServing" ? "buttonPrimary" : "buttonQuiet"
-                        }
-                        onClick={() => selectNutritionBasis("perServing")}
-                        type="button"
-                      >
-                        Per serving ({selected.servingLabel ?? "serving"})
-                      </button>
-                    ) : null}
-                  </fieldset>
-                  <section className="reportTableScroller" aria-label="Recipe nutrition table">
-                    <table className="nutritionTable">
-                      <caption>
-                        {nutritionBasis === "perServing"
-                          ? `Per serving (${selected.servingLabel ?? "serving"})`
-                          : "Per 100 g"}
-                      </caption>
-                      <thead>
-                        <tr>
-                          <th>Nutrient</th>
-                          <th>Coverage</th>
-                          <th>Known amount</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {(nutritionBasis === "perServing" && selected.nutrientsPerServing !== null
-                          ? selected.nutrientsPerServing
-                          : selected.nutrientsPer100Grams
-                        ).map((nutrient) => {
-                          const display = nutrientDisplay(nutrient);
-                          return (
-                            <tr key={nutrient.nutrientId}>
-                              <td>{nutrient.name}</td>
-                              <td>{display.qualification}</td>
-                              <td>{display.amount}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </section>
-                </section>
-                <section className="workspaceSection" aria-labelledby="source-heading">
-                  <h3 id="source-heading">Transitive source provenance</h3>
-                  {recipeAttribution.map((line) => (
-                    <p className="sourceLine" key={line}>
-                      {line}
-                    </p>
-                  ))}
-                </section>
+                <SavedRecipeInspection
+                  recipe={selected}
+                  nutritionBasis={nutritionBasis}
+                  controlsDisabled={busy !== null || state !== "ready"}
+                  sourceLines={recipeAttribution}
+                  onSelectNutritionBasis={selectNutritionBasis}
+                />
                 <section className="workspaceSection" aria-labelledby="log-heading">
                   <h3 id="log-heading">Log this exact revision</h3>
                   <div className="formGrid">

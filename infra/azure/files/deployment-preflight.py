@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import time
+import types
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -26,6 +27,10 @@ DATA_ROOT = pathlib.Path("/var/lib/nutrition-tracker")
 COMPOSE_FILE = pathlib.Path("/opt/nutrition-tracker/compose.yaml")
 PUBLIC_CADDYFILE = pathlib.Path("/opt/nutrition-tracker/Caddyfile")
 INTERNAL_CADDYFILE = pathlib.Path("/opt/nutrition-tracker/Caddyfile.internal")
+CREDENTIAL_INSTALLER = pathlib.Path("/opt/nutrition-tracker/install-object-storage-credentials.py")
+CREDENTIAL_INSTALLER_SHA256 = "4d96d3e69f67a6479bc15c4e79ef3edc0ee323a62e248e1eeaf8c85d3d755ef6"
+OBJECT_EGRESS = pathlib.Path("/opt/nutrition-tracker/object-egress.py")
+OBJECT_EGRESS_SHA256 = "ea999c74c1d27ac998e329b74409ae9e7a7c68a998797e0505dc228bfaaf2b81"
 IMAGE_ADMISSION = pathlib.Path("/opt/nutrition-tracker/image-admission.py")
 OBJECT_COORDINATES = CONFIG_ROOT / "object-storage-coordinates.json"
 OBJECT_HOSTS = pathlib.Path("/run/nutrition-tracker/object-storage-hosts.env")
@@ -57,12 +62,12 @@ ENVIRONMENT_KEY_SCHEMAS = {
             "AZURE_OFF_HOST_BACKUP_ADMISSION",
             "BETA_ALLOWED_CIDRS",
             "CADDY_IMAGE",
+            "DEPLOYMENT_READINESS_TOKEN",
+            "DEPLOYMENT_TARGET",
             "MEILI_IMAGE",
             "MIGRATOR_IMAGE",
             "POSTGRES_IMAGE",
             "SYNTHETIC_ONLY_ACKNOWLEDGEMENT",
-            "WEB_FQDN",
-            "WEB_IMAGE",
             "WORKER_IMAGE",
         }
     ),
@@ -165,11 +170,10 @@ IMAGE_REPOSITORIES = {
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",
     "POSTGRES_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-postgres",
     "API_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-api",
-    "WEB_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-web",
     "WORKER_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-worker",
     "MIGRATOR_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-migrator",
 }
-IMAGE_ADMISSION_SHA256 = "483a611be10dd26b3fa44eeb75e18be4d37c1fa8c94d0b07000ace865d9ad069"
+IMAGE_ADMISSION_SHA256 = "28be9fc12a910ddb86f86f938bd55e1497b0ce51ab81a7bf9edfd5ce49471903"
 PUBLIC_RANGE_LOCK_SHA256 = "44124af92774cb3766b001a706425b4582cfefa660b815efafcd35c2b1ed81ed"
 IMAGE_REFERENCE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 FQDN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
@@ -286,6 +290,7 @@ def command(
     description: str,
     *,
     timeout_seconds: int = COMMAND_TIMEOUT_SECONDS,
+    redact_output: bool = False,
 ) -> str:
     try:
         process = subprocess.Popen(
@@ -308,7 +313,7 @@ def command(
             stop_process_group(process, description)
         raise
     if process.returncode != 0:
-        detail = output.strip()
+        detail = "" if redact_output else output.strip()
         fail(
             f"Could not inspect {description}"
             f"{f': {detail[:1_500]}' if detail else ''}"
@@ -404,14 +409,16 @@ def assert_deployment(deploy: dict[str, str]) -> None:
     require_regular_file(REVIEWER_CIDR_FILE, 0o644)
     if REVIEWER_CIDR_FILE.read_text(encoding="ascii").strip() != reviewer:
         fail("BETA_ALLOWED_CIDRS differs from the reviewed SSH/NSG source /32")
+    targets = {"staging": "staging-api.nourishing.app", "production": "api.nourishing.app"}
+    target = required(deploy, "DEPLOYMENT_TARGET")
+    if target not in targets:
+        fail("DEPLOYMENT_TARGET must be staging or production")
     api_fqdn = required(deploy, "API_FQDN")
-    web_fqdn = required(deploy, "WEB_FQDN")
-    if (
-        not FQDN.fullmatch(api_fqdn)
-        or not FQDN.fullmatch(web_fqdn)
-        or (api_fqdn, web_fqdn) != ("api.nourishing.app", "app.nourishing.app")
-    ):
-        fail("The beta FQDNs must remain api.nourishing.app and app.nourishing.app")
+    if not FQDN.fullmatch(api_fqdn) or api_fqdn != targets[target]:
+        fail("The backend API FQDN differs from its exact reviewed deployment target")
+    readiness_token = required(deploy, "DEPLOYMENT_READINESS_TOKEN")
+    if not re.fullmatch(r"[0-9a-f]{64}", readiness_token) or len(set(readiness_token)) < 8:
+        fail("DEPLOYMENT_READINESS_TOKEN must be an independently generated 256-bit lowercase hex value")
     if not re.fullmatch(r"[^@\s]+@[^@\s]+", required(deploy, "ACME_EMAIL")):
         fail("ACME_EMAIL is invalid")
     for variable, repository in IMAGE_REPOSITORIES.items():
@@ -772,9 +779,9 @@ def assert_image_admission(deploy_path: pathlib.Path, runtime_path: pathlib.Path
     require_regular_file(IMAGE_ADMISSION, 0o750)
     if hashlib.sha256(IMAGE_ADMISSION.read_bytes()).hexdigest() != IMAGE_ADMISSION_SHA256:
         fail("Installed provider-neutral image admission helper differs from reviewed source")
-    command(["python3", str(IMAGE_ADMISSION), "validate", str(deploy_path)], "image reference admission")
+    command(["python3", str(IMAGE_ADMISSION), "--profile", "appwrite-cloud-azure-v1", "validate", str(deploy_path)], "image reference admission")
     command(
-        ["python3", str(IMAGE_ADMISSION), "inspect", str(deploy_path), str(runtime_path)],
+        ["python3", str(IMAGE_ADMISSION), "--profile", "appwrite-cloud-azure-v1", "inspect", str(deploy_path), str(runtime_path)],
         "linux/arm64 image provenance and runtime contracts",
     )
 
@@ -892,7 +899,8 @@ def assert_caddy_configs(
         "--env",
         f"API_FQDN={required(deploy, 'API_FQDN')}",
         "--env",
-        f"WEB_FQDN={required(deploy, 'WEB_FQDN')}",
+        # Validate syntax using a fixed non-secret token; never place the real token in argv.
+        "DEPLOYMENT_READINESS_TOKEN=" + "0123456789abcdef" * 4,
         "--env",
         f"BETA_ALLOWED_CIDRS={required(deploy, 'BETA_ALLOWED_CIDRS')}",
     ]
@@ -940,6 +948,129 @@ def assert_caddy_configs(
     )
 
 
+def assert_compose_api_singleton(rendered: str) -> None:
+    try:
+        configuration = json.loads(rendered)
+        services = configuration["services"]
+        api = services["api"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        fail("Rendered Compose configuration has no valid API service")
+    if not isinstance(services, dict) or not isinstance(api, dict):
+        fail("Rendered Compose configuration has no valid API service")
+    deployment = api.get("deploy")
+    if not isinstance(deployment, dict):
+        fail("The API replica declaration must be explicit")
+    if (
+        "web" in services
+        or api.get("container_name") != "nutrition-ledger-azure-beta-api"
+        or type(deployment.get("replicas")) is not int
+        or deployment["replicas"] != 1
+        or type(api.get("scale", 1)) is not int
+        or api.get("scale", 1) != 1
+    ):
+        fail("The managed web profile requires exactly one named API replica and no backend web service")
+    if (
+        str(api.get("cpus")) != "0.5"
+        or str(api.get("mem_limit")) != str(768 * 1024 * 1024)
+        or api.get("pids_limit") != 256
+    ):
+        fail("The API CPU, memory and PID limits differ from the reviewed bounds")
+    if any(not isinstance(service, dict) for service in services.values()):
+        fail("Rendered Compose services must be objects")
+    if any(service.get("ports") for name, service in services.items() if name != "edge-caddy"):
+        fail("Only edge Caddy may publish host ports")
+
+
+
+def assert_live_object_egress() -> None:
+    require_regular_file(OBJECT_EGRESS, 0o750)
+    if hashlib.sha256(OBJECT_EGRESS.read_bytes()).hexdigest() != OBJECT_EGRESS_SHA256:
+        fail("Installed storage egress controller differs from reviewed source")
+    command(
+        ["python3", "-B", str(OBJECT_EGRESS), "verify"],
+        "actual Object Storage bridge and firewall contract",
+        timeout_seconds=60,
+        redact_output=True,
+    )
+
+
+def assert_compose_object_egress(rendered: str) -> None:
+    try:
+        configuration = json.loads(rendered)
+        networks = configuration["networks"]
+        network = networks["object_egress"]
+        services = configuration["services"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        fail("Rendered Compose configuration has no valid storage network")
+    if not isinstance(networks, dict) or set(networks) != {"backend", "edge", "object_egress"}:
+        fail("Rendered Compose networks differ from the reviewed profile")
+    if not isinstance(network, dict) or not isinstance(services, dict):
+        fail("Rendered Compose configuration has no valid storage network")
+    expected_options = {
+        "com.docker.network.bridge.name": "nourishing-obj",
+        "com.docker.network.bridge.enable_icc": "false",
+    }
+    backend = networks["backend"]
+    ipam = network.get("ipam")
+    if (
+        network.get("name") != "nutrition-ledger-azure-beta-object-egress"
+        or network.get("driver") != "bridge"
+        or network.get("internal", False) is not False
+        or network.get("enable_ipv6") is not False
+        or network.get("enable_ipv4", True) is not True
+        or network.get("external", False) is not False
+        or network.get("attachable", False) is not False
+        or network.get("driver_opts") != expected_options
+        or not isinstance(ipam, dict)
+        or set(ipam) - {"driver", "config"}
+        or ipam.get("driver", "default") != "default"
+        or ipam.get("config") != [{"subnet": "172.31.255.0/28", "gateway": "172.31.255.1"}]
+        or not isinstance(backend, dict)
+        or backend.get("internal") is not True
+        or backend.get("enable_ipv6") is not False
+        or backend.get("external", False) is not False
+    ):
+        fail("Rendered storage bridge identity or isolation differs from the reviewed profile")
+    clients = {
+        "api": {"backend", "object_egress"},
+        "worker": {"backend", "object_egress"},
+        "erasure-restore-attestation": {"backend", "object_egress"},
+        "object-storage-live-canary": {"object_egress"},
+    }
+    expected_attachments = {
+        **clients,
+        "edge-caddy": {"backend", "edge"},
+        **{name: {"backend"} for name in ("caddy", "postgres", "meilisearch", "migrate", "database-readiness")},
+    }
+    if services.keys() != expected_attachments.keys():
+        fail("Rendered services differ from the reviewed network profile")
+    for name, service in services.items():
+        if not isinstance(service, dict):
+            fail("Rendered services must be objects")
+        attachments = service.get("networks", {})
+        if not isinstance(attachments, dict):
+            fail("Rendered network attachments must be objects")
+        if set(attachments) != expected_attachments[name] or service.get("network_mode") is not None:
+            fail("Rendered service can bypass the reviewed network boundary")
+        if name in clients:
+            if (
+                service.get("container_name") != {
+                    "api": "nutrition-ledger-azure-beta-api",
+                    "worker": "nutrition-ledger-azure-beta-worker-1",
+                    "object-storage-live-canary": "nutrition-ledger-azure-beta-object-storage-live-canary",
+                    "erasure-restore-attestation": "nutrition-ledger-azure-beta-erasure-restore-attestation",
+                }[name]
+                or service.get("privileged", False) is not False
+                or service.get("cap_drop") != ["ALL"]
+                or service.get("cap_add")
+                or service.get("ports")
+                or service.get("devices")
+            ):
+                fail("Rendered storage client can bypass the reviewed network boundary")
+        elif "object_egress" in attachments:
+            fail("An unreviewed service joined the storage bridge")
+
+
 def reject_unimplemented_integrations(deploy: dict[str, str]) -> None:
     for key in (
         "AZURE_OCI_EGRESS_ADMISSION",
@@ -950,13 +1081,13 @@ def reject_unimplemented_integrations(deploy: dict[str, str]) -> None:
         if deploy.get(key) != "BLOCKED_NOT_IMPLEMENTED":
             fail(f"{key} may not be operator-overridden before its reviewed implementation exists")
     fail(
-        "BLOCKED: endpoint-only Object Storage egress, Azure-host OCI credential install/rotation, "
-        "live OCI usage/headroom admission, and off-host backup/restore-drill admission are not implemented; "
+        "BLOCKED: live endpoint-only Object Storage egress, Azure-host OCI credential permissions, "
+        "OCI usage/headroom and off-host backup/restore-drill admission are not qualified; "
         "no Compose service is admitted to start"
     )
 
 
-def run_preflight(mode: str, cancellation_scope: TerminationSignalScope) -> None:
+def _run_preflight_locked(mode: str, cancellation_scope: TerminationSignalScope) -> None:
     assert_host()
     paths = {name: CONFIG_ROOT / f"{name}.env" for name in ENVIRONMENTS}
     for path in paths.values():
@@ -973,7 +1104,7 @@ def run_preflight(mode: str, cancellation_scope: TerminationSignalScope) -> None
     assert_object_storage(environments)
     assert_image_admission(paths["deploy"], paths["runtime"])
     assert_caddy_configs(environments["deploy"], cancellation_scope)
-    command(
+    rendered = command(
         [
             "docker",
             "compose",
@@ -990,12 +1121,56 @@ def run_preflight(mode: str, cancellation_scope: TerminationSignalScope) -> None
             "--profile",
             "edge",
             "config",
-            "--quiet",
+            "--format",
+            "json",
         ],
         "rendered Compose contract",
         timeout_seconds=30,
+        redact_output=True,
     )
+    assert_compose_api_singleton(rendered)
+    assert_compose_object_egress(rendered)
+    assert_live_object_egress()
     reject_unimplemented_integrations(environments["deploy"])
+
+
+@contextmanager
+def credential_transaction_guard() -> Iterator[None]:
+    # Read the pinned implementation once; execute only those verified bytes.
+    # The shared flock is cooperative exclusion, not a sandbox against root.
+    if os.geteuid() != 0:
+        fail("Run the deployment preflight as root")
+    for parent in CREDENTIAL_INSTALLER.parents:
+        metadata = parent.lstat()
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0 or
+                metadata.st_gid != 0 or metadata.st_mode & 0o022):
+            fail("Unsafe credential installer parent")
+    fd = os.open(CREDENTIAL_INSTALLER, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or
+                (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) != (0, 0, 0o750)
+                or metadata.st_size > 65536):
+            fail("Unsafe credential installer source")
+        with os.fdopen(fd, "rb", closefd=False) as source:
+            raw = source.read(65537)
+    finally:
+        os.close(fd)
+    if hashlib.sha256(raw).hexdigest() != CREDENTIAL_INSTALLER_SHA256:
+        fail("Credential installer source digest mismatch")
+    helper = types.ModuleType("nutrition_azure_credentials")
+    exec(compile(raw, str(CREDENTIAL_INSTALLER), "exec"), helper.__dict__)
+    try:
+        with helper.deployment_guard():
+            yield
+    except (helper.CredentialError, OSError, ValueError, KeyError, TypeError):
+        fail("Credential transaction admission failed; preserve private transaction evidence")
+
+
+def run_preflight(mode: str, cancellation_scope: TerminationSignalScope) -> None:
+    # Pending/corrupt transactions reject before uname, Docker or Caddy children.
+    with credential_transaction_guard():
+        _run_preflight_locked(mode, cancellation_scope)
 
 
 def main() -> None:

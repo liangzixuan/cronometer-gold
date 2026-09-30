@@ -700,6 +700,7 @@ test("capture flags, masking and tunnel identity reach the actual connect call",
     "browserstack.debug",
     "browserstack.networkLogs",
     "playwrightLogs",
+    "browserstack.playwrightLogs",
   ])
     assert.equal(caps[key], false);
   assert.equal(caps["browserstack.console"], "disable");
@@ -712,6 +713,52 @@ test("capture flags, masking and tunnel identity reach the actual connect call",
   );
   assert(!filled.some(([, value]) => value === "SYNTHETIC-SECRET-SENTINEL"));
 });
+test("both disabled Playwright log capabilities bind the existing requested receipt", async () => {
+  const result = await exercise();
+  assert.equal(result.connected, 1);
+  assert.equal(result.closed, 1);
+  assert.equal(result.receipt.status, "passed");
+  assert.equal(result.caps.playwrightLogs, false);
+  assert.equal(result.caps["browserstack.playwrightLogs"], false);
+  assert.equal(result.receipt.capture.requested.playwrightLogs, false);
+  assert.equal(result.receipt.capture.dashboardVerification, "pending-first-run-review");
+});
+
+for (const key of ["playwrightLogs", "browserstack.playwrightLogs"]) {
+  for (const [label, value] of [
+    ["missing", undefined],
+    ["enabled", true],
+    ["string", "false"],
+    ["null", null],
+  ]) {
+    test(`actual runner rejects ${label} ${key} before creating a session`, async () => {
+      const capsDeclaration = parse(source, { sourceType: "module" }).program.body.find(
+        (node) =>
+          node.type === "VariableDeclaration" &&
+          node.declarations.some((declaration) => declaration.id.name === "caps"),
+      );
+      assert(capsDeclaration);
+      const mutation =
+        value === undefined
+          ? `delete caps[${JSON.stringify(key)}];`
+          : `caps[${JSON.stringify(key)}] = ${JSON.stringify(value)};`;
+      const changed =
+        source.slice(0, capsDeclaration.end) +
+        `\n${mutation}\n` +
+        source.slice(capsDeclaration.end);
+      const result = await exercise({}, changed);
+      assert.equal(result.connected, 0);
+      assert.equal(result.closed, 0);
+      assert.equal(result.addClicks, 0);
+      assert.deepEqual(result.actions, []);
+      assert.deepEqual(result.fetches, []);
+      assert.deepEqual(result.journeyTimeouts, []);
+      assert.equal(result.raw, undefined);
+      assert.equal(result.rejection?.message, "Playwright logging must be disabled");
+    });
+  }
+}
+
 test("missing credential rejects before any connection", async () => {
   const result = await exercise({ missingCredential: true });
   assert(result.rejection);

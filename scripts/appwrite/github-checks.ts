@@ -441,6 +441,15 @@ export async function collectGitHubEvidence(
     need(page.total_count === values.length);
     return selectLatestRun(values, workflow, options.revision);
   }
+  async function currentBranch() {
+    const repository = row(await api(""));
+    need(repository.full_name === REPOSITORY && repository.default_branch === BRANCH);
+    const reference = row(await api(`/git/ref/heads/${BRANCH}`));
+    need(reference.ref === `refs/heads/${BRANCH}`);
+    const object = row(reference.object);
+    need(object.type === "commit" && object.sha === options.revision);
+  }
+  await currentBranch();
   const commit = row(await api(`/git/commits/${options.revision}`));
   need(commit.sha === options.revision);
   const tree = row(commit.tree).sha;
@@ -505,6 +514,7 @@ export async function collectGitHubEvidence(
         current.conclusion === "success",
     );
   }
+  await currentBranch();
   return validateGitHubEvidence(
     {
       schemaVersion: 1,

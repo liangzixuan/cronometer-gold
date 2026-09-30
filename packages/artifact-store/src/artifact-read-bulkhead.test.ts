@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EncryptedArtifactStore, type RawArtifactStore } from "./artifact-encryption.js";
 import {
@@ -12,6 +12,11 @@ import {
   ArtifactReadRateLimitedError,
   ArtifactReadUnavailableError,
 } from "./artifact-read-bulkhead.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rm: vi.fn(actual.rm) };
+});
 
 class MemoryRawArtifactStore implements RawArtifactStore {
   readonly objects = new Map<string, Buffer>();
@@ -228,4 +233,49 @@ describe("artifact read bulkhead", () => {
       }),
     ).rejects.toBeInstanceOf(ArtifactReadRateLimitedError);
   });
+});
+
+it("failed automatic disposal still releases once and retains the explicit rejection", async () => {
+  const temporaryDirectory = await mkdtemp(join(tmpdir(), "nutrition-bulkhead-disposal-"));
+  cleanup.push(temporaryDirectory);
+  const artifact = await fixture(Buffer.alloc(10, 9), temporaryDirectory);
+  const bulkhead = new ArtifactReadBulkhead({
+    maximumArtifactBytes: 10,
+    maximumConcurrentReads: 1,
+    maximumReservedPlaintextBytes: 10,
+  });
+  const opened = await bulkhead.openAuthenticated({
+    metadata: artifact.metadata,
+    ownerKey: "synthetic-owner",
+    store: artifact.store,
+  });
+  if (!opened) throw new Error("Missing synthetic authenticated read");
+
+  const original = new Error("synthetic public rm failure");
+  const unhandled: unknown[] = [];
+  const listener = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", listener);
+  const removal = vi.mocked(rm);
+  removal.mockClear();
+  removal.mockRejectedValueOnce(original);
+  try {
+    const closed = new Promise<void>((done) => opened.stream.once("close", done));
+    opened.stream.destroy();
+    await closed;
+    await new Promise((done) => setImmediate(done));
+    await expect(opened.dispose()).rejects.toBe(original);
+    await expect(opened.dispose()).rejects.toBe(original);
+    await new Promise((done) => setImmediate(done));
+    expect(removal).toHaveBeenCalledTimes(1);
+    expect(bulkhead.utilization).toEqual({ activeReads: 0, reservedPlaintextBytes: 0 });
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", listener);
+    removal.mockReset();
+    removal.mockImplementation(
+      (await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises")).rm,
+    );
+  }
 });

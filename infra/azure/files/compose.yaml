@@ -8,6 +8,7 @@ x-native-object-host: &native-object-host
 
 x-app-security: &app-security
   init: true
+  cap_drop: [ALL]
   user: "1000:1000"
   read_only: true
   restart: "no"
@@ -57,7 +58,7 @@ services:
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
       API_FQDN: ${API_FQDN}
-      WEB_FQDN: ${WEB_FQDN}
+      DEPLOYMENT_READINESS_TOKEN: ${DEPLOYMENT_READINESS_TOKEN}
       BETA_ALLOWED_CIDRS: ${BETA_ALLOWED_CIDRS}
     ports:
       - "80:80"
@@ -151,6 +152,9 @@ services:
     <<: *app-security
     image: ${API_IMAGE}
     profiles: [application]
+    container_name: nutrition-ledger-azure-beta-api
+    deploy:
+      replicas: 1
     stop_grace_period: 305s
     env_file:
       - /etc/nutrition-tracker/runtime.env
@@ -185,33 +189,9 @@ services:
       retries: 20
       start_period: 30s
 
-  web:
-    <<: *app-security
-    image: ${WEB_IMAGE}
-    profiles: [application]
-    environment:
-      API_INTERNAL_URL: http://127.0.0.1:4000
-      HOSTNAME: 0.0.0.0
-      NODE_ENV: production
-      PORT: "3000"
-      WEB_PUBLIC_ORIGIN: https://${WEB_FQDN}
-    depends_on:
-      api:
-        condition: service_started
-    network_mode: service:api
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
-    cpus: "0.40"
-    mem_limit: 768m
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-
   worker:
     <<: *app-security
+    container_name: nutrition-ledger-azure-beta-worker-1
     image: ${WORKER_IMAGE}
     profiles: [application]
     stop_grace_period: 610s
@@ -270,6 +250,7 @@ services:
 
   object-storage-live-canary:
     <<: *app-security
+    container_name: nutrition-ledger-azure-beta-object-storage-live-canary
     image: ${WORKER_IMAGE}
     profiles: [operations]
     command: ["node", "dist/object-storage-credential-canary.js"]
@@ -333,6 +314,7 @@ services:
 
   erasure-restore-attestation:
     <<: *app-security
+    container_name: nutrition-ledger-azure-beta-erasure-restore-attestation
     image: ${WORKER_IMAGE}
     profiles: [operations]
     command: ["node", "dist/erasure-ledger-restore.js"]
@@ -387,10 +369,16 @@ networks:
   edge: {}
   backend:
     internal: true
+    enable_ipv6: false
   object_egress:
     name: nutrition-ledger-azure-beta-object-egress
     driver: bridge
     internal: false
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.name: nourishing-obj
+      com.docker.network.bridge.enable_icc: "false"
     ipam:
       config:
         - subnet: 172.31.255.0/28
+          gateway: 172.31.255.1

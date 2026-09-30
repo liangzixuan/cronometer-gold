@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { expect } from "vitest";
+import type { BatchValidationPolicy } from "../../../packages/db/src/catalogue-batch-policy.js";
 import { submitCatalogueApproval } from "../../../packages/db/src/catalogue-capability-approval.js";
 import {
   prepareCatalogueValidation,
   submitCatalogueValidation,
 } from "../../../packages/db/src/catalogue-capability-validation.js";
 import type {
-  BatchValidationPolicy,
   RecordBatchParserReportInput,
   StageBatchInput,
   StagedCatalogueRecordInput,

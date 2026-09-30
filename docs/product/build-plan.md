@@ -121,6 +121,7 @@ retains earlier boundaries. A successful successor never changes an older result
 | --- | --- | --- |
 | Active product slice | Reproducible daily walkthrough and focused simplification | Real populated Dashboard/Diary/Add Food/Report flow, shared lifecycle checks, independent feature loading, reviewed Bootstrap Studio design handoff and repeatable setup. Preserve real persistence and existing integrity boundaries. |
 | Bounded approved maintenance | Expo compatibility refresh | Respect the approved release-age boundary, frozen install and applicable checks. This does not reopen catalogue qualification. |
+| Authorized operational work | Doppler secrets migration | Move development secrets, then scoped CI/staging consumers, with names-only inventory, restricted access, verified injection/sync and tested rollback. Production cutover retains its release requirements. See the migration sequence below. |
 | Preserved release prerequisite | Publication capacity and populated restore (ADR 0106), checklist C1 | Dedicated actual-command measurements at 12,500/25,000 synthetic records and restricted populated-restore replay/resume/rollback. Approved source work; service qualification and delivery pending. |
 | Completed beta prerequisite | V2 catalogue publication (ADR 0105) | Delivered at `0b6208df`; local and all three CI/nine container jobs passed after one approved database-only retry. Earlier failures preserved; capacity and target acceptance remain open. |
 | Completed beta prerequisite | Paged catalogue preparation through review (ADR 0104) | Delivered at `3816726`; bounded synthetic memory/authority proof, reviewed CI integration corrections and all three CI/nine container jobs passed. One approved quality retry and earlier failures remain preserved. |
@@ -153,6 +154,71 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed source milestone | ADR 0077 review follow-up | Delivered at `5d4c5a1`: Python CI/local wiring, semantic/time-boundary regressions, runbook corrections and approved Expo prerequisite. Local gates and all three CI/nine actual container jobs passed; dated details are in ADR 0077 and current readiness. |
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
+
+### Authorized operational work: Doppler secrets migration
+
+On September 30, 2026, the user authorized this migration and allowed it to be
+selected when ready without another general approval request. Sequence it as a
+bounded package alongside the launch work; it does not restart an expired work
+window or replace the existing product priorities.
+
+The first launcher consumer has reviewed local source and a verified real
+Doppler injection: `DATABASE_URL` and `SEARCH_CURSOR_SECRET` were copied unchanged
+to `nourishing/dev`. Explicit `--doppler` selection requires both injected fields
+and overrides only those names; other development commands still use the unchanged
+`.env`. The bounded parser proof used synthetic infrastructure and intercepted
+startup, so it does not establish service-stack or release readiness. The initial
+placeholder is preserved. Other development consumers, GitHub Actions and Appwrite
+secrets remain in their existing stores.
+
+Before each later phase, inventory names, owners, consumers, environments and
+explicit configuration precedence without printing values. Confirm included
+account allowance and use supported integrations and the installed CLI. Keep
+Nourishing configurations and credentials separate from other products.
+
+1. Migrate development inputs from their authorized current owners. Validate
+   least-privilege access, environment separation, redacted logs, missing/revoked
+   credential behavior and the documented no-fallback execution policy. Never
+   import historical Mac credentials or put private secrets in web/native bundles.
+2. Migrate CI and staging consumers in small groups. GitHub cannot return existing
+   secret values; obtain them from an authorized issuer or existing protected
+   source. Review the exact GitHub synchronization targets and its update/deletion
+   behavior before enabling it. Evaluate GitHub OIDC only after verifying that
+   the actual account entitlement and trust controls support it. Verify Appwrite's
+   supported configuration path before changing its variables; do not assume a
+   native Doppler sync exists.
+3. Validate the exact consumer and rollback before retiring its old configuration.
+   Use scoped workload credentials for automation rather than the personal CLI
+   login. Record rotation/revocation and outage/recovery behavior. Production,
+   signing/reviewer and backup-encryption credentials retain their specific
+   custody, recovery and release controls; migration authorization does not approve
+   deployment, paid upgrades or weakening those controls.
+
+Completion requires an owned environment/consumer map, successful scoped
+injection or synchronization, failure and rollback evidence, and updated operator
+instructions. The placeholder test alone is not migration acceptance. Required
+missing information goes through the user's established email workflow.
+
+### Accepted stack audit follow-ups
+
+Keep Next.js web/BFF, the modular Fastify API and Expo mobile. The September 30
+Clerk assessment defers replacement for the October launch. Current authentication
+owns stable account identity, session revocation, erasure and fresh-action proofs;
+any later replacement must preserve those contracts. Production verification and
+recovery email remains open under this design: the current delivery implementation
+supports local Mailpit and rejects production delivery.
+
+These follow-ups extend the existing launch work; they do not select simultaneous
+source writers or grant deployment, spending or credential-custody exceptions.
+
+| Work | Concrete next exit |
+| --- | --- |
+| One complete hosted path | Retain the selected Appwrite web-hosting role and settle a qualified backend for the API, PostgreSQL, Meilisearch, workers, storage and email within verified existing credits/free allowances and zero out-of-pocket charges. Verify staging operation and recovery from an actual downloaded off-host encrypted backup, including required erasure replay. The unpublished hosting candidate already implements managed qualification/controller and owned encrypted backup/restore operators; reconcile and qualify that work rather than rebuilding it. Azure remains evaluated, not deployed or accepted; the previously inspected VM was unavailable and current allowance/capacity must be verified. |
+| Production identity email | Complete verification/recovery delivery, abuse controls and failure handling under the selected authentication design. Preserve account IDs, erasure/revocation and fresh-action authorization; local Mailpit does not close this gate. |
+| Focused QA tools | Use Polypane for responsive layout, accessibility, focus and zoom; Requestly for synthetic errors/delays and exploratory API debugging, then capture useful regressions in maintained tests. Use BrowserStack for deployed/CI journeys and a small justified browser matrix. The recorded matrix is one Windows/Chrome configuration; installations alone are not verified workflows. Native installation, lifecycle and upgrades require separate device acceptance. |
+| Repeatable design handoff | Keep Bootstrap Studio as the visual design source and React as the owner of behavior. Extend the existing frontend-design handoff with reviewable color, spacing and typography tokens plus component mappings; verify the resulting responsive and interactive UI. |
+| CodeScene follow-through | Work on relevant hotspots with revision-specific findings and documented deferrals. Observe the configured native PR checks on the next substantive authorized PR; do not create a dummy PR, request paid analysis or refactor unrelated code for a score. |
+| Current stack inventory | Keep one concise operational inventory with role, environment, source location, deployed revision, verification date and state (available, implemented, verified or deployed). Link historical receipts and distinguish main, the unpublished candidate and actual deployment. The Windows handoff maintains this in `STACK-STATUS.md`; refresh relevant external facts before making operational decisions. |
 
 ### Preserved release prerequisites
 

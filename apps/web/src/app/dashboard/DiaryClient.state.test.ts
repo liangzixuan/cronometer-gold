@@ -150,6 +150,7 @@ import {
 import { CalmOverview } from "./CalmOverview";
 import { DiaryClient } from "./DiaryClient";
 import { DiaryDayNote } from "./DiaryDayNote";
+import { DiaryEntryEditorForm } from "./DiaryEntryEditorForm";
 
 interface ElementNode {
   readonly type: unknown;
@@ -159,13 +160,22 @@ function elements(value: unknown = hooks.tree()): ElementNode[] {
   if (Array.isArray(value)) return value.flatMap((item) => elements(item ?? null));
   if (!value || typeof value !== "object" || !("props" in value)) return [];
   const node = value as ElementNode;
+  if (node.type === DiaryEntryEditorForm)
+    return elements(
+      DiaryEntryEditorForm(node.props as unknown as Parameters<typeof DiaryEntryEditorForm>[0]),
+    );
   return [node, ...elements(node.props.children ?? null)];
 }
 function text(value: unknown = hooks.tree()): string {
   if (Array.isArray(value)) return value.map((item) => text(item ?? null)).join("");
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (!value || typeof value !== "object" || !("props" in value)) return "";
-  return text((value as ElementNode).props.children ?? null);
+  const node = value as ElementNode;
+  if (node.type === DiaryEntryEditorForm)
+    return text(
+      DiaryEntryEditorForm(node.props as unknown as Parameters<typeof DiaryEntryEditorForm>[0]),
+    );
+  return text(node.props.children ?? null);
 }
 function button(label: string): ElementNode {
   const found = elements().find(

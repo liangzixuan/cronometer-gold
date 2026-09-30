@@ -130,6 +130,7 @@ import type { CustomFood } from "../../lib/retention";
 import { MyFoodIngredientPicker, type MyFoodIngredientPickerProps } from "./MyFoodIngredientPicker";
 import { PastedIngredientReview } from "./PastedIngredientReview";
 import { RecipesClient } from "./RecipesClient";
+import { SavedRecipeInspection } from "./SavedRecipeInspection";
 
 interface ElementNode {
   readonly type: unknown;
@@ -139,13 +140,22 @@ function elements(value: unknown = hooks.tree()): ElementNode[] {
   if (Array.isArray(value)) return value.flatMap((item) => elements(item ?? null));
   if (!value || typeof value !== "object" || !("props" in value)) return [];
   const node = value as ElementNode;
+  if (node.type === SavedRecipeInspection)
+    return elements(
+      SavedRecipeInspection(node.props as unknown as Parameters<typeof SavedRecipeInspection>[0]),
+    );
   return [node, ...elements(node.props.children ?? null)];
 }
 function text(value: unknown = hooks.tree()): string {
   if (Array.isArray(value)) return value.map((item) => text(item ?? null)).join("");
   if (typeof value === "string" || typeof value === "number") return String(value);
   if (!value || typeof value !== "object" || !("props" in value)) return "";
-  return text((value as ElementNode).props.children ?? null);
+  const node = value as ElementNode;
+  if (node.type === SavedRecipeInspection)
+    return text(
+      SavedRecipeInspection(node.props as unknown as Parameters<typeof SavedRecipeInspection>[0]),
+    );
+  return text(node.props.children ?? null);
 }
 function button(label: string): ElementNode {
   const found = elements().find((node) => node.type === "button" && text(node) === label);

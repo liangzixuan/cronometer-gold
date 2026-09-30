@@ -16,13 +16,10 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
-  type LayoutChangeEvent,
   Platform,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -74,6 +71,7 @@ import { RetryableHealthImportTransportError, syncNativeWeight } from "./health-
 import { createNativeHealthAdapter } from "./native-health";
 import { createExpoNotificationAdapter } from "./notifications";
 import { ACCOUNT_ERASURE_SERIALIZED_BODY, createPendingErasureStore } from "./pending-erasure";
+import { RetentionTrendsSection } from "./RetentionTrendsSection";
 import {
   clearAllLocalReminderSchedules,
   createSecureReminderScheduleStore,
@@ -99,6 +97,7 @@ import {
   parseReminderResponse,
   parseReminders,
 } from "./retention";
+import { Button, ChipRow, LabeledInput, Section, styles } from "./retention-ui";
 
 interface Props {
   readonly ownerUserId: string;
@@ -3687,129 +3686,42 @@ export function RetentionScreen({
         {loading ? <ActivityIndicator color={palette.forest} /> : null}
         <Button label="Refresh private data" onPress={() => void loadAll()} secondary />
 
-        <Section
-          title="Trends"
-          subtitle="Exact totals are labeled exact. Incomplete nutrition is shown as a lower bound, never as zero."
-        >
-          <LabeledInput
-            label="From (YYYY-MM-DD)"
-            value={trendScopeCurrent() ? from : ""}
-            disabled={!trendReady}
-            onChangeText={(value) => changeTrendInput("from", value)}
-            maxLength={10}
-          />
-          <LabeledInput
-            label="To (YYYY-MM-DD)"
-            value={trendScopeCurrent() ? to : ""}
-            disabled={!trendReady}
-            onChangeText={(value) => changeTrendInput("to", value)}
-            maxLength={10}
-          />
-          <Text style={styles.help}>
-            Ranges include today in {profileTimeZone}. Choose Load local-day trends to view them.
-          </Text>
-          <View style={styles.actions}>
-            {([7, 30, 90] as const).map((days) => (
-              <Button
-                key={days}
-                label={`Last ${days} days`}
-                disabled={!trendReady}
-                onPress={() => applyTrendDatePreset(days)}
-                secondary
-              />
-            ))}
-          </View>
-          <Text style={styles.label}>Nutrient</Text>
-          <LabeledInput
-            label="Find a trend nutrient by name"
-            value={trendScopeCurrent() ? trendFilter.value : ""}
-            disabled={!trendReady}
-            onChangeText={changeTrendFilter}
-            maxLength={200}
-          />
-          <Button
-            label="Clear trend nutrient filter"
-            disabled={!trendReady}
-            onPress={() => changeTrendFilter("")}
-            secondary
-          />
-          <Text style={styles.help}>
-            {trendReady
+        <RetentionTrendsSection
+          from={trendScopeCurrent() ? from : ""}
+          to={trendScopeCurrent() ? to : ""}
+          profileTimeZone={profileTimeZone}
+          trendReady={trendReady}
+          trendFilter={trendScopeCurrent() ? trendFilter.value : ""}
+          nutrientListStatus={
+            trendReady
               ? nutrients.length === 0
                 ? "No trend nutrients are available in the loaded list."
                 : `${filteredTrendNutrients.length} matching of ${nutrients.length} loaded trend nutrients.`
               : loading && trendScopeCurrent()
                 ? "Loading the trend nutrient list…"
-                : "The trend nutrient list is unavailable. Choose Refresh private data to try again."}
-          </Text>
-          {trendReady && nutrients.length > 0 && filteredTrendNutrients.length === 0 ? (
-            <Text style={styles.help}>No loaded nutrients match this name.</Text>
-          ) : null}
-          <Text style={styles.help}>
-            {chosenTrendNutrient
-              ? `Selected nutrient: ${chosenTrendNutrient.name} · ${chosenTrendNutrient.unit}`
-              : "No trend nutrient selected."}
-          </Text>
-          <ChipRow
-            items={filteredTrendNutrients.map((item) => ({
-              key: item.nutrientId,
-              label: `${item.name} · ${item.unit}`,
-            }))}
-            selected={trendReady ? selectedNutrient : ""}
-            disabled={!trendReady}
-            wrapLabels
-            onSelect={(value) => changeTrendInput("nutrientId", value)}
-          />
-          <Text style={styles.label}>Biometric</Text>
-          <ChipRow
-            items={
-              trendReady
-                ? [
-                    { key: "", label: "None" },
-                    ...definitions.map((item) => ({
-                      key: item.id,
-                      label: `${item.name} (${item.canonicalUnit})${item.status === "archived" ? " (archived)" : ""}`,
-                    })),
-                  ]
-                : []
-            }
-            selected={trendReady ? selectedDefinition : ""}
-            disabled={!trendReady}
-            wrapLabels
-            onSelect={(value) => changeTrendInput("definitionId", value)}
-          />
-          <Button
-            disabled={
-              !trendReady ||
-              trendPending ||
-              busy !== null ||
-              (!chosenTrendNutrient && !chosenTrendDefinition)
-            }
-            label={trendPending ? "Loading…" : "Load local-day trends"}
-            onPress={() => void loadTrends()}
-          />
-          {trendReady && nutrientTrend ? (
-            <Text accessibilityRole="header" style={styles.cardTitle}>
-              {`${nutrientTrend.nutrient.name} (${nutrientTrend.nutrient.unit}) · ${nutrientTrend.from} to ${nutrientTrend.to} · ${nutrientTrend.timeZone}`}
-            </Text>
-          ) : null}
-          {(trendReady ? nutrientTrend?.points : [])?.map((point) => (
-            <Text key={point.localDate} style={styles.rowText}>
-              {point.localDate}: {nutrientTrendLabel(point.aggregate)}
-            </Text>
-          ))}
-          {trendReady && biometricTrend ? (
-            <Text accessibilityRole="header" style={styles.cardTitle}>
-              {`${biometricTrend.definition.name} (${biometricTrend.definition.canonicalUnit}) · ${biometricTrend.from} to ${biometricTrend.to} · ${biometricTrend.timeZone}`}
-            </Text>
-          ) : null}
-          {(trendReady ? biometricTrend?.points : [])?.map((point) => (
-            <Text key={point.localDate} style={styles.rowText}>
-              {point.localDate}: {point.last} {biometricTrend?.definition.canonicalUnit} ·{" "}
-              {point.count} reading{point.count === 1 ? "" : "s"}
-            </Text>
-          ))}
-        </Section>
+                : "The trend nutrient list is unavailable. Choose Refresh private data to try again."
+          }
+          nutrientCount={nutrients.length}
+          filteredTrendNutrients={filteredTrendNutrients}
+          chosenTrendNutrient={chosenTrendNutrient}
+          selectedNutrient={trendReady ? selectedNutrient : ""}
+          definitions={trendReady ? definitions : []}
+          selectedDefinition={trendReady ? selectedDefinition : ""}
+          loadDisabled={
+            !trendReady ||
+            trendPending ||
+            busy !== null ||
+            (!chosenTrendNutrient && !chosenTrendDefinition)
+          }
+          trendPending={trendPending}
+          nutrientTrend={trendReady ? nutrientTrend : null}
+          biometricTrend={trendReady ? biometricTrend : null}
+          nutrientTrendLabel={nutrientTrendLabel}
+          changeTrendInput={changeTrendInput}
+          changeTrendFilter={changeTrendFilter}
+          applyTrendDatePreset={applyTrendDatePreset}
+          loadTrends={loadTrends}
+        />
 
         <Section
           title="Private custom foods"
@@ -5042,229 +4954,3 @@ export function RetentionScreen({
     </SafeAreaView>
   );
 }
-
-function Section({
-  title,
-  subtitle,
-  children,
-  onLayout,
-}: {
-  readonly title: string;
-  readonly subtitle: string;
-  readonly children: React.ReactNode;
-  readonly onLayout?: (event: LayoutChangeEvent) => void;
-}) {
-  return (
-    <View style={styles.section} onLayout={onLayout}>
-      <Text accessibilityRole="header" style={styles.heading}>
-        {title}
-      </Text>
-      <Text style={styles.intro}>{subtitle}</Text>
-      {children}
-    </View>
-  );
-}
-
-function LabeledInput(props: {
-  readonly disabled?: boolean;
-  readonly label: string;
-  readonly value: string;
-  readonly onChangeText: (value: string) => void;
-  readonly maxLength: number;
-  readonly multiline?: boolean;
-  readonly placeholder?: string;
-  readonly secureTextEntry?: boolean;
-  readonly autoCapitalize?: "none" | "sentences" | "words" | "characters";
-  readonly keyboardType?: "default" | "decimal-pad" | "numbers-and-punctuation";
-}) {
-  return (
-    <View>
-      <Text style={styles.label}>{props.label}</Text>
-      <TextInput
-        accessibilityLabel={props.label}
-        editable={!props.disabled}
-        autoCapitalize={props.autoCapitalize ?? "none"}
-        keyboardType={props.keyboardType ?? "default"}
-        maxLength={props.maxLength}
-        multiline={props.multiline}
-        onChangeText={props.onChangeText}
-        placeholder={props.placeholder}
-        secureTextEntry={props.secureTextEntry}
-        style={[styles.input, props.multiline && styles.multiline]}
-        value={props.value}
-      />
-    </View>
-  );
-}
-
-function ChipRow(props: {
-  readonly disabled?: boolean;
-  readonly items: readonly {
-    readonly key: string;
-    readonly label: string;
-    readonly disabled?: boolean;
-  }[];
-  readonly selected: string | readonly string[];
-  readonly onSelect: (key: string) => void;
-  readonly multiple?: boolean;
-  readonly wrapLabels?: boolean;
-}) {
-  const selected = Array.isArray(props.selected) ? props.selected : [props.selected];
-  return (
-    <View accessibilityRole={props.multiple ? undefined : "radiogroup"} style={styles.chips}>
-      {props.items.map((item) => {
-        const active = selected.includes(item.key);
-        const disabled = Boolean(props.disabled || item.disabled);
-        return (
-          <Pressable
-            accessibilityRole={props.multiple ? "checkbox" : "radio"}
-            accessibilityState={
-              props.multiple ? { checked: active, disabled } : { selected: active, disabled }
-            }
-            disabled={disabled}
-            key={item.key}
-            onPress={() => {
-              if (!disabled) props.onSelect(item.key);
-            }}
-            style={[
-              styles.chip,
-              props.wrapLabels && styles.wrappingChip,
-              active && styles.chipActive,
-            ]}
-          >
-            <Text style={[styles.chipText, active && styles.chipTextActive]}>{item.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
-function Button({
-  label,
-  onPress,
-  disabled,
-  secondary,
-  danger,
-}: {
-  readonly label: string;
-  readonly onPress: () => void;
-  readonly disabled?: boolean;
-  readonly secondary?: boolean;
-  readonly danger?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[
-        styles.button,
-        secondary && styles.buttonSecondary,
-        danger && styles.buttonDanger,
-        disabled && styles.disabled,
-      ]}
-    >
-      <Text
-        style={[
-          styles.buttonText,
-          secondary && styles.buttonSecondaryText,
-          danger && styles.buttonDangerText,
-        ]}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  );
-}
-
-const styles = StyleSheet.create({
-  actions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 14 },
-  button: {
-    alignSelf: "flex-start",
-    backgroundColor: palette.forest,
-    borderColor: palette.forest,
-    borderRadius: 10,
-    borderWidth: 1,
-    marginTop: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  buttonDanger: { backgroundColor: "transparent", borderColor: "#9b443d" },
-  buttonDangerText: { color: "#8a3128" },
-  buttonSecondary: { backgroundColor: "transparent", borderColor: palette.line },
-  buttonSecondaryText: { color: palette.forest },
-  buttonText: { color: palette.white, fontSize: 13, fontWeight: "800" },
-  card: {
-    backgroundColor: palette.white,
-    borderColor: palette.line,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 12,
-    padding: 14,
-  },
-  cardTitle: { color: palette.ink, fontSize: 17, fontWeight: "700" },
-  chip: {
-    borderColor: palette.line,
-    borderRadius: 999,
-    borderWidth: 1,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  wrappingChip: { maxWidth: "100%", minWidth: 0, flexShrink: 1 },
-  chipActive: { backgroundColor: palette.forest, borderColor: palette.forest },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
-  chipText: { color: palette.muted, fontSize: 12, fontWeight: "700" },
-  chipTextActive: { color: palette.white },
-  content: { padding: 22, paddingBottom: 80 },
-  disabled: { opacity: 0.5 },
-  editor: {
-    borderColor: palette.line,
-    borderRadius: 12,
-    borderWidth: 1,
-    marginTop: 14,
-    padding: 14,
-  },
-  heading: { color: palette.ink, fontSize: 26, fontWeight: "700", letterSpacing: -0.6 },
-  help: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 9 },
-  input: {
-    backgroundColor: palette.white,
-    borderColor: palette.line,
-    borderRadius: 9,
-    borderWidth: 1,
-    color: palette.ink,
-    fontSize: 15,
-    minHeight: 46,
-    paddingHorizontal: 12,
-  },
-  intro: { color: palette.muted, fontSize: 14, lineHeight: 21, marginTop: 8 },
-  kicker: { color: palette.forest, fontSize: 11, fontWeight: "800", letterSpacing: 1.4 },
-  label: {
-    color: palette.muted,
-    fontSize: 11,
-    fontWeight: "800",
-    marginBottom: 5,
-    marginTop: 13,
-    textTransform: "uppercase",
-  },
-  meta: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 5 },
-  multiline: { minHeight: 100, paddingTop: 12, textAlignVertical: "top" },
-  rowText: { color: palette.ink, fontSize: 13, lineHeight: 20, marginTop: 7 },
-  savedNutrients: { minWidth: 0, width: "100%", marginTop: 14 },
-  savedNutrientRow: { minWidth: 0, width: "100%", marginTop: 7 },
-  screen: { backgroundColor: palette.paper, flex: 1 },
-  section: { borderTopColor: palette.line, borderTopWidth: 1, marginTop: 34, paddingTop: 28 },
-  status: { color: palette.forest, fontSize: 13, lineHeight: 19, marginVertical: 18 },
-  subheading: { color: palette.ink, fontSize: 20, fontWeight: "700", marginTop: 24 },
-  title: { color: palette.ink, fontSize: 35, fontWeight: "700", letterSpacing: -1, marginTop: 6 },
-  warning: {
-    backgroundColor: "#f7e6b0",
-    borderRadius: 10,
-    color: "#6b4c00",
-    fontSize: 13,
-    lineHeight: 20,
-    marginTop: 22,
-    padding: 14,
-  },
-});

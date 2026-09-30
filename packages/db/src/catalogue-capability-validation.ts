@@ -5,9 +5,9 @@ import {
   type BatchRecordValidation,
   type BatchValidationPolicy,
   evaluateBatchPolicy,
-  nutrientMappingRevisionDigest,
   type ParserCountEvidence,
-} from "./catalogue-ingestion.js";
+} from "./catalogue-batch-policy.js";
+import { nutrientMappingRevisionDigest } from "./catalogue-ingestion.js";
 import {
   type CatalogueValidationIssue,
   canonicalJson,

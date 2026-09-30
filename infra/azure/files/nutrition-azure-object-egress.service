@@ -1,0 +1,30 @@
+[Unit]
+Description=Quarantine the fixed Nourishing Azure Object Storage bridge
+DefaultDependencies=no
+After=local-fs.target
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/nutrition-tracker/object-egress.py quarantine
+RemainAfterExit=yes
+TimeoutStartSec=75
+TimeoutStopSec=10
+KillMode=control-group
+User=root
+Group=root
+UMask=0077
+RuntimeDirectory=nutrition-tracker
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+ReadWritePaths=/run/nutrition-tracker
+
+[Install]
+WantedBy=multi-user.target
+RequiredBy=docker.service

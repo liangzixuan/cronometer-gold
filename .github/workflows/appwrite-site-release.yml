@@ -3,8 +3,24 @@ name: appwrite-site-release
 on:
   workflow_dispatch:
     inputs:
+      operation:
+        description: Prepare an inactive candidate or activate an independently reviewed candidate
+        type: choice
+        options: [prepare, activate]
+        required: true
+        default: prepare
+      target:
+        description: Target environment
+        type: choice
+        options: [staging, production]
+        required: true
+        default: staging
+      review_artifact_id:
+        description: Same-revision artifact containing signed qualification and comparison receipts
+        type: string
+        required: true
       promote:
-        description: Promote the accepted staging source to production after environment review
+        description: Explicitly authorize this production preparation or activation after environment review
         type: boolean
         required: true
         default: false
@@ -18,10 +34,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  source:
-    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features' && github.event_name == 'workflow_dispatch'
+  release:
+    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features' && github.event_name == 'workflow_dispatch' && (inputs.target == 'staging' || inputs.promote)
+    environment: appwrite-${{ inputs.target }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -35,136 +52,65 @@ jobs:
           node-version: 22.23.2
       - name: Install the locked release tools without lifecycle scripts
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Admit actual completed checks for this exact checkout
+      - name: Build the checked-in shared evidence serializer
+        run: pnpm --filter @nutrition-tracker/contracts build
+      - name: Read only bounded inert review evidence for this exact revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEW_ARTIFACT_ID: ${{ inputs.review_artifact_id }}
+          RELEASE_OPERATION: ${{ inputs.operation }}
+          RELEASE_TARGET: ${{ inputs.target }}
+        run: >-
+          python3 scripts/appwrite/review-artifact.py
+          --artifact-id "$REVIEW_ARTIFACT_ID" --revision "$GITHUB_SHA"
+          --operation "$RELEASE_OPERATION" --target "$RELEASE_TARGET"
+          --out "$RUNNER_TEMP/appwrite-review"
+      - name: Admit actual current source, jobs, browser run and environment review
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm exec tsx scripts/appwrite/github-checks.ts --target staging --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/source-github-evidence.json"
-      - name: Prepare one tracked-source archive
+          RELEASE_TARGET: ${{ inputs.target }}
+        run: >-
+          pnpm exec tsx scripts/appwrite/github-checks.ts
+          --target "$RELEASE_TARGET" --revision "$GITHUB_SHA"
+          --out "$RUNNER_TEMP/release-github-evidence.json"
+      - name: Prepare the exact tracked-source archive without artifact execution
         run: pnpm exec tsx scripts/appwrite/source-artifact.ts prepare --repo . --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/appwrite-source"
-      - name: Retain this run's exact source archive
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: appwrite-source-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/appwrite-source/source.tar.gz
-            ${{ runner.temp }}/appwrite-source/source-artifact.json
-          if-no-files-found: error
-          retention-days: 1
-          compression-level: 0
-
-  staging:
-    needs: source
-    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features' && github.event_name == 'workflow_dispatch'
-    environment: appwrite-staging
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
-        with:
-          version: 11.19.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22.23.2
-      - name: Install the locked release tools without lifecycle scripts
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Download this run's source without executing artifact code
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: appwrite-source-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/appwrite-source
-          digest-mismatch: error
-      - name: Recheck actual source, jobs and browser acceptance before staging
+      - name: Verify qualification and perform the selected bounded phase
+        id: release
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm exec tsx scripts/appwrite/github-checks.ts --target staging --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/staging-github-evidence.json"
-      - name: Require managed-runtime qualification and deploy staging
-        id: release
-        # A concrete managed-runtime/backend verifier must produce this receipt.
-        # It is deliberately absent today: unverified managed Node cannot pass.
-        env:
+          RELEASE_OPERATION: ${{ inputs.operation }}
+          RELEASE_TARGET: ${{ inputs.target }}
           APPWRITE_DEPLOY_KEY: ${{ secrets.APPWRITE_DEPLOY_KEY }}
+          APPWRITE_BACKEND_READINESS_TOKEN: ${{ secrets.APPWRITE_BACKEND_READINESS_TOKEN }}
+          APPWRITE_STAGING_READINESS_TOKEN: ${{ secrets.APPWRITE_STAGING_READINESS_TOKEN }}
           APPWRITE_SITE_ID: ${{ vars.APPWRITE_SITE_ID }}
           APPWRITE_OTHER_SITE_ID: ${{ vars.APPWRITE_OTHER_SITE_ID }}
           WEB_PUBLIC_ORIGIN: ${{ vars.WEB_PUBLIC_ORIGIN }}
           API_INTERNAL_URL: ${{ vars.API_INTERNAL_URL }}
           APPWRITE_BUILD_SPECIFICATION: ${{ vars.APPWRITE_BUILD_SPECIFICATION }}
           APPWRITE_RUNTIME_SPECIFICATION: ${{ vars.APPWRITE_RUNTIME_SPECIFICATION }}
-        run: >-
-          pnpm exec tsx scripts/appwrite/site-release.ts deploy --target staging
-          --artifact "$RUNNER_TEMP/appwrite-source"
-          --github-evidence "$RUNNER_TEMP/staging-github-evidence.json"
-          --qualification "$RUNNER_TEMP/verified-managed-runtime.json"
-          --receipt "$RUNNER_TEMP/staging-receipt.json"
-      - name: Retain the bounded staging success or failure receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=("$RELEASE_OPERATION" --target "$RELEASE_TARGET"
+            --artifact "$RUNNER_TEMP/appwrite-source"
+            --github-evidence "$RUNNER_TEMP/release-github-evidence.json"
+            --qualification "$RUNNER_TEMP/appwrite-review/qualification.json"
+            --receipt "$RUNNER_TEMP/release-receipt.json")
+          if [[ "$RELEASE_OPERATION" == "activate" ]]; then
+            args+=(--candidate-receipt "$RUNNER_TEMP/appwrite-review/candidate-receipt.json")
+          fi
+          if [[ "$RELEASE_TARGET" == "production" ]]; then
+            args+=(--staging-config "$RUNNER_TEMP/appwrite-review/staging-config.json"
+              --staging-receipt "$RUNNER_TEMP/appwrite-review/staging-receipt.json")
+          fi
+          pnpm exec tsx scripts/appwrite/site-release.ts "${args[@]}"
+      - name: Retain bounded phase receipt for independent review or reconciliation
         if: always() && steps.release.outcome != 'skipped' && steps.release.outcome != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: appwrite-staging-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/staging-receipt.json
-          if-no-files-found: error
-          retention-days: 1
-
-  production:
-    needs: [source, staging]
-    if: inputs.promote && github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features' && github.event_name == 'workflow_dispatch'
-    environment: appwrite-production
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
-        with:
-          version: 11.19.0
-      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
-        with:
-          node-version: 22.23.2
-      - name: Install the locked release tools without lifecycle scripts
-        run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Download the same source archive used by staging
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: appwrite-source-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/appwrite-source
-          digest-mismatch: error
-      - name: Download this run's accepted staging receipt
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: appwrite-staging-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/appwrite-staging
-          digest-mismatch: error
-      - name: Verify current configured production review and all exact-source checks
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: pnpm exec tsx scripts/appwrite/github-checks.ts --target production --revision "$GITHUB_SHA" --out "$RUNNER_TEMP/production-github-evidence.json"
-      - name: Require qualification and promote the staging source with a separate hosted build
-        id: release
-        env:
-          APPWRITE_DEPLOY_KEY: ${{ secrets.APPWRITE_DEPLOY_KEY }}
-          APPWRITE_SITE_ID: ${{ vars.APPWRITE_SITE_ID }}
-          APPWRITE_OTHER_SITE_ID: ${{ vars.APPWRITE_OTHER_SITE_ID }}
-          WEB_PUBLIC_ORIGIN: ${{ vars.WEB_PUBLIC_ORIGIN }}
-          API_INTERNAL_URL: ${{ vars.API_INTERNAL_URL }}
-          APPWRITE_BUILD_SPECIFICATION: ${{ vars.APPWRITE_BUILD_SPECIFICATION }}
-          APPWRITE_RUNTIME_SPECIFICATION: ${{ vars.APPWRITE_RUNTIME_SPECIFICATION }}
-        run: >-
-          pnpm exec tsx scripts/appwrite/site-release.ts deploy --target production
-          --artifact "$RUNNER_TEMP/appwrite-source"
-          --github-evidence "$RUNNER_TEMP/production-github-evidence.json"
-          --qualification "$RUNNER_TEMP/verified-managed-runtime.json"
-          --staging-receipt "$RUNNER_TEMP/appwrite-staging/staging-receipt.json"
-          --receipt "$RUNNER_TEMP/production-receipt.json"
-      - name: Retain the bounded production success or failure receipt
-        if: always() && steps.release.outcome != 'skipped' && steps.release.outcome != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: appwrite-production-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/production-receipt.json
+          name: appwrite-${{ inputs.target }}-${{ inputs.operation }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-receipt.json
           if-no-files-found: error
           retention-days: 1

@@ -10,6 +10,7 @@ import {
   type QueryResult,
 } from "kysely";
 import { describe, expect, it } from "vitest";
+import type { BatchValidationPolicy } from "../src/catalogue-batch-policy.js";
 import {
   assertCatalogueValidatePrincipal,
   type PreparedCatalogueValidationRequest,
@@ -18,10 +19,7 @@ import {
   submitCatalogueValidation,
   validateCatalogueValidationPolicy,
 } from "../src/catalogue-capability-validation.js";
-import {
-  type BatchValidationPolicy,
-  nutrientMappingRevisionDigest,
-} from "../src/catalogue-ingestion.js";
+import { nutrientMappingRevisionDigest } from "../src/catalogue-ingestion.js";
 import { canonicalJson, sha256CanonicalJson } from "../src/catalogue-validation.js";
 import type { Database, JsonValue } from "../src/types.js";
 

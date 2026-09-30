@@ -10,6 +10,7 @@ import Fastify, {
 import { type AppConfig, ConfigValidationError, loadConfig } from "./config.js";
 import { registerAuthContext } from "./http/authentication.js";
 import { registerErrorHandling } from "./http/error-handler.js";
+import { registerPublicIngressLimits } from "./http/public-ingress.js";
 import { createLoggerOptions } from "./logging.js";
 import type { ActivityService } from "./modules/activity/activity.routes.js";
 import type { AuthService } from "./modules/auth/auth-service.js";
@@ -63,6 +64,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     logController: new LogController({ disableRequestLogging: true }),
     logger: options.logger ?? createLoggerOptions(config),
     requestIdHeader: false,
+    trustProxy: false,
+    bodyLimit: 1_048_576,
     routerOptions: { ignoreTrailingSlash: true },
   });
 
@@ -98,6 +101,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     );
   });
 
+  registerPublicIngressLimits(app);
   registerAuthContext(app);
   registerErrorHandling(app);
   void app.register(systemRoutes, {

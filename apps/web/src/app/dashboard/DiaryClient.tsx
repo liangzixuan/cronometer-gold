@@ -32,7 +32,6 @@ import {
   diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
-  diaryEntryNoteCharacterCount,
   diaryGroupLabel,
   diaryPagePath,
   diaryRepeatOperationKey,
@@ -73,6 +72,7 @@ import { Icon } from "../ui/Icon";
 import { CalmOverview } from "./CalmOverview";
 import { DailySummary } from "./DailySummary";
 import { DiaryDayNote } from "./DiaryDayNote";
+import { DiaryEntryEditorForm } from "./DiaryEntryEditorForm";
 import { TodayOverviewCards } from "./TodayOverviewCards";
 
 type LoadState = "loading" | "ready" | "error";
@@ -2202,142 +2202,55 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                   {entries.map((entry, entryIndex) => (
                                     <li key={entry.id}>
                                       {editor?.entryId === entry.id ? (
-                                        <div className="entryEditor">
-                                          <label>
-                                            Quantity
-                                            <input
-                                              disabled={entryEditorControlsDisabled}
-                                              inputMode="decimal"
-                                              maxLength={18}
-                                              onChange={(event) =>
-                                                changeEntryEditor({
-                                                  ...editor,
-                                                  quantity: event.target.value,
-                                                })
-                                              }
-                                              value={editor.quantity}
-                                            />
-                                          </label>
-                                          <label>
-                                            Meal
-                                            <select
-                                              disabled={entryEditorControlsDisabled}
-                                              onChange={(event) =>
-                                                changeEntryEditor({
-                                                  ...editor,
-                                                  mealSlot: event.target.value as MealSlot,
-                                                })
-                                              }
-                                              value={editor.mealSlot}
-                                            >
-                                              {diaryGroups.map((groupOption) => (
-                                                <option
-                                                  key={groupOption.mealSlot}
-                                                  value={groupOption.mealSlot}
-                                                >
-                                                  {groupOption.label}
-                                                </option>
-                                              ))}
-                                            </select>
-                                          </label>
-                                          <label>
-                                            Local date
-                                            <input
-                                              disabled={entryEditorControlsDisabled}
-                                              onChange={(event) =>
-                                                changeEntryEditor({
-                                                  ...editor,
-                                                  localDate: event.target.value,
-                                                })
-                                              }
-                                              type="date"
-                                              value={editor.localDate}
-                                            />
-                                          </label>
-                                          <label>
-                                            Local time
-                                            <input
-                                              disabled={entryEditorControlsDisabled}
-                                              onChange={(event) =>
-                                                changeEntryEditor({
-                                                  ...editor,
-                                                  localTime: event.target.value,
-                                                })
-                                              }
-                                              type="time"
-                                              value={editor.localTime}
-                                            />
-                                          </label>
-                                          <label
-                                            className="entryNoteField"
-                                            htmlFor={`entry-note-${entry.id}`}
-                                          >
-                                            Private note
-                                            <textarea
-                                              disabled={entryEditorControlsDisabled}
-                                              aria-describedby={`entry-note-help-${entry.id}`}
-                                              id={`entry-note-${entry.id}`}
-                                              maxLength={4_000}
-                                              onChange={(event) =>
-                                                changeEntryEditor({
-                                                  ...editor,
-                                                  note: event.target.value,
-                                                })
-                                              }
-                                              rows={4}
-                                              value={editor.note}
-                                            />
-                                          </label>
-                                          <small
-                                            className="entryNoteHint"
-                                            id={`entry-note-help-${entry.id}`}
-                                          >
-                                            Clear the field and save to remove this note from the
-                                            current display only. Immutable prior revisions remain
-                                            in your private account export until whole-account
-                                            erasure. Character count:{" "}
-                                            {diaryEntryNoteCharacterCount(editor.note)}
-                                            of 2,000.
-                                          </small>
-                                          <small className="entryTimeHint">
-                                            Changed date and time are interpreted in{" "}
-                                            {editor.originTimeZone}.
-                                          </small>
-                                          <div className="entryActions">
-                                            <button
-                                              aria-label={`Clear note field for ${entryName(entry)}`}
-                                              disabled={
-                                                entryEditorControlsDisabled ||
-                                                editor.note.length === 0
-                                              }
-                                              onClick={() =>
-                                                changeEntryEditor({ ...editor, note: "" })
-                                              }
-                                              type="button"
-                                            >
-                                              Clear field
-                                            </button>
-                                            <button
-                                              aria-label={`Save changes to ${entryName(entry)}`}
-                                              disabled={
-                                                entryEditorControlsDisabled ||
-                                                diary.status === "locked"
-                                              }
-                                              onClick={() => void saveEntry()}
-                                              type="button"
-                                            >
-                                              {mutationBusy === entry.id ? "Saving…" : "Save"}
-                                            </button>
-                                            <button
-                                              aria-label={`Cancel editing ${entryName(entry)}`}
-                                              disabled={entryEditorControlsDisabled}
-                                              onClick={() => changeEntryEditor(null)}
-                                              type="button"
-                                            >
-                                              Cancel
-                                            </button>
-                                          </div>
-                                        </div>
+                                        <DiaryEntryEditorForm
+                                          entryId={entry.id}
+                                          entryName={entryName(entry)}
+                                          editor={editor}
+                                          diaryGroups={diaryGroups}
+                                          entryEditorControlsDisabled={entryEditorControlsDisabled}
+                                          clearDisabled={
+                                            entryEditorControlsDisabled || editor.note.length === 0
+                                          }
+                                          saveDisabled={
+                                            entryEditorControlsDisabled || diary.status === "locked"
+                                          }
+                                          saveLabel={mutationBusy === entry.id ? "Saving…" : "Save"}
+                                          onQuantityChange={(event) =>
+                                            changeEntryEditor({
+                                              ...editor,
+                                              quantity: event.target.value,
+                                            })
+                                          }
+                                          onMealChange={(event) =>
+                                            changeEntryEditor({
+                                              ...editor,
+                                              mealSlot: event.target.value as MealSlot,
+                                            })
+                                          }
+                                          onLocalDateChange={(event) =>
+                                            changeEntryEditor({
+                                              ...editor,
+                                              localDate: event.target.value,
+                                            })
+                                          }
+                                          onLocalTimeChange={(event) =>
+                                            changeEntryEditor({
+                                              ...editor,
+                                              localTime: event.target.value,
+                                            })
+                                          }
+                                          onNoteChange={(event) =>
+                                            changeEntryEditor({
+                                              ...editor,
+                                              note: event.target.value,
+                                            })
+                                          }
+                                          onClearNote={() =>
+                                            changeEntryEditor({ ...editor, note: "" })
+                                          }
+                                          onSave={() => void saveEntry()}
+                                          onCancel={() => changeEntryEditor(null)}
+                                        />
                                       ) : (
                                         <article className="diaryEntry ledgerEntryRow">
                                           <div className="ledgerRowName">

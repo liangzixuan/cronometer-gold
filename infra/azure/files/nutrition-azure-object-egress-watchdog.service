@@ -1,0 +1,21 @@
+[Unit]
+Description=Verify and quarantine Nourishing Azure Object Storage egress drift
+Requisite=nutrition-azure-object-egress.service docker.service
+After=nutrition-azure-object-egress.service docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/nutrition-tracker/object-egress.py watchdog
+TimeoutStartSec=75
+TimeoutStopSec=10
+KillMode=control-group
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+CapabilityBoundingSet=CAP_NET_ADMIN
+ReadWritePaths=/run/nutrition-tracker
