@@ -42,12 +42,23 @@ infra/docker/*
 !infra/docker/object-store.go.sum
 !infra/docker/object-store-modules.json
 !infra/docker/object-store-NOTICES.txt
+!infra/docker/mailpit-build-inputs.json
+!infra/docker/mailpit-NOTICES.txt
+!infra/docker/mailpit-go-licenses.go.mod
+!infra/docker/mailpit-go-licenses.go.sum
+
+# The Mailpit verifier reads only this public license configuration.
+!config/
+config/*
+!config/license-policy.json
 
 # Standard-library-only verifier and its native builder tests.
 !scripts/
 scripts/*
 !scripts/verify-object-store-modules.go
 !scripts/verify-object-store-modules_test.go
+!scripts/verify-mailpit-build.mjs
+!scripts/license-policy.mjs
 
 # Never send local service data or deployment/control-plane implementations.
 .local-data

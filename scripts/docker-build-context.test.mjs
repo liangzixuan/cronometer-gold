@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const supplyChainWorkflow = join(repositoryRoot, ".github/workflows/container-supply-chain.yml");
@@ -63,10 +63,19 @@ const reviewedExposureRules = [
   "!infra/docker/object-store.go.sum",
   "!infra/docker/object-store-modules.json",
   "!infra/docker/object-store-NOTICES.txt",
+  "!infra/docker/mailpit-build-inputs.json",
+  "!infra/docker/mailpit-NOTICES.txt",
+  "!infra/docker/mailpit-go-licenses.go.mod",
+  "!infra/docker/mailpit-go-licenses.go.sum",
+  "!config/",
+  "config/*",
+  "!config/license-policy.json",
   "!scripts/",
   "scripts/*",
   "!scripts/verify-object-store-modules.go",
   "!scripts/verify-object-store-modules_test.go",
+  "!scripts/verify-mailpit-build.mjs",
+  "!scripts/license-policy.mjs",
 ];
 
 const requiredExclusions = [
@@ -363,6 +372,7 @@ test("rejects a companion ignore override for every repository Dockerfile", () =
 
 for (const [workflowPath, expectedSteps] of [
   [supplyChainWorkflow, 5],
+  [join(repositoryRoot, ".github/workflows/mailpit-image.yml"), 2],
   [join(repositoryRoot, ".github/workflows/ci.yml"), 0],
 ]) {
   test(`binds every ${basename(workflowPath)} Buildx action to the literal root context`, () => {
@@ -461,5 +471,43 @@ test("keeps the root Docker context deny-by-default with only reviewed build inp
   for (const exclusion of requiredExclusions) {
     const index = rules.indexOf(exclusion);
     assert.ok(index > finalInclusionIndex, `${exclusion} must remain after every inclusion rule.`);
+  }
+});
+
+test("Mailpit context includes every local COPY input and verifier dependency", () => {
+  const expected = [
+    "config/license-policy.json",
+    "infra/docker/mailpit-NOTICES.txt",
+    "infra/docker/mailpit-build-inputs.json",
+    "infra/docker/mailpit-go-licenses.go.mod",
+    "infra/docker/mailpit-go-licenses.go.sum",
+    "scripts/license-policy.mjs",
+    "scripts/verify-mailpit-build.mjs",
+  ];
+  const dockerfile = readFileSync(join(repositoryRoot, "infra/docker/mailpit.Dockerfile"), "utf8");
+  const copies = logicalInstructions(dockerfile)
+    .filter((line) => /^COPY\s/iu.test(line) && !/^COPY\s+--from(?:=|\s)/iu.test(line))
+    .flatMap((line) => {
+      const operands = shellOperands(line.replace(/^COPY\s+/iu, ""));
+      assert.ok(operands && operands.length >= 2, "Local COPY must have literal source operands.");
+      return operands.slice(0, -1);
+    });
+  assert.deepEqual([...new Set(copies)].sort(), expected);
+  const rules = dockerignoreRules();
+  for (const file of expected) {
+    assert.ok(existsSync(join(repositoryRoot, file)), `${file} must exist in the source tree.`);
+    assert.ok(rules.includes(`!${file}`), `${file} must be an exact Docker context inclusion.`);
+  }
+  for (const file of expected.filter((path) => path.endsWith(".mjs"))) {
+    const source = readFileSync(join(repositoryRoot, file), "utf8");
+    for (const match of source.matchAll(/(?:from\s+|new URL\()["'](\.\.?\/[^"']+)["']/gu)) {
+      const dependency = repositoryPath(
+        fileURLToPath(new URL(match[1], pathToFileURL(join(repositoryRoot, file)))),
+      );
+      assert.ok(
+        expected.includes(dependency),
+        `${file} requires an unreviewed context input: ${dependency}`,
+      );
+    }
   }
 });
