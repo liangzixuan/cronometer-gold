@@ -14,6 +14,7 @@
     "check": "pnpm format:check && pnpm manifests:check && pnpm lint && pnpm mobile:check && pnpm typecheck && pnpm test",
     "db:migrate": "dotenv -e .env -- pnpm --filter @nutrition-tracker/db db:migrate",
     "dev": "node scripts/run-local-development.mjs",
+    "dev:hosted-web": "node scripts/run-hosted-web-development.mjs",
     "dev:api": "node scripts/run-local-development.mjs --api-only",
     "dev:localstack": "python3 -B infra/localstack/dev-profile.py run",
     "format": "biome check --write .",

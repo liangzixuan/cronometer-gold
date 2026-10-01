@@ -96,6 +96,7 @@ export async function proxyCredentials(
       headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify(credentials),
       cache: "no-store",
+      redirect: "error",
       signal: request.signal,
     });
   } catch {
@@ -140,6 +141,7 @@ export async function proxyLogout(request: Request): Promise<Response> {
         method: "POST",
         headers: { authorization: `Bearer ${token}` },
         cache: "no-store",
+        redirect: "error",
         signal: request.signal,
       });
     } catch {

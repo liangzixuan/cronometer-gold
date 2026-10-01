@@ -3,6 +3,11 @@
 Read `docs/product/build-plan.md` and `docs/quality/development-workflow.md` before
 continuing a milestone. Keep applicable review, validation and release gates.
 Work in the WSL Linux-filesystem checkout and preserve unrelated user changes.
+The scoped Windows Next.js frontend and contracts profile is an exception only
+under the hosted web development runbook (docs/quality/hosted-web-development.md),
+after its toolchain, HTTPS and owned-process qualification. Keep full-stack,
+backend and native-release work in WSL; never build in OneDrive or UNC paths.
+This exception does not establish current Windows runtime or hosted acceptance.
 
 ## Standing commit and push authorization
 

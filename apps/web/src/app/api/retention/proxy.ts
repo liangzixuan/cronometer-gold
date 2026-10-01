@@ -1,6 +1,7 @@
 import { isSupportedTimeZone, parseDiaryMutation } from "../../../lib/diary";
 import {
   authenticatedFetch,
+  credentialCookieName,
   isTrustedMutationRequest,
   PRIVATE_RESPONSE_HEADERS,
   privateJsonError,
@@ -66,11 +67,11 @@ function pendingErasureCookie(operationId: string, recentAuth: string): string {
   }
   const maxAge = 24 * 60 * 60;
   const expires = new Date(Date.now() + maxAge * 1_000);
-  return `${ERASURE_PENDING_COOKIE}=${operationId}.${recentAuth}.${Date.now()}; Path=${ERASURE_PENDING_PATH}; Max-Age=${maxAge}; Expires=${expires.toUTCString()}; HttpOnly; Secure; SameSite=Strict`;
+  return `${credentialCookieName(ERASURE_PENDING_COOKIE)}=${operationId}.${recentAuth}.${Date.now()}; Path=${ERASURE_PENDING_PATH}; Max-Age=${maxAge}; Expires=${expires.toUTCString()}; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function clearedPendingErasureCookie(): string {
-  return `${ERASURE_PENDING_COOKIE}=; Path=${ERASURE_PENDING_PATH}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
+  return `${credentialCookieName(ERASURE_PENDING_COOKIE)}=; Path=${ERASURE_PENDING_PATH}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function readPendingErasure(
@@ -84,8 +85,8 @@ function readPendingErasure(
   const values = cookie
     .split(";")
     .map((part) => part.trim())
-    .filter((part) => part.startsWith(`${ERASURE_PENDING_COOKIE}=`))
-    .map((part) => part.slice(ERASURE_PENDING_COOKIE.length + 1));
+    .filter((part) => part.startsWith(`${credentialCookieName(ERASURE_PENDING_COOKIE)}=`))
+    .map((part) => part.slice(credentialCookieName(ERASURE_PENDING_COOKIE).length + 1));
   if (values.length === 0) return { state: "absent" };
   if (values.length !== 1) return { state: "invalid" };
   const match = /^([0-9a-f-]{36})\.([A-Za-z0-9_-]{43,128})\.([0-9]{13})$/iu.exec(values[0] ?? "");
@@ -117,11 +118,11 @@ function erasureStatusCookie(jobId: string, token: string, expiresAt: string): s
     throw new TypeError("The erasure status capability expiry was invalid.");
   }
   const seconds = Math.max(1, Math.floor((expiry.getTime() - Date.now()) / 1_000));
-  return `${ERASURE_STATUS_COOKIE}=${jobId}.${token}.${expiry.getTime()}; Path=${ERASURE_STATUS_PATH}; Max-Age=${seconds}; Expires=${expiry.toUTCString()}; HttpOnly; Secure; SameSite=Strict`;
+  return `${credentialCookieName(ERASURE_STATUS_COOKIE)}=${jobId}.${token}.${expiry.getTime()}; Path=${ERASURE_STATUS_PATH}; Max-Age=${seconds}; Expires=${expiry.toUTCString()}; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function clearedErasureStatusCookie(): string {
-  return `${ERASURE_STATUS_COOKIE}=; Path=${ERASURE_STATUS_PATH}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
+  return `${credentialCookieName(ERASURE_STATUS_COOKIE)}=; Path=${ERASURE_STATUS_PATH}; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
 }
 
 function readErasureStatusCapability(
@@ -135,7 +136,11 @@ function readErasureStatusCapability(
   const values: string[] = [];
   for (const part of cookie.split(";")) {
     const separator = part.indexOf("=");
-    if (separator < 0 || part.slice(0, separator).trim() !== ERASURE_STATUS_COOKIE) continue;
+    if (
+      separator < 0 ||
+      part.slice(0, separator).trim() !== credentialCookieName(ERASURE_STATUS_COOKIE)
+    )
+      continue;
     values.push(part.slice(separator + 1).trim());
   }
   if (values.length === 0) return { state: "absent" };
@@ -164,6 +169,7 @@ async function erasureCapabilityFetch(
     return await fetch(new URL(upstreamPath, base), {
       headers: { accept: "application/json", "x-erasure-status-token": token },
       cache: "no-store",
+      redirect: "error",
       signal: request.signal,
     });
   } catch {

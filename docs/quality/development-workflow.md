@@ -104,7 +104,13 @@ Automatic hosted audit evidence is recorded separately.
 
 ## Reliable command and evidence capture
 
-Run application commands in the Linux checkout. Prefer direct WSL arguments for
+Run application commands in the Linux checkout. The separately reviewed
+[hosted web development profile](hosted-web-development.md) is the bounded
+exception for a qualified Windows Next.js frontend checkout. Its frozen install,
+frontend checks, HTTPS trust and owned-process lifecycle need native Windows
+evidence before use; it does not authorize Windows backend or native release
+builds. Keep Linux CI/integration and all other application commands in WSL.
+Prefer direct WSL arguments for
 simple operations, or one reviewed Bash script for a multi-step sequence. Avoid
 rebuilding nested PowerShell/Bash/Node quoting for every integration run. Reuse
 the tracked runners before inventing another wrapper.

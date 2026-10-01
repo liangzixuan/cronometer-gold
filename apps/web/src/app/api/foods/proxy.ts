@@ -37,7 +37,7 @@ export async function proxyFoodGet<T>(input: ProxyFoodGetInput<T>): Promise<Resp
       input.request.url,
       input.upstreamPath,
       input.allowedQueryFields,
-      apiBase.href,
+      apiBase.origin,
     );
   } catch {
     return jsonError(400, "The food-search request is invalid.");
@@ -49,6 +49,7 @@ export async function proxyFoodGet<T>(input: ProxyFoodGetInput<T>): Promise<Resp
       method: "GET",
       headers: { accept: "application/json" },
       cache: "no-store",
+      redirect: "error",
       signal: input.request.signal,
     });
   } catch {

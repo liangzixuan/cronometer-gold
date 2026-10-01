@@ -14,3 +14,4 @@ export * from "./recipe-ingredient-lines.js";
 export * from "./recipes.js";
 export * from "./reports.js";
 export * from "./retention.js";
+export * from "./web-development-profile.js";

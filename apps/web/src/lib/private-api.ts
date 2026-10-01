@@ -1,3 +1,10 @@
+import {
+  assertWebApiProfile,
+  HOSTED_DEVELOPMENT_PROFILE,
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+  webCredentialCookieName,
+} from "@nutrition-tracker/contracts";
+
 import { DIARY_CURSOR_MAX_LENGTH, DIARY_PAGE_SIZE, isLocalDate, isUuid } from "./diary";
 
 export const SESSION_COOKIE = "__Host-nutrition_session";
@@ -13,6 +20,7 @@ const IDEMPOTENCY_KEY =
 const ETAG = /^(?:W\/)?"[0-9]+"$/u;
 
 export function resolvePrivateApiBase(value: string | undefined): URL {
+  assertWebApiProfile(value, process.env.NOURISHING_WEB_PROFILE);
   const base = new URL(value?.trim() || "http://127.0.0.1:4000");
   const local = base.hostname === "127.0.0.1" || base.hostname === "localhost";
   if (
@@ -28,8 +36,19 @@ export function resolvePrivateApiBase(value: string | undefined): URL {
   return base;
 }
 
+export function credentialCookieName(name: string): string {
+  return webCredentialCookieName(name, process.env.NOURISHING_WEB_PROFILE);
+}
+
 export function requestOrigin(request: Request): string {
   const configured = process.env.WEB_PUBLIC_ORIGIN?.trim();
+  if (
+    process.env.NOURISHING_WEB_PROFILE !== undefined &&
+    (process.env.NOURISHING_WEB_PROFILE !== HOSTED_DEVELOPMENT_PROFILE ||
+      configured !== HOSTED_DEVELOPMENT_WEB_ORIGIN)
+  ) {
+    throw new TypeError("Hosted development requires its exact local HTTPS web origin.");
+  }
   if (!configured) {
     if (process.env.NODE_ENV === "production") {
       throw new TypeError("WEB_PUBLIC_ORIGIN is required in production.");
@@ -76,7 +95,7 @@ export function readSessionToken(request: Request): string | null {
     const separator = part.indexOf("=");
     if (separator < 0) continue;
     const name = part.slice(0, separator).trim();
-    if (name !== SESSION_COOKIE) continue;
+    if (name !== credentialCookieName(SESSION_COOKIE)) continue;
     const value = part.slice(separator + 1).trim();
     return TOKEN.test(value) ? value : null;
   }
@@ -92,11 +111,11 @@ export function sessionCookie(token: string, expiresAt: string): string {
   if (remainingSeconds < 1 || remainingSeconds > 60 * 60 * 24 * 31) {
     throw new RangeError("The access-token expiry is outside the accepted lifetime.");
   }
-  return `${SESSION_COOKIE}=${token}; Path=/; Max-Age=${remainingSeconds}; Expires=${expiry.toUTCString()}; HttpOnly; Secure; SameSite=Strict`;
+  return `${credentialCookieName(SESSION_COOKIE)}=${token}; Path=/; Max-Age=${remainingSeconds}; Expires=${expiry.toUTCString()}; HttpOnly; Secure; SameSite=Strict`;
 }
 
 export function clearedSessionCookie(): string {
-  return `${SESSION_COOKIE}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
+  return `${credentialCookieName(SESSION_COOKIE)}=; Path=/; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; HttpOnly; Secure; SameSite=Strict`;
 }
 
 export function privateJsonError(status: number, error: string, code?: string): Response {

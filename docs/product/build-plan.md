@@ -158,6 +158,14 @@ retains earlier boundaries. A successful successor never changes an older result
 
 ### High-priority October workstream: Windows frontend and hosted development backend
 
+The first source layer is the explicit Next.js/BFF profile documented in
+[hosted web development](../quality/hosted-web-development.md). It reserves the
+development API origin, uses local HTTPS and origin-bound credential cookies,
+and starts no backend. Its source checks, Windows runtime qualification and
+actual hosted journeys are separate acceptance steps. The reserved host remains
+unprovisioned. Expo follows after native identity, persisted sessions/outbox/
+erasure state and redirect behavior are isolated by API origin.
+
 The user selected this workstream as a high priority for the October launch.
 Develop and review the Next.js and Expo frontends on Windows against a hosted,
 isolated development backend that remains available independently of this PC.

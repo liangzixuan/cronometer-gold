@@ -1,3 +1,5 @@
+import { assertWebApiProfile } from "@nutrition-tracker/contracts";
+
 export const foodSearchIntents = ["all", "generic", "branded"] as const;
 
 export type FoodSearchIntent = (typeof foodSearchIntents)[number];
@@ -293,6 +295,7 @@ export function isInvalidBarcodeResponse(status: number): boolean {
 }
 
 export function resolveInternalApiBase(configuredValue?: string): URL {
+  assertWebApiProfile(configuredValue, process.env.NOURISHING_WEB_PROFILE);
   const base = new URL(configuredValue?.trim() || "http://127.0.0.1:4000");
   const isLoopback = base.hostname === "127.0.0.1" || base.hostname === "localhost";
   if (
