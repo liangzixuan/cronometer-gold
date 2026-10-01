@@ -40,12 +40,13 @@ COPY infra/docker/mailpit-go-licenses.go.sum /license-tool/go.sum
 COPY --from=frontend /src/server/ui/dist/ /src/server/ui/dist/
 RUN set -eux; \
     sha256sum go.mod go.sum /license-tool/go.mod /license-tool/go.sum > /out/manifests.sha256; \
-    go mod download all; go mod verify; \
-    go list -m -f '{{.Path}} {{.Version}}' all > /out/mailpit-modules.txt; \
-    go list -deps -f '{{.ImportPath}}' . > /out/mailpit-imports.txt; \
-    cd /license-tool; go mod download all; go mod verify; \
-    go list -m -f '{{.Path}} {{.Version}}' all > /out/tool-modules.txt; \
-    go list -deps -f '{{.ImportPath}}' . > /out/tool-imports.txt; \
+    go list -mod=readonly -m -f '{{.Path}} {{.Version}}' all > /out/mailpit-modules.txt; \
+    go list -mod=readonly -deps -f '{{.ImportPath}}' . > /out/mailpit-imports.txt; \
+    go mod verify; \
+    cd /license-tool; \
+    go list -mod=readonly -m -f '{{.Path}} {{.Version}}' all > /out/tool-modules.txt; \
+    go list -mod=readonly -deps -f '{{.ImportPath}}' . > /out/tool-imports.txt; \
+    go mod verify; \
     cd /src; sha256sum -c /out/manifests.sha256
 
 FROM frontend AS graph-admission

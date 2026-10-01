@@ -171,8 +171,28 @@ test("frozen Go graphs are admitted before the license tool or Mailpit executes"
   assert.ok(
     docker.indexOf("FROM go-inputs AS build") > docker.indexOf("verify-mailpit-build.mjs graph"),
   );
-  assert.ok(docker.includes("go mod download all; go mod verify"));
-  assert.ok(docker.includes("sha256sum -c /out/manifests.sha256"));
+  const collector = docker.slice(
+    docker.indexOf("sha256sum go.mod go.sum /license-tool/go.mod /license-tool/go.sum"),
+    docker.indexOf("FROM frontend AS graph-admission"),
+  );
+  const commands = [
+    "sha256sum go.mod go.sum /license-tool/go.mod /license-tool/go.sum > /out/manifests.sha256",
+    "go list -mod=readonly -m -f '{{.Path}} {{.Version}}' all > /out/mailpit-modules.txt",
+    "go list -mod=readonly -deps -f '{{.ImportPath}}' . > /out/mailpit-imports.txt",
+    "go mod verify;",
+    "cd /license-tool;",
+    "go list -mod=readonly -m -f '{{.Path}} {{.Version}}' all > /out/tool-modules.txt",
+    "go list -mod=readonly -deps -f '{{.ImportPath}}' . > /out/tool-imports.txt",
+    "go mod verify;",
+    "cd /src; sha256sum -c /out/manifests.sha256",
+  ];
+  let cursor = 0;
+  for (const command of commands) {
+    const offset = collector.indexOf(command, cursor);
+    assert.ok(offset >= cursor, `missing or unordered frozen Go command: ${command}`);
+    cursor = offset + command.length;
+  }
+  assert.doesNotMatch(collector, /go mod download/u);
   assert.ok(
     docker.includes("-ldflags='-s -w -X github.com/axllent/mailpit/config.Version=v1.31.3'"),
   );
