@@ -407,3 +407,46 @@ only those seven components by immutable digest; the upstream Meilisearch lock
 is provenance input, not a deployment reference, and the Node-runtime artifact
 remains transitive build evidence rather than a Compose service. Promotion or
 rollback is a separate, explicitly authorized operation.
+
+
+## Mailpit source-built image
+
+The dedicated `mailpit-image.yml` producer builds unmodified Mailpit v1.31.3 at
+`ae3d9e20e410bf2af1c1b7292bc3b8491b41b30a` for native Linux ARM64. Its automatic
+push filter covers the exact Dockerfile, source/dependency/license contracts,
+verification scripts and their tests. Host-only changes do not republish it.
+The upstream commit is unsigned. Archive checksums and frozen input maps identify
+its source; later project signatures identify this repository's build workflow.
+
+The image uses the upstream npm and Go manifests unchanged. npm installation
+ignores scripts, validates the complete 360-entry mature lock, checks installed
+native optional artifacts against authenticated archive bytes, and runs the
+ordinary current npm audit. The upstream frontend build and an equivalent
+esbuild metadata build must produce identical bytes. Their 28 direct package
+inputs are not a complete count of RapiDoc's prebundled dependencies. RapiDoc's
+supplied generated notices are preserved; its incomplete source map is not used
+to infer missing redistribution or exact embedded dependency versions.
+
+The established go-licenses v2.0.1 tool has separate frozen manifests with the
+minimum fixed x/text v0.39.0 and its required MVS closure. This changes only the
+build tool's dependencies. Both complete selected module graphs and production
+import graphs are checked before tool compilation. The generated Go notice
+report must match the reviewed nonempty 56-entry content. The image retains the
+Go toolchain license, supplied browser license/copyright texts and exact
+unmodified ical.js source archive for MPL source availability. Three exact,
+expiring Mailpit license exceptions use the existing evaluator without changing
+application policy or its unconditional deny list.
+
+The publisher checks the complete binary module inventory, BuildKit provenance
+and SBOM, current Trivy 0.74.0 OS/library findings with an empty ignore file,
+project Cosign signatures and same-source GitHub provenance before creating an
+immutable commit tag. Zero HIGH/CRITICAL findings are required, including unfixed
+findings. The known OpenPGP import exclusion is evidence about the Go package
+graph; it is not a scanner waiver or a substitute for actual image coverage.
+
+Local qualification established equal frontend assets and a strict scan of an
+actual ARM64 Mailpit binary. It did not build or qualify this final image.
+The image uses an explicit nonroot scratch runtime. Captured-only mail behavior
+still requires a separately reviewed development SMTP endpoint, internal network
+isolation, outbound configuration rejection and actual runtime probes. This
+image producer does not provision that runtime or establish hosted acceptance.
