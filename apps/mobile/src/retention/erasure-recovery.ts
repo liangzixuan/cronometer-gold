@@ -1,3 +1,4 @@
+import { mobileFetch } from "../api/mobile-fetch";
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import type { PendingErasureEnvelope } from "./pending-erasure";
 import { parseErasureResponse } from "./retention";
@@ -8,7 +9,7 @@ export async function submitPendingErasure(
     readonly accessToken: string;
     readonly pending: PendingErasureEnvelope;
   },
-  fetcher: (url: string, init?: RequestInit) => Promise<Response> = fetch,
+  fetcher: (url: string, init?: RequestInit) => Promise<Response> = mobileFetch,
 ) {
   let response: Response;
   try {

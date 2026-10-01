@@ -36,11 +36,28 @@ const removedPermissions = mergedPermissions
   .map((permission) => permission.$?.["android:name"])
   .sort();
 
-if (config.ios?.bundleIdentifier !== "com.nutritionledger.app") {
-  failures.push("iOS bundle identifier still uses the example namespace");
+const expectedProfile =
+  process.env.EXPO_PUBLIC_NOURISHING_PROFILE === "hosted-development"
+    ? "hosted-development"
+    : "ordinary";
+const expectedId =
+  expectedProfile === "hosted-development"
+    ? "com.nutritionledger.app.development"
+    : "com.nutritionledger.app";
+if (config.extra?.mobileProfile?.name !== expectedProfile)
+  failures.push("Native config must select the requested mobile profile");
+if (
+  expectedProfile === "hosted-development" &&
+  config.extra?.mobileProfile?.apiOrigin !== "https://dev-api.nourishing.app"
+)
+  failures.push("Hosted development must retain its exact API origin");
+if (config.extra?.eas?.projectId !== "14022636-ab56-468c-94f6-d6106addde42")
+  failures.push("The registered Expo project identity must remain unchanged");
+if (config.ios?.bundleIdentifier !== expectedId) {
+  failures.push("iOS bundle identifier must match the selected mobile profile");
 }
-if (config.android?.package !== "com.nutritionledger.app") {
-  failures.push("Android package still uses the example namespace");
+if (config.android?.package !== expectedId) {
+  failures.push("Android package must match the selected mobile profile");
 }
 if (config.newArchEnabled !== true)
   failures.push("Native health modules require the new architecture");

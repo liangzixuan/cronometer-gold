@@ -214,25 +214,7 @@ export function isExactBarcode(value: string): boolean {
   return BARCODE.test(value);
 }
 
-export function resolveMobileApiBase(
-  configuredValue: string | undefined,
-  platform: "android" | "ios" | "web",
-): URL {
-  const localDefault = platform === "android" ? "http://10.0.2.2:4000" : "http://127.0.0.1:4000";
-  const base = new URL(configuredValue?.trim() || localDefault);
-  const isLocalHost = ["127.0.0.1", "localhost", "10.0.2.2"].includes(base.hostname);
-  if (
-    (base.protocol !== "https:" && !(base.protocol === "http:" && isLocalHost)) ||
-    base.username !== "" ||
-    base.password !== "" ||
-    base.search !== "" ||
-    base.hash !== "" ||
-    (base.pathname !== "/" && base.pathname !== "")
-  ) {
-    throw new TypeError("EXPO_PUBLIC_API_URL must be a safe API origin.");
-  }
-  return base;
-}
+export { resolveMobileApiBase } from "../config/mobile-profile";
 
 function searchParameters(
   query: string,

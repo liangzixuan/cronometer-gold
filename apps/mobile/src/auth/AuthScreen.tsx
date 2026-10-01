@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, jsonBody, responseError } from "../api/private-api";
 import { isSupportedTimeZone, parseAuthResponse, type SessionSummary } from "../diary/diary";
@@ -84,7 +85,7 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
     setError(false);
     setMessage(mode === "login" ? "Signing in…" : "Creating your account…");
     try {
-      const response = await fetch(apiUrl(apiBase, `/v1/auth/${mode}`).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, `/v1/auth/${mode}`).toString(), {
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({

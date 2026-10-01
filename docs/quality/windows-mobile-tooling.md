@@ -31,6 +31,10 @@ is a synthetic, unavailable destination for finite tooling proofs.
 `https://dev-api.nourishing.app` is the reserved development destination; its
 presence in this allowlist does not establish a provisioned or isolated backend.
 Production, loopback, alternate origins and implicit defaults are rejected.
+The reserved development origin also requires
+`EXPO_PUBLIC_NOURISHING_PROFILE=hosted-development`; omitting that selector fails
+before Expo starts. The synthetic qualification origin uses the ordinary profile.
+
 
 ```powershell
 $env:NOURISHING_POWERSHELL = (Get-Command pwsh.exe -CommandType Application).Source
@@ -108,3 +112,47 @@ complete output and whole-job settlement. Keep earlier direct-CLI evidence under
 its original scope. This proves finite tooling only; it does not accept a running
 Windows mobile frontend, persisted-session/API-origin isolation, a hosted API,
 personal devices or release artifacts.
+
+
+## Mobile origin and native identity
+
+For the isolated development profile, set both public values explicitly:
+
+```powershell
+$env:EXPO_PUBLIC_NOURISHING_PROFILE = 'hosted-development'
+$env:EXPO_PUBLIC_API_URL = 'https://dev-api.nourishing.app'
+pnpm --filter @nutrition-tracker/mobile config:check
+pnpm --filter @nutrition-tracker/mobile build
+```
+
+Dynamic Expo configuration selects `Nutrition Tracker Development` and
+`com.nutritionledger.app.development` for both native platforms. The slug and
+registered Expo project `14022636-ab56-468c-94f6-d6106addde42` remain unchanged.
+Ordinary configuration retains `com.nutritionledger.app`. The development
+selector rejects production/preview intent and EAS build profiles before process
+creation or configuration acceptance; this work does not add an EAS profile or
+select signing credentials. Keep the existing release gates.
+
+App bootstrap validates and freezes one API origin before reading protected
+state. Every origin, including ordinary HTTPS and local origins, has a separate
+SecureStore namespace, hardware signing alias and notification ownership marker.
+The namespace covers sessions, diary outboxes, erasure requests and capabilities,
+cleanup journals, health-device state, health journals and reminder ledgers.
+Changing the API origin requires an app restart and starts with that origin's
+state. Existing unqualified keys, signing aliases and reminders remain untouched;
+they are not adopted, replayed or deleted by the new profile.
+
+All mobile requests use the pinned `expo/fetch` implementation with an exact
+origin check, redirect denial and ambient cookies omitted. Explicit authorization
+and erasure capabilities stay in their existing request headers. There is no
+production, local or alternate-host fallback. The reserved host remains
+unprovisioned until separately qualified.
+
+Native configuration records the signing alias policy and an exact alias when
+an API origin is supplied. When an ordinary config has no explicit origin, its
+runtime default depends on the platform, so the config does not claim one alias.
+Configuration/export proves source selection only. It cannot attest which app is
+installed or establish native SecureStore, hardware-key or redirect behavior.
+Actual isolated app installation, Android/iOS redirect refusal without credential
+forwarding, device lifecycle, hosted journeys and release acceptance remain
+separate requirements. Interactive Windows Metro is still unsupported.

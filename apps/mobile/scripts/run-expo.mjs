@@ -36,6 +36,27 @@ function assertReviewedExpoInvocation(arguments_) {
   }
 }
 
+function validateExpoProfile(environment) {
+  const profile = environment.EXPO_PUBLIC_NOURISHING_PROFILE;
+  if (profile === undefined && environment.EXPO_PUBLIC_API_URL === "https://dev-api.nourishing.app")
+    throw new TypeError("The reserved development origin requires its explicit mobile profile.");
+  if (
+    profile !== undefined &&
+    (profile !== "hosted-development" ||
+      environment.EXPO_PUBLIC_API_URL !== "https://dev-api.nourishing.app")
+  ) {
+    throw new TypeError("Hosted development requires its exact selector and API origin.");
+  }
+  if (
+    profile === "hosted-development" &&
+    (environment.EAS_BUILD === "true" ||
+      environment.EAS_BUILD_PROFILE !== undefined ||
+      ["production", "preview"].includes(environment.EAS_ENVIRONMENT))
+  ) {
+    throw new TypeError("Hosted development is not an approved native build or release profile.");
+  }
+}
+
 export function resolveExpoCli(dependencies = {}) {
   const requireMobile = createRequire(resolve(mobileDirectory, "package.json"));
   const manifest =
@@ -116,6 +137,8 @@ export function prepareWindowsExpo(arguments_, dependencies = {}) {
     throw new TypeError("Windows Expo refuses runtime injection, offline and validation bypasses.");
   }
   const apiOrigin = own.get("EXPO_PUBLIC_API_URL");
+  const profile = own.get("EXPO_PUBLIC_NOURISHING_PROFILE");
+  validateExpoProfile(Object.fromEntries(own));
   if (
     !["https://dev-api.nourishing.app", "https://native-qualification.invalid"].includes(apiOrigin)
   ) {
@@ -160,6 +183,7 @@ export function prepareWindowsExpo(arguments_, dependencies = {}) {
     EXPO_NO_DEPENDENCY_VALIDATION: "0",
     EXPO_NO_NEW_ARCH_COMPAT_CHECK: "0",
     EXPO_PUBLIC_API_URL: apiOrigin,
+    ...(profile === undefined ? {} : { EXPO_PUBLIC_NOURISHING_PROFILE: profile }),
   });
   return {
     executable,
@@ -184,6 +208,7 @@ export async function readExpoNativeConfig(dependencies = {}) {
     const result = await executeWindowsExpo(arguments_, dependencies);
     return JSON.parse(result.stdout);
   }
+  validateExpoProfile(dependencies.environment ?? process.env);
   (dependencies.mkdir ?? mkdirSync)(expoHome, { recursive: true });
   const result = (dependencies.spawnSync ?? spawnSync)(
     dependencies.execPath ?? process.execPath,
@@ -401,6 +426,7 @@ export async function runExpo(arguments_ = [], dependencies = {}) {
     }
     return;
   }
+  validateExpoProfile(dependencies.environment ?? process.env);
   const expoEntry = resolveExpoCli(dependencies);
   const mkdir = dependencies.mkdir ?? mkdirSync;
   mkdir(expoHome, { recursive: true });

@@ -717,3 +717,8 @@ describe("actual native pasted ingredient review lifecycle", () => {
     }
   });
 });
+
+// Keep the existing component fixture; origin isolation has separate integration tests.
+vi.mock("../api/mobile-fetch", () => ({
+  mobileFetch: (input: string | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));

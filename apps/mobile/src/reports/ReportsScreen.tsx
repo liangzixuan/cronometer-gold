@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { localDateInTimeZone } from "../diary/diary";
@@ -236,7 +237,7 @@ export function ReportsScreen({
       clearSnapshot();
       setMessage(`Loading ${requested.from} through ${requested.to}…`);
       try {
-        const response = await fetch(
+        const response = await mobileFetch(
           apiUrl(
             new URL(scope.apiBase),
             nutritionReportPath(requested.from, requested.to),

@@ -1612,3 +1612,9 @@ describe("native hydration draft boundary regressions", () => {
     }
   });
 });
+
+// Feature lifecycle fixtures retain their existing synthetic transport. The
+// real origin and native transport boundary is covered by mobile-profile tests.
+vi.mock("../src/api/mobile-fetch", () => ({
+  mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
+}));

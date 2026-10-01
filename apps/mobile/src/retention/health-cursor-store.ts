@@ -1,3 +1,4 @@
+import { profileSecureStore } from "../storage/profile-secure-store";
 import type { HealthPlatform } from "./device-signing";
 import { decodeStandardBase64 } from "./device-signing";
 import {
@@ -345,13 +346,7 @@ async function writeState(
 }
 
 async function secureStoreAdapter(): Promise<ProtectedJournalKeyValue> {
-  const SecureStore = await import("expo-secure-store");
-  const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
-  return {
-    get: (key) => SecureStore.getItemAsync(key, options),
-    set: (key, value) => SecureStore.setItemAsync(key, value, options),
-    delete: (key) => SecureStore.deleteItemAsync(key, options),
-  };
+  return profileSecureStore();
 }
 
 async function nativeRuntime(): Promise<HealthJournalRuntime> {

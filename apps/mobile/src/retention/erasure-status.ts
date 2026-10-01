@@ -1,3 +1,5 @@
+import { profileSecureStore } from "../storage/profile-secure-store";
+
 const KEY = "nutrition-tracker.erasure-status-capability.v1";
 const TOKEN = /^[A-Za-z0-9_-]{43,128}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -48,12 +50,11 @@ export function parseErasureStatusCapability(raw: string): ErasureStatusCapabili
 }
 
 async function secureKeyValue(): Promise<ErasureCapabilityKeyValue> {
-  const SecureStore = await import("expo-secure-store");
-  const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
+  const storage = await profileSecureStore();
   return {
-    get: () => SecureStore.getItemAsync(KEY, options),
-    set: (value) => SecureStore.setItemAsync(KEY, value, options),
-    delete: () => SecureStore.deleteItemAsync(KEY, options),
+    get: () => storage.get(KEY),
+    set: (value) => storage.set(KEY, value),
+    delete: () => storage.delete(KEY),
   };
 }
 

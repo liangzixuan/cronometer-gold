@@ -1,3 +1,5 @@
+import { profileSecureStore } from "../storage/profile-secure-store";
+
 const LEGACY_CLEANUP_KEY = "nutrition-tracker.private-cleanup.v1";
 const CLEANUP_KEY = "nutrition-tracker.private-cleanup.v2";
 
@@ -96,30 +98,27 @@ export function parsePendingPrivateCleanup(value: string): PendingPrivateCleanup
 export function createSecurePrivateCleanupStore(): PrivateCleanupStore {
   return {
     async load() {
-      const SecureStore = await import("expo-secure-store");
-      const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
-      const current = await SecureStore.getItemAsync(CLEANUP_KEY, options);
+      const storage = await profileSecureStore();
+      const current = await storage.get(CLEANUP_KEY);
       if (current !== null) return parsePendingPrivateCleanup(current);
-      const legacy = await SecureStore.getItemAsync(LEGACY_CLEANUP_KEY, options);
+      const legacy = await storage.get(LEGACY_CLEANUP_KEY);
       if (legacy === null) return null;
       const migrated = parsePendingPrivateCleanup(legacy);
-      await SecureStore.setItemAsync(CLEANUP_KEY, JSON.stringify(migrated), options);
-      await SecureStore.deleteItemAsync(LEGACY_CLEANUP_KEY, options);
+      await storage.set(CLEANUP_KEY, JSON.stringify(migrated));
+      await storage.delete(LEGACY_CLEANUP_KEY);
       return migrated;
     },
     async save(value) {
-      const SecureStore = await import("expo-secure-store");
-      const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
+      const storage = await profileSecureStore();
       const parsed = parsePendingPrivateCleanup(JSON.stringify(value));
-      await SecureStore.setItemAsync(CLEANUP_KEY, JSON.stringify(parsed), options);
-      await SecureStore.deleteItemAsync(LEGACY_CLEANUP_KEY, options);
+      await storage.set(CLEANUP_KEY, JSON.stringify(parsed));
+      await storage.delete(LEGACY_CLEANUP_KEY);
     },
     async clear() {
-      const SecureStore = await import("expo-secure-store");
-      const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
+      const storage = await profileSecureStore();
       const results = await Promise.allSettled([
-        SecureStore.deleteItemAsync(CLEANUP_KEY, options),
-        SecureStore.deleteItemAsync(LEGACY_CLEANUP_KEY, options),
+        storage.delete(CLEANUP_KEY),
+        storage.delete(LEGACY_CLEANUP_KEY),
       ]);
       if (results.some((result) => result.status === "rejected")) {
         throw new Error("The private-cleanup marker could not be fully removed.");

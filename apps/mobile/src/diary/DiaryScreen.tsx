@@ -13,8 +13,8 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
 import { parseActivityDay } from "../activity/activity";
+import { mobileFetch } from "../api/mobile-fetch";
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { parseHydrationDay } from "../hydration/hydration";
 import { palette } from "../theme";
@@ -461,7 +461,7 @@ export function DiaryScreen({
       setMessage(`Loading ${requested}…`);
       try {
         const url = apiUrl(apiBase, diaryPagePath(requested));
-        const response = await fetch(url.toString(), {
+        const response = await mobileFetch(url.toString(), {
           headers: authenticatedHeaders(accessToken),
           signal: controller.signal,
         });
@@ -553,7 +553,7 @@ export function DiaryScreen({
       setSupportingSummaries((current) => beginTodaySupportingSummaryLoad(current, fence));
 
       try {
-        const response = await fetch(
+        const response = await mobileFetch(
           apiUrl(apiBase, todaySupportingSummaryPath(kind, requested)).toString(),
           {
             headers:
@@ -865,7 +865,7 @@ export function DiaryScreen({
     setPageState("loading");
     setMessage(`Loading more entries for ${requested}…`);
     try {
-      const response = await fetch(
+      const response = await mobileFetch(
         apiUrl(apiBase, diaryPagePath(requested, nextCursor)).toString(),
         {
           headers: authenticatedHeaders(accessToken),
@@ -1330,7 +1330,7 @@ export function DiaryScreen({
     if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
       return;
     }
-    const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+    const response = await mobileFetch(apiUrl(apiBase, "/v1/profile").toString(), {
       headers: authenticatedHeaders(accessToken),
       signal: controller.signal,
     });
@@ -1390,7 +1390,7 @@ export function DiaryScreen({
     setGroupBusy(true);
     setMessage("Saving diary group names and order…");
     try {
-      const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, "/v1/profile").toString(), {
         method: "PATCH",
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",

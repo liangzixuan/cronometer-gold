@@ -6,8 +6,8 @@ import {
   healthImportSignaturePayload,
   type RegisterHealthDeviceRequest,
 } from "@nutrition-tracker/contracts";
+import { getMobileProfile, mobileProfileKey } from "../config/mobile-profile";
 
-const KEY_ALIAS = "nutrition-tracker-health-import-v1";
 const P256_SPKI_PREFIX = "3059301306072a8648ce3d020106082a8648ce3d03010703420004";
 const HEX = /^[0-9a-f]{64}$/u;
 
@@ -158,31 +158,32 @@ export function derSignatureBase64ToBase64Url(value: string): string {
 }
 
 export function createHardwareDeviceSigner(): DeviceSigner {
+  const keyAlias = mobileProfileKey(getMobileProfile(), "nutrition-tracker-health-import-v1");
   return {
     async ensureHardwareKey() {
       const biometrics = await import("@sbaiahmed1/react-native-biometrics");
-      let exists = await biometrics.keyExists(KEY_ALIAS);
+      let exists = await biometrics.keyExists(keyAlias);
       if (!exists) {
         try {
           await biometrics.createKeysWithOptions({
-            keyAlias: KEY_ALIAS,
+            keyAlias: keyAlias,
             keyType: "ec256",
             requireAuthentication: false,
             failIfExists: true,
           });
         } catch {
-          exists = await biometrics.keyExists(KEY_ALIAS);
+          exists = await biometrics.keyExists(keyAlias);
           if (!exists) throw new Error("A non-exportable device signing key could not be created.");
         }
       }
-      const integrity = await biometrics.validateKeyIntegrity(KEY_ALIAS);
+      const integrity = await biometrics.validateKeyIntegrity(keyAlias);
       if (!integrity.keyExists || !integrity.valid || !integrity.integrityChecks.hardwareBacked) {
         throw new Error("This device did not provide a validated hardware-backed signing key.");
       }
       const publicKey = {
         format: "spki",
         algorithm: "ES256",
-        derBase64: canonicalP256SpkiBase64((await biometrics.getPublicKey(KEY_ALIAS)).publicKey),
+        derBase64: canonicalP256SpkiBase64((await biometrics.getPublicKey(keyAlias)).publicKey),
       } as const satisfies RegisterHealthDeviceRequest["publicKey"];
       return {
         publicKey,
@@ -193,9 +194,9 @@ export function createHardwareDeviceSigner(): DeviceSigner {
     },
     async resetHardwareKey() {
       const { deleteKeys, keyExists } = await import("@sbaiahmed1/react-native-biometrics");
-      if (!(await keyExists(KEY_ALIAS))) return;
-      const result = await deleteKeys(KEY_ALIAS);
-      if (!result.success || (await keyExists(KEY_ALIAS))) {
+      if (!(await keyExists(keyAlias))) return;
+      const result = await deleteKeys(keyAlias);
+      if (!result.success || (await keyExists(keyAlias))) {
         throw new Error("The invalidated device signing key could not be removed safely.");
       }
     },
@@ -211,7 +212,7 @@ export function createHardwareDeviceSigner(): DeviceSigner {
         "@sbaiahmed1/react-native-biometrics"
       );
       const result = await sign({
-        keyAlias: KEY_ALIAS,
+        keyAlias: keyAlias,
         data: value,
         inputEncoding: InputEncoding.UTF8,
         algorithm: SignatureAlgorithm.SHA256withECDSA,

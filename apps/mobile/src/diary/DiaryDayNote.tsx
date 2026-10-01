@@ -15,6 +15,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { mobileFetch } from "../api/mobile-fetch";
 import { apiUrl, authenticatedHeaders, jsonBody } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
 import { palette } from "../theme";
@@ -206,7 +207,7 @@ export function DiaryDayNote(props: Props) {
     try {
       let zone = propsRef.current.profileTimeZone;
       if (purpose === "review") {
-        const sessionResponse = await fetch(apiUrl(props.apiBase, "/v1/auth/me").toString(), {
+        const sessionResponse = await mobileFetch(apiUrl(props.apiBase, "/v1/auth/me").toString(), {
           headers: authenticatedHeaders(propsRef.current.accessToken),
           signal: controller.signal,
         });
@@ -223,7 +224,7 @@ export function DiaryDayNote(props: Props) {
         zone = session.profile.timeZone;
         propsRef.current.onProfileUpdated(session.profile);
       }
-      const response = await fetch(
+      const response = await mobileFetch(
         apiUrl(props.apiBase, `/v1/diary/day-notes/${date}`).toString(),
         {
           headers: authenticatedHeaders(propsRef.current.accessToken, {
@@ -363,7 +364,7 @@ export function DiaryDayNote(props: Props) {
     publish({ ...model.current, message: `Saving your note for ${captured.localDate}…` });
     const ownsOperation = () => currentPrivate() && model.current.operation === captured;
     try {
-      const response = await fetch(captured.url, {
+      const response = await mobileFetch(captured.url, {
         method: "PUT",
         headers: authenticatedHeaders(propsRef.current.accessToken, captured.headers),
         body: captured.body,

@@ -1,3 +1,4 @@
+import { getMobileProfile, mobileProfileKey } from "../config/mobile-profile";
 export const GENERIC_REMINDER_TITLE = "Nutrition Tracker" as const;
 export const GENERIC_REMINDER_BODY = "Time to check in." as const;
 const CHANNEL_ID = "private-reminders";
@@ -89,6 +90,9 @@ function permissionGranted(status: {
 }
 
 export function createExpoNotificationAdapter(): NotificationAdapter {
+  const profile = getMobileProfile();
+  const owner = mobileProfileKey(profile, OWNER_MARKER);
+  const channelId = mobileProfileKey(profile, CHANNEL_ID);
   return {
     async currentPermission() {
       try {
@@ -127,7 +131,7 @@ export function createExpoNotificationAdapter(): NotificationAdapter {
             (request) =>
               request.content.title === GENERIC_REMINDER_TITLE &&
               request.content.body === GENERIC_REMINDER_BODY &&
-              request.content.data?.owner === OWNER_MARKER,
+              request.content.data?.owner === owner,
           )
           .map((request) => request.identifier);
       } catch {
@@ -144,7 +148,7 @@ export function createExpoNotificationAdapter(): NotificationAdapter {
             "Android local reminders require the schedule time zone to match this device's current time zone.",
           );
         }
-        await notifications.setNotificationChannelAsync(CHANNEL_ID, {
+        await notifications.setNotificationChannelAsync(channelId, {
           name: "Private reminders",
           importance: notifications.AndroidImportance.DEFAULT,
           lockscreenVisibility: notifications.AndroidNotificationVisibility.PRIVATE,
@@ -153,7 +157,7 @@ export function createExpoNotificationAdapter(): NotificationAdapter {
       // Expo weekly weekdays use Sunday=1. The product contract uses Monday=1.
       const weekday = (request.dayOfWeek % 7) + 1;
       return notifications.scheduleNotificationAsync({
-        content: request.content,
+        content: { ...request.content, data: { owner } },
         trigger:
           Platform.OS === "ios"
             ? {
@@ -166,7 +170,7 @@ export function createExpoNotificationAdapter(): NotificationAdapter {
               }
             : {
                 type: notifications.SchedulableTriggerInputTypes.WEEKLY,
-                channelId: CHANNEL_ID,
+                channelId,
                 weekday,
                 hour: request.hour,
                 minute: request.minute,
@@ -175,6 +179,11 @@ export function createExpoNotificationAdapter(): NotificationAdapter {
     },
     async cancel(identifier) {
       const notifications = await import("expo-notifications");
+      const scheduled = await notifications.getAllScheduledNotificationsAsync();
+      const existing = scheduled.find((request) => request.identifier === identifier);
+      if (!existing) return;
+      if (existing.content.data?.owner !== owner)
+        throw new Error("Refusing to cancel another mobile profile’s reminder.");
       await notifications.cancelScheduledNotificationAsync(identifier);
     },
   };

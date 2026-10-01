@@ -11,6 +11,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
@@ -424,19 +425,19 @@ export function GoalsScreen({
         referenceUrl.searchParams.set("date", localDate);
         const [currentResponse, progressResponse, definitionsResponse, referenceResponse] =
           await Promise.all([
-            fetch(currentUrl.toString(), {
+            mobileFetch(currentUrl.toString(), {
               headers: authenticatedHeaders(accessToken),
               signal: controller.signal,
             }),
-            fetch(progressUrl.toString(), {
+            mobileFetch(progressUrl.toString(), {
               headers: authenticatedHeaders(accessToken),
               signal: controller.signal,
             }),
-            fetch(apiUrl(apiBase, "/v1/nutrients/targetable").toString(), {
+            mobileFetch(apiUrl(apiBase, "/v1/nutrients/targetable").toString(), {
               headers: authenticatedHeaders(accessToken),
               signal: controller.signal,
             }),
-            fetch(referenceUrl.toString(), {
+            mobileFetch(referenceUrl.toString(), {
               headers: authenticatedHeaders(accessToken),
               signal: controller.signal,
             }),
@@ -470,7 +471,7 @@ export function GoalsScreen({
         if (candidateDate !== localDate && referenceResponse.status !== 404) {
           const effectiveReferenceUrl = apiUrl(apiBase, "/v1/goals/reference-target-sets");
           effectiveReferenceUrl.searchParams.set("date", candidateDate);
-          effectiveReferenceResponse = await fetch(effectiveReferenceUrl.toString(), {
+          effectiveReferenceResponse = await mobileFetch(effectiveReferenceUrl.toString(), {
             headers: authenticatedHeaders(accessToken),
             signal: controller.signal,
           });
@@ -642,7 +643,7 @@ export function GoalsScreen({
       try {
         const url = apiUrl(apiBase, "/v1/goals/reference-target-sets");
         url.searchParams.set("date", effectiveFrom);
-        const response = await fetch(url.toString(), {
+        const response = await mobileFetch(url.toString(), {
           headers: authenticatedHeaders(accessToken),
           signal: controller.signal,
         });
@@ -712,7 +713,7 @@ export function GoalsScreen({
         initiatingOwner,
         initiatingEpoch,
       );
-    const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+    const response = await mobileFetch(apiUrl(apiBase, "/v1/profile").toString(), {
       headers: authenticatedHeaders(accessToken),
       signal: controller.signal,
     });
@@ -760,7 +761,7 @@ export function GoalsScreen({
     setProfileSaving(true);
     setMessage("Saving the profile fields used to check candidate eligibility…");
     try {
-      const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, "/v1/profile").toString(), {
         method: "PATCH",
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",
@@ -962,7 +963,7 @@ export function GoalsScreen({
     setMessage(builder.goalId ? "Publishing an immutable goal revision…" : "Creating goal…");
     try {
       const path = builder.goalId ? `/v1/goals/${builder.goalId}/revisions` : "/v1/goals";
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         method: "POST",
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",
@@ -1004,7 +1005,7 @@ export function GoalsScreen({
       }
       if (response.status === 409) {
         pending.current.delete(key);
-        const profileResponse = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+        const profileResponse = await mobileFetch(apiUrl(apiBase, "/v1/profile").toString(), {
           headers: authenticatedHeaders(accessToken),
           signal: controller.signal,
         });

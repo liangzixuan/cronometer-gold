@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
@@ -240,7 +241,7 @@ export function HydrationScreen({
       setMessageIsError(false);
       setMessage(`Loading hydration entries for ${requestedDate}…`);
       try {
-        const response = await fetch(
+        const response = await mobileFetch(
           apiUrl(apiBase, `/v1/hydration?date=${encodeURIComponent(requestedDate)}`).toString(),
           {
             headers: authenticatedHeaders(accessToken),
@@ -622,7 +623,7 @@ export function HydrationScreen({
       if (operation.serializedBody !== undefined) headers["content-type"] = "application/json";
       if (input.revision) headers["if-match"] = `"${input.revision}"`;
       if (input.expectedTimeZone) headers["x-expected-profile-time-zone"] = input.expectedTimeZone;
-      const response = await fetch(apiUrl(apiBase, input.path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, input.path).toString(), {
         method: input.method,
         headers,
         ...(operation.serializedBody === undefined ? {} : { body: operation.serializedBody }),

@@ -23,8 +23,8 @@ import {
   View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-
 import { ActivityScreen } from "./src/activity/ActivityScreen";
+import { mobileFetch } from "./src/api/mobile-fetch";
 import { apiUrl, authenticatedHeaders, jsonBody } from "./src/api/private-api";
 import { type AuthResult, AuthScreen } from "./src/auth/AuthScreen";
 import { sessionBootstrapDecision } from "./src/auth/bootstrap";
@@ -39,6 +39,7 @@ import {
   loadSecureSession,
   saveSecureSession,
 } from "./src/auth/secure-session";
+import { bindMobileProfile } from "./src/config/mobile-profile";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
 import {
   acceptProfileSessionUpdate,
@@ -105,10 +106,14 @@ import {
 } from "./src/retention/reminder-schedule";
 import { parseIntegrations, parseReminders } from "./src/retention/retention";
 import { FoodSearchScreen } from "./src/search/FoodSearchScreen";
-import { resolveMobileApiBase } from "./src/search/food-search";
 import { palette } from "./src/theme";
 
-declare const process: { readonly env: { readonly EXPO_PUBLIC_API_URL?: string } };
+declare const process: {
+  readonly env: {
+    readonly EXPO_PUBLIC_API_URL?: string;
+    readonly EXPO_PUBLIC_NOURISHING_PROFILE?: string;
+  };
+};
 
 type RootStackParamList = {
   Today: { readonly date?: string; readonly refreshKey?: string } | undefined;
@@ -183,7 +188,7 @@ function TodayRoute(props: AuthenticatedAppProps) {
       let active = true;
       void (async () => {
         try {
-          const response = await fetch(apiUrl(props.apiBase, "/v1/profile").toString(), {
+          const response = await mobileFetch(apiUrl(props.apiBase, "/v1/profile").toString(), {
             headers: authenticatedHeaders(props.accessToken),
             signal: controller.signal,
           });
@@ -447,7 +452,7 @@ function AuthenticatedApp(
   useEffect(() => {
     const reconciler = createForegroundReminderReconciler({
       async loadReminders(signal) {
-        const response = await fetch(apiUrl(props.apiBase, "/v1/reminders").toString(), {
+        const response = await mobileFetch(apiUrl(props.apiBase, "/v1/reminders").toString(), {
           headers: authenticatedHeaders(props.accessToken),
           signal,
         });
@@ -551,7 +556,13 @@ export default function App() {
     try {
       const platform =
         Platform.OS === "android" ? "android" : Platform.OS === "web" ? "web" : "ios";
-      return resolveMobileApiBase(process.env.EXPO_PUBLIC_API_URL, platform);
+      return new URL(
+        bindMobileProfile({
+          apiUrl: process.env.EXPO_PUBLIC_API_URL,
+          selector: process.env.EXPO_PUBLIC_NOURISHING_PROFILE,
+          platform,
+        }).apiOrigin,
+      );
     } catch {
       return null;
     }
@@ -658,9 +669,12 @@ export default function App() {
         let incomplete = false;
         let integrations: ReturnType<typeof parseIntegrations> = [];
         try {
-          const response = await fetch(apiUrl(apiBase, "/v1/integrations/health").toString(), {
-            headers: authenticatedHeaders(token),
-          });
+          const response = await mobileFetch(
+            apiUrl(apiBase, "/v1/integrations/health").toString(),
+            {
+              headers: authenticatedHeaders(token),
+            },
+          );
           if (response.ok) integrations = parseIntegrations(await jsonBody(response));
           else if (response.status !== 401) incomplete = true;
         } catch {
@@ -668,7 +682,7 @@ export default function App() {
         }
         for (const integration of integrations.filter((item) => item.status === "connected")) {
           try {
-            const response = await fetch(
+            const response = await mobileFetch(
               apiUrl(
                 apiBase,
                 `/v1/integrations/health/${integration.platform}/disconnect`,
@@ -693,20 +707,23 @@ export default function App() {
         try {
           const device = await loadRegisteredHealthDevice();
           if (device) {
-            const response = await fetch(apiUrl(apiBase, `/v1/devices/${device.id}`).toString(), {
-              method: "DELETE",
-              headers: authenticatedHeaders(token, {
-                "idempotency-key": newOperationId(),
-                "if-match": `"${device.revision}"`,
-              }),
-            });
+            const response = await mobileFetch(
+              apiUrl(apiBase, `/v1/devices/${device.id}`).toString(),
+              {
+                method: "DELETE",
+                headers: authenticatedHeaders(token, {
+                  "idempotency-key": newOperationId(),
+                  "if-match": `"${device.revision}"`,
+                }),
+              },
+            );
             if (!response.ok && response.status !== 401) incomplete = true;
           }
         } catch {
           incomplete = true;
         }
         try {
-          const response = await fetch(apiUrl(apiBase, "/v1/auth/logout").toString(), {
+          const response = await mobileFetch(apiUrl(apiBase, "/v1/auth/logout").toString(), {
             method: "POST",
             headers: authenticatedHeaders(token),
           });
@@ -859,7 +876,7 @@ export default function App() {
       ownerUserId: activeSessionUserId,
       expectedTimeZone: activeProfileTimeZone,
       store: quickAddOutboxStore,
-      fetcher: (input, init) => fetch(input, init),
+      fetcher: (input, init) => mobileFetch(input, init),
       accessToken: () => accessToken,
       isForeground: () => AppState.currentState === "active",
       operationId: newOperationId,
@@ -908,6 +925,7 @@ export default function App() {
     void (async () => {
       let recoveringErasure = false;
       try {
+        if (!apiBase) throw new Error("A validated mobile profile is required before bootstrap.");
         const cleanupStore = createSecurePrivateCleanupStore();
         const resumed = await resumePrivateDeviceCleanup(
           buildCleanupDependencies(null, "sign_out"),
@@ -1007,7 +1025,7 @@ export default function App() {
           return;
         }
         if (!stored || cancelled || !apiBase) return;
-        const response = await fetch(apiUrl(apiBase, "/v1/auth/me").toString(), {
+        const response = await mobileFetch(apiUrl(apiBase, "/v1/auth/me").toString(), {
           headers: authenticatedHeaders(stored.accessToken),
         });
         const decision = sessionBootstrapDecision(response.status);

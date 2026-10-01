@@ -1,12 +1,9 @@
-import * as SecureStore from "expo-secure-store";
+import { profileSecureStore } from "../storage/profile-secure-store";
 
 import type { HealthPlatform } from "./device-signing";
 
 const KEY = "nutrition-tracker.health-device.v2";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const options: SecureStore.SecureStoreOptions = {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-};
 
 export interface RegisteredHealthDeviceState {
   readonly version: 2;
@@ -49,7 +46,7 @@ export function parseRegisteredHealthDeviceState(raw: string): RegisteredHealthD
 }
 
 export async function loadRegisteredHealthDevice(): Promise<RegisteredHealthDeviceState | null> {
-  const raw = await SecureStore.getItemAsync(KEY, options);
+  const raw = await (await profileSecureStore()).get(KEY);
   return raw === null ? null : parseRegisteredHealthDeviceState(raw);
 }
 
@@ -57,9 +54,9 @@ export async function saveRegisteredHealthDevice(
   value: RegisteredHealthDeviceState,
 ): Promise<void> {
   const parsed = parseRegisteredHealthDeviceState(JSON.stringify(value));
-  await SecureStore.setItemAsync(KEY, JSON.stringify(parsed), options);
+  await (await profileSecureStore()).set(KEY, JSON.stringify(parsed));
 }
 
 export async function clearRegisteredHealthDevice(): Promise<void> {
-  await SecureStore.deleteItemAsync(KEY, options);
+  await (await profileSecureStore()).delete(KEY);
 }

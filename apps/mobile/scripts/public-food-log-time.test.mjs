@@ -755,3 +755,9 @@ describe("native public-food log date shortcuts", () => {
     expect(c.controller.enqueueOperation).toHaveBeenCalledTimes(1);
   });
 });
+
+// Feature lifecycle fixtures retain their existing synthetic transport. The
+// real origin and native transport boundary is covered by mobile-profile tests.
+vi.mock("../src/api/mobile-fetch", () => ({
+  mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
+}));

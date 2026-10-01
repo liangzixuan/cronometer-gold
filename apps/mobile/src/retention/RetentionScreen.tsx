@@ -23,6 +23,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
@@ -1116,7 +1117,7 @@ export function RetentionScreen({
       if (input.revision) headers["if-match"] = quoteRevision(input.revision);
       if (input.recentAuth) headers["x-reauthentication-token"] = input.recentAuth;
       if (input.capability) headers["x-erasure-status-token"] = input.capability;
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         method: input.method ?? "GET",
         headers,
         ...(serializedBody === null ? {} : { body: serializedBody }),
@@ -1222,7 +1223,7 @@ export function RetentionScreen({
             historyRef.current.range === range;
           try {
             const read = async (path: string) => {
-              const response = await fetch(apiUrl(apiBase, path).toString(), {
+              const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
                 headers: authenticatedHeaders(accessToken),
                 signal: controller.signal,
               });
@@ -1551,7 +1552,7 @@ export function RetentionScreen({
       trendController.current === controller &&
       !controller.signal.aborted;
     const read = async (path: string) => {
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         headers: authenticatedHeaders(accessToken),
         signal: controller.signal,
       });
@@ -1968,7 +1969,7 @@ export function RetentionScreen({
       !controller.signal.aborted;
     setBusy("custom");
     try {
-      const response = await fetch(
+      const response = await mobileFetch(
         apiUrl(apiBase, `/v1/custom-foods/${conflict.foodId}`).toString(),
         {
           headers: authenticatedHeaders(accessToken),
@@ -2072,7 +2073,7 @@ export function RetentionScreen({
       !controller.signal.aborted;
     setBusy("custom");
     try {
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         method: "POST",
         signal: controller.signal,
         headers: authenticatedHeaders(accessToken, {
@@ -2302,7 +2303,7 @@ export function RetentionScreen({
       foodsRef.current === foods;
     setBusy("food-more");
     try {
-      const response = await fetch(
+      const response = await mobileFetch(
         apiUrl(
           apiBase,
           `/v1/custom-foods?limit=50&cursor=${encodeURIComponent(foodCursor)}`,
@@ -2606,7 +2607,7 @@ export function RetentionScreen({
       ...(serializedBody === null ? {} : { "content-type": "application/json" }),
       ...(revision ? { "if-match": quoteRevision(revision) } : {}),
     });
-    const response = await fetch(apiUrl(apiBase, path).toString(), {
+    const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
       method,
       headers,
       ...(serializedBody === null ? {} : { body: serializedBody }),
@@ -2649,7 +2650,7 @@ export function RetentionScreen({
       !controller.signal.aborted;
     try {
       const path = `/v1/biometrics/events?from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         headers: authenticatedHeaders(accessToken),
         signal: controller.signal,
       });
@@ -2966,7 +2967,7 @@ export function RetentionScreen({
       setBusy("reminder");
       const serializedBody = JSON.stringify(body);
       const operation = stableOperation(key, serializedBody);
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         method: reminderDraft.reminder ? "PATCH" : "POST",
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",
@@ -3188,7 +3189,7 @@ export function RetentionScreen({
           send: async (envelope: SignedHealthImportEnvelope) => {
             let response: Response;
             try {
-              response = await fetch(
+              response = await mobileFetch(
                 apiUrl(apiBase, "/v1/integrations/health/imports").toString(),
                 {
                   method: "POST",
@@ -3423,7 +3424,7 @@ export function RetentionScreen({
       onErasurePrepared();
       let response: Response;
       try {
-        response = await fetch(apiUrl(apiBase, "/v1/account/erasure").toString(), {
+        response = await mobileFetch(apiUrl(apiBase, "/v1/account/erasure").toString(), {
           method: "POST",
           headers: authenticatedHeaders(accessToken, {
             "content-type": "application/json",

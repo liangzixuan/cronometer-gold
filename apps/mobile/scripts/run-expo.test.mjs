@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn as spawnProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -613,5 +614,106 @@ test("Windows failures preserve only bounded captured application diagnostics", 
         stderr: ["incompatible Expo version\\n"],
       });
     } else assert.deepEqual(output, { stdout: [], stderr: [] });
+  }
+});
+
+test("Windows projects only the exact hosted profile and rejects development release selection", () => {
+  const dependencies = windowsDependencies();
+  Object.assign(dependencies.environment, {
+    EXPO_PUBLIC_NOURISHING_PROFILE: "hosted-development",
+    EXPO_PUBLIC_API_URL: "https://dev-api.nourishing.app",
+    EXPO_PUBLIC_UNREVIEWED: "private-canary",
+  });
+  const plan = prepareWindowsExpo(
+    ["export", "--platform", "all", "--output-dir", "dist"],
+    dependencies,
+  );
+  assert.equal(plan.environment.EXPO_PUBLIC_NOURISHING_PROFILE, "hosted-development");
+  assert.equal(plan.environment.EXPO_PUBLIC_API_URL, "https://dev-api.nourishing.app");
+  assert.equal(Object.hasOwn(plan.environment, "EXPO_PUBLIC_UNREVIEWED"), false);
+  for (const invalid of [
+    undefined,
+    "",
+    "https://api.nourishing.app",
+    "http://127.0.0.1:4000",
+    "https://native-qualification.invalid",
+  ]) {
+    const environment = { ...dependencies.environment };
+    if (invalid === undefined) delete environment.EXPO_PUBLIC_API_URL;
+    else environment.EXPO_PUBLIC_API_URL = invalid;
+    assert.throws(
+      () => prepareWindowsExpo(["install", "--check"], { ...dependencies, environment }),
+      /exact selector and API origin/u,
+    );
+  }
+  for (const [name, value] of [
+    ["EAS_BUILD_PROFILE", "production"],
+    ["EAS_BUILD_PROFILE", "physical-device"],
+    ["EAS_ENVIRONMENT", "preview"],
+    ["EAS_ENVIRONMENT", "production"],
+    ["EAS_BUILD", "true"],
+  ]) {
+    assert.throws(
+      () =>
+        prepareWindowsExpo(["install", "--check"], {
+          ...dependencies,
+          environment: { ...dependencies.environment, [name]: value },
+        }),
+      /not an approved native build or release/u,
+    );
+  }
+});
+
+test("POSIX rejects development release intent before config or Expo process creation", async () => {
+  for (const [name, value] of [
+    ["EAS_BUILD_PROFILE", "production"],
+    ["EAS_BUILD_PROFILE", "physical-device"],
+    ["EAS_ENVIRONMENT", "preview"],
+    ["EAS_ENVIRONMENT", "production"],
+    ["EAS_BUILD", "true"],
+  ]) {
+    const dependencies = {
+      platform: "linux",
+      environment: {
+        EXPO_PUBLIC_NOURISHING_PROFILE: "hosted-development",
+        EXPO_PUBLIC_API_URL: "https://dev-api.nourishing.app",
+        [name]: value,
+      },
+      mkdir: () => assert.fail("no directory before validation"),
+      spawn: () => assert.fail("no child before validation"),
+      spawnSync: () => assert.fail("no config child before validation"),
+    };
+    await assert.rejects(
+      runExpo(["export", "--platform", "all", "--output-dir", "dist"], dependencies),
+      /not an approved native build or release/u,
+    );
+    await assert.rejects(
+      readExpoNativeConfig(dependencies),
+      /not an approved native build or release/u,
+    );
+  }
+});
+
+test("all maintained mobile request consumers use the bound native transport", () => {
+  const files = [
+    "App.tsx",
+    "src/auth/AuthScreen.tsx",
+    "src/search/FoodSearchScreen.tsx",
+    "src/diary/DiaryDayNote.tsx",
+    "src/diary/DiaryScreen.tsx",
+    "src/reports/ReportsScreen.tsx",
+    "src/recipes/RecipesScreen.tsx",
+    "src/recipes/GoalsScreen.tsx",
+    "src/recipes/PastedIngredientReview.tsx",
+    "src/activity/ActivityScreen.tsx",
+    "src/retention/RetentionScreen.tsx",
+    "src/retention/ErasureStatusScreen.tsx",
+    "src/retention/erasure-recovery.ts",
+    "src/hydration/HydrationScreen.tsx",
+  ];
+  for (const path of files) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    assert.match(source, /import \{ mobileFetch \}/u);
+    assert.doesNotMatch(source, /\bfetch\s*\(/u);
   }
 });

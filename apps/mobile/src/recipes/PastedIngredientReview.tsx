@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
@@ -214,7 +215,7 @@ export function PastedIngredientReview(props: PastedIngredientReviewProps) {
   }
 
   async function verifyOwner(ticket: RequestTicket): Promise<boolean> {
-    const response = await fetch(apiUrl(ticket.apiBase, "/v1/auth/me").toString(), {
+    const response = await mobileFetch(apiUrl(ticket.apiBase, "/v1/auth/me").toString(), {
       headers: authenticatedHeaders(ticket.accessToken),
       redirect: "error",
       signal: ticket.controller.signal,
@@ -251,7 +252,7 @@ export function PastedIngredientReview(props: PastedIngredientReviewProps) {
     }
     const ticket = begin("search");
     try {
-      const response = await fetch(path, {
+      const response = await mobileFetch(path, {
         redirect: "error",
         headers: { accept: "application/json" },
         signal: ticket.controller.signal,

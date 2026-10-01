@@ -163,8 +163,16 @@ The first source layer is the explicit Next.js/BFF profile documented in
 development API origin, uses local HTTPS and origin-bound credential cookies,
 and starts no backend. Its source checks, Windows runtime qualification and
 actual hosted journeys are separate acceptance steps. The reserved host remains
-unprovisioned. Expo follows after native identity, persisted sessions/outbox/
-erasure state and redirect behavior are isolated by API origin.
+unprovisioned. The finite Expo tooling and mobile source profile are documented in
+[Windows mobile tooling](../quality/windows-mobile-tooling.md). The explicit
+hosted-development selector requires the reserved API origin and selects separate
+native IDs while retaining the registered Expo project. All durable mobile state,
+signing aliases and reminders are isolated by exact API origin, including ordinary
+profiles; unqualified legacy state remains untouched. Mobile requests use the
+pinned native transport with redirect denial and no origin fallback. Source and
+configuration checks do not establish installed native identity or device/runtime
+acceptance. Qualify the exact Windows config/export next, then the signed isolated
+app's storage, redirect and lifecycle behavior before interactive hosted journeys.
 
 The user selected this workstream as a high priority for the October launch.
 Develop and review the Next.js and Expo frontends on Windows against a hosted,

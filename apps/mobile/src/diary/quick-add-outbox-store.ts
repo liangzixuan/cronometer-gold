@@ -1,3 +1,4 @@
+import { profileSecureStore } from "../storage/profile-secure-store";
 import {
   assertDiaryOutboxAppendDependencies,
   MAX_QUICK_ADD_OUTBOX_ITEMS,
@@ -428,13 +429,7 @@ async function loadOutbox(
 }
 
 async function secureStoreAdapter(): Promise<ProtectedQuickAddKeyValue> {
-  const SecureStore = await import("expo-secure-store");
-  const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
-  return {
-    get: (key) => SecureStore.getItemAsync(key, options),
-    set: (key, value) => SecureStore.setItemAsync(key, value, options),
-    delete: (key) => SecureStore.deleteItemAsync(key, options),
-  };
+  return profileSecureStore();
 }
 
 export function createQuickAddOutboxStore(overrides?: {

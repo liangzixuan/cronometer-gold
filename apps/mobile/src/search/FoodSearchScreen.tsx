@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import {
   type DiaryGroup,
@@ -438,7 +439,7 @@ export function FoodSearchScreen({
       setSuggestionState("loading");
       void (async () => {
         try {
-          const response = await fetch(
+          const response = await mobileFetch(
             buildAutocompleteUrl(apiBase, normalized, intent).toString(),
             {
               headers: { accept: "application/json" },
@@ -508,7 +509,7 @@ export function FoodSearchScreen({
 
       try {
         const url = buildSearchUrl(apiBase, normalized, intent, cursor);
-        const response = await fetch(url.toString(), {
+        const response = await mobileFetch(url.toString(), {
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
@@ -582,7 +583,7 @@ export function FoodSearchScreen({
     setBarcodeState("loading");
     setBarcodeMessage("Checking the exact public barcode…");
     try {
-      const response = await fetch(buildBarcodeUrl(apiBase, normalized).toString(), {
+      const response = await mobileFetch(buildBarcodeUrl(apiBase, normalized).toString(), {
         headers: { accept: "application/json" },
         signal: controller.signal,
       });

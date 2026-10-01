@@ -2,6 +2,7 @@ import type { AccountErasureJob } from "@nutrition-tracker/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, jsonBody, responseError } from "../api/private-api";
 import { palette } from "../theme";
@@ -27,7 +28,7 @@ export function ErasureStatusScreen({ apiBase, capability, onTerminal, onExpired
     }
     setLoading(true);
     try {
-      const response = await fetch(
+      const response = await mobileFetch(
         apiUrl(apiBase, `/v1/account/erasure/${capability.jobId}`).toString(),
         {
           headers: {

@@ -1,4 +1,4 @@
-import * as SecureStore from "expo-secure-store";
+import { profileSecureStore } from "../storage/profile-secure-store";
 
 import {
   parseSessionEnvelope,
@@ -7,21 +7,18 @@ import {
 } from "./session-envelope";
 
 const SESSION_KEY = "nutrition_tracker_session_v1";
-const options: SecureStore.SecureStoreOptions = {
-  keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-};
 
 export async function loadSecureSession(): Promise<SecureSessionEnvelope | null> {
-  const raw = await SecureStore.getItemAsync(SESSION_KEY, options);
+  const raw = await (await profileSecureStore()).get(SESSION_KEY);
   const session = parseSessionEnvelope(raw);
-  if (!session && raw !== null) await SecureStore.deleteItemAsync(SESSION_KEY, options);
+  if (!session && raw !== null) await (await profileSecureStore()).delete(SESSION_KEY);
   return session;
 }
 
 export async function saveSecureSession(session: SecureSessionEnvelope): Promise<void> {
-  await SecureStore.setItemAsync(SESSION_KEY, serializeSessionEnvelope(session), options);
+  await (await profileSecureStore()).set(SESSION_KEY, serializeSessionEnvelope(session));
 }
 
 export async function clearSecureSession(): Promise<void> {
-  await SecureStore.deleteItemAsync(SESSION_KEY, options);
+  await (await profileSecureStore()).delete(SESSION_KEY);
 }

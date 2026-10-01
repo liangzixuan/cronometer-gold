@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
@@ -504,7 +505,7 @@ export function RecipesScreen({
 
   const verifyOwner = useCallback(
     async (controller: AbortController, current: () => boolean) => {
-      const response = await fetch(apiUrl(new URL(scope.apiBase), "/v1/auth/me").toString(), {
+      const response = await mobileFetch(apiUrl(new URL(scope.apiBase), "/v1/auth/me").toString(), {
         headers: authenticatedHeaders(scope.accessToken),
         signal: controller.signal,
       });
@@ -581,7 +582,7 @@ export function RecipesScreen({
         const url = apiUrl(new URL(scope.apiBase), "/v1/recipes");
         url.searchParams.set("limit", "50");
         if (cursor !== null) url.searchParams.set("cursor", cursor);
-        const response = await fetch(url.toString(), {
+        const response = await mobileFetch(url.toString(), {
           headers: authenticatedHeaders(scope.accessToken),
           signal: controller.signal,
         });
@@ -912,7 +913,7 @@ export function RecipesScreen({
     const { controller, current } = request;
     invalidateReview();
     try {
-      const response = await fetch(apiUrl(apiBase, `/v1/recipes/${recipeId}`).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, `/v1/recipes/${recipeId}`).toString(), {
         headers: authenticatedHeaders(accessToken),
         signal: controller.signal,
       });
@@ -988,7 +989,7 @@ export function RecipesScreen({
       installedFilterScope.current === filterScope &&
       foodSearchRef.current.draft === starting.draft;
     try {
-      const response = await fetch(url.toString(), {
+      const response = await mobileFetch(url.toString(), {
         headers: { accept: "application/json" },
         signal: controller.signal,
       });
@@ -1151,7 +1152,7 @@ export function RecipesScreen({
     try {
       if (!(await verifyOwner(controller, current)) || !current()) return;
       const path = snapshot.recipeId ? `/v1/recipes/${snapshot.recipeId}/revisions` : "/v1/recipes";
-      const response = await fetch(apiUrl(apiBase, path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         method: "POST",
         signal: controller.signal,
         headers: authenticatedHeaders(accessToken, {

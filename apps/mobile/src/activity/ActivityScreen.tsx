@@ -13,6 +13,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { mobileFetch } from "../api/mobile-fetch";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
@@ -326,7 +327,7 @@ export function ActivityScreen({
       setMessageIsError(false);
       setMessage(`Loading activities for ${requestedDate}…`);
       try {
-        const response = await fetch(
+        const response = await mobileFetch(
           apiUrl(apiBase, `/v1/activities?date=${encodeURIComponent(requestedDate)}`).toString(),
           {
             headers: {
@@ -650,7 +651,7 @@ export function ActivityScreen({
       if (input.expectedTimeZone) {
         headers["x-expected-profile-time-zone"] = input.expectedTimeZone;
       }
-      const response = await fetch(apiUrl(apiBase, input.path).toString(), {
+      const response = await mobileFetch(apiUrl(apiBase, input.path).toString(), {
         method: input.method,
         headers,
         signal: controller.signal,

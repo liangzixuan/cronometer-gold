@@ -1,3 +1,4 @@
+import { profileSecureStore } from "../storage/profile-secure-store";
 import {
   type LocalReminderSchedule,
   type NotificationAdapter,
@@ -96,20 +97,14 @@ export function parseReminderScheduleState(raw: string): ReminderScheduleState {
 export function createSecureReminderScheduleStore(): ReminderScheduleStore {
   return {
     async load() {
-      const SecureStore = await import("expo-secure-store");
-      const options = {
-        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-      };
-      const raw = await SecureStore.getItemAsync(STORE_KEY, options);
+      const storage = await profileSecureStore();
+      const raw = await storage.get(STORE_KEY);
       return raw === null ? { version: 1, reminders: {} } : parseReminderScheduleState(raw);
     },
     async save(value) {
-      const SecureStore = await import("expo-secure-store");
-      const options = {
-        keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
-      };
+      const storage = await profileSecureStore();
       const parsed = parseReminderScheduleState(JSON.stringify(value));
-      await SecureStore.setItemAsync(STORE_KEY, JSON.stringify(parsed), options);
+      await storage.set(STORE_KEY, JSON.stringify(parsed));
     },
   };
 }

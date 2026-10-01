@@ -2025,3 +2025,9 @@ for (const conflicted of [false, true])
     for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
     expect(harness.writesAfterUnmount).toBe(0);
   });
+
+// Feature lifecycle fixtures retain their existing synthetic transport. The
+// real origin and native transport boundary is covered by mobile-profile tests.
+vi.mock("../src/api/mobile-fetch", () => ({
+  mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
+}));

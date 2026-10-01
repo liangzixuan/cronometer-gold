@@ -968,3 +968,9 @@ describe("native private day notes", () => {
     expect(c.h.writesAfterUnmount).toBe(0);
   });
 });
+
+// Feature lifecycle fixtures retain their existing synthetic transport. The
+// real origin and native transport boundary is covered by mobile-profile tests.
+vi.mock("../src/api/mobile-fetch", () => ({
+  mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
+}));
