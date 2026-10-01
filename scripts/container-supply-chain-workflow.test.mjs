@@ -1121,3 +1121,25 @@ test("Caddy patch identity cannot move into another service branch", () => {
     /alternate Caddy grpc version/u,
   );
 });
+
+test("API scanner visibility follows the exact manifest Fastify version", () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../apps/api/package.json", import.meta.url), "utf8"),
+  );
+  const version = manifest.dependencies.fastify;
+  assert.match(version, /^\d+\.\d+\.\d+$/u, "API Fastify must remain an exact version");
+  const visibility = workflowStep(
+    workflowJob(workflow, "build-scan-publish-apps"),
+    "Assert scanner visibility of exact application packages",
+  );
+  const apiStart = '            (if $component == "api" then';
+  const apiEnd = '            elif $component == "worker" then';
+  assertOneExactLine(visibility, apiStart, "API scanner branch");
+  assertOneExactLine(visibility, apiEnd, "next scanner branch");
+  const apiBranch = visibility.split(`${apiStart}\n`)[1].split(apiEnd)[0];
+  assertOneExactLine(
+    apiBranch,
+    `              package("fastify"; "${version}") and`,
+    "API Fastify scanner visibility",
+  );
+});

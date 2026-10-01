@@ -885,7 +885,7 @@ jobs:
             (any(.Results[]?.Packages[]?; .Name == "libssl3t64" or .Name == "libssl3") | not) and
             (any(.Results[]?.Vulnerabilities[]?; .VulnerabilityID == "CVE-2026-14456") | not) and
             (if $component == "api" then
-              package("fastify"; "5.12.0") and
+              package("fastify"; "5.12.2") and
               package("zod"; "4.4.3") and
               package("pg"; "8.23.0")
             elif $component == "worker" then
