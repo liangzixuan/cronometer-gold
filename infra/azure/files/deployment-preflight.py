@@ -173,7 +173,7 @@ IMAGE_REPOSITORIES = {
     "WORKER_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-worker",
     "MIGRATOR_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-migrator",
 }
-IMAGE_ADMISSION_SHA256 = "28be9fc12a910ddb86f86f938bd55e1497b0ce51ab81a7bf9edfd5ce49471903"
+IMAGE_ADMISSION_SHA256 = "30f3477a2e2737ad5c3c60b5fe946fb721f946fa47b99ac905a2ec94a0d18406"
 PUBLIC_RANGE_LOCK_SHA256 = "44124af92774cb3766b001a706425b4582cfefa660b815efafcd35c2b1ed81ed"
 IMAGE_REFERENCE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 FQDN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
