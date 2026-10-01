@@ -224,7 +224,7 @@ describe("encrypted PostgreSQL backup boundary", () => {
       });
       expect(metadata.plaintextBytes).toBe(12 + bytes.byteLength + size + dumpBytes.byteLength);
       const opened = requireValue(await backup.recover(expected(bytes)));
-      expect(opened.sourceEvidence).toEqual(evidence);
+      expect(opened.sourceEvidence.equals(evidence)).toBe(true);
       expect(await collect(opened.dump)).toEqual(dumpBytes);
       await opened.dispose();
       expect(await readdir(spool)).toEqual([]);
