@@ -177,8 +177,8 @@ export function validateExternalImageLock(lock) {
   if (
     !Array.isArray(remediation.requiredPackages) ||
     remediation.requiredPackages.length !== 2 ||
-    remediation.requiredPackages[0] !== "libcrypto3=3.5.8-r0" ||
-    remediation.requiredPackages[1] !== "libssl3=3.5.8-r0"
+    remediation.requiredPackages[0] !== "libcrypto3=3.5.9-r0" ||
+    remediation.requiredPackages[1] !== "libssl3=3.5.9-r0"
   ) {
     throw new TypeError("MEILI_IMAGE remediation packages must remain exactly pinned.");
   }

@@ -1216,7 +1216,7 @@ assert meili_upstream["remediation"]["derivativeRepository"] == (
     "ghcr.io/liangzixuan/cronometer-gold-meilisearch"
 )
 assert meili_upstream["remediation"]["requiredPackages"] == [
-    "libcrypto3=3.5.8-r0", "libssl3=3.5.8-r0",
+    "libcrypto3=3.5.9-r0", "libssl3=3.5.9-r0",
 ]
 database_job_match = re.search(
     r"(?ms)^  database:\n.*?(?=^  [a-z][a-z0-9_-]*:\n|\Z)",
@@ -1308,12 +1308,12 @@ assert '"org.opencontainers.image.version": f"sha-{revision}"' in image_admissio
 assert '"io.cronometer.runtime.contract": "uid-gid-1000-net-bind-service"' in image_admission
 assert (
     '"io.cronometer.runtime.contract": '
-    '"openssl-3.5.8-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs"'
+    '"openssl-3.5.9-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs"'
     in image_admission
 )
 assert (
     '"io.cronometer.runtime.contract": '
-    '"v1.53.1-openssl-3.5.8-r0-uid-gid-1000"'
+    '"v1.53.1-openssl-3.5.9-r0-uid-gid-1000"'
     in image_admission
 )
 assert (
@@ -1555,7 +1555,7 @@ postgres_config = {
     "Labels": {
         "io.cronometer.runtime.component": "postgres",
         "io.cronometer.runtime.contract": (
-            "openssl-3.5.8-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs"
+            "openssl-3.5.9-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs"
         ),
         "io.cronometer.upstream.image": "docker.io/library/postgres:17.11-alpine3.24",
         "io.cronometer.upstream.image.digest": (
@@ -1566,7 +1566,7 @@ postgres_config = {
         ),
         "io.cronometer.upstream.version": "17.11",
         "io.cronometer.runtime.openssl-packages": (
-            "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0"
+            "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0"
         ),
         "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
         "io.cronometer.runtime.util-linux-packages": "libuuid=2.42.3-r1",
@@ -1602,7 +1602,7 @@ meili_config = {
     ],
     "Labels": {
         "io.cronometer.runtime.component": "meilisearch",
-        "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.8-r0-uid-gid-1000",
+        "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.9-r0-uid-gid-1000",
         "io.cronometer.upstream.image": "docker.io/getmeili/meilisearch:v1.53.1",
         "io.cronometer.upstream.image.digest": (
             "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431"
@@ -1616,7 +1616,7 @@ meili_config = {
         ),
         "io.cronometer.upstream.version": "v1.53.1",
         "io.cronometer.runtime.openssl-packages": (
-            "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0"
+            "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0"
         ),
         "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
     },

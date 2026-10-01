@@ -1461,12 +1461,12 @@ jobs:
                 .config.ExposedPorts == {"5432/tcp": {}} and
                 .config.Healthcheck.Test[0] == "CMD-SHELL" and
                 .config.Labels["io.cronometer.runtime.component"] == "postgres" and
-                .config.Labels["io.cronometer.runtime.contract"] == "openssl-3.5.8-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs" and
+                .config.Labels["io.cronometer.runtime.contract"] == "openssl-3.5.9-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs" and
                 .config.Labels["io.cronometer.upstream.image"] == "docker.io/library/postgres:17.11-alpine3.24" and
                 .config.Labels["io.cronometer.upstream.image.digest"] == "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73" and
                 .config.Labels["io.cronometer.upstream.image.arm64.digest"] == "sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2" and
                 .config.Labels["io.cronometer.upstream.version"] == "17.11" and
-                .config.Labels["io.cronometer.runtime.openssl-packages"] == "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0" and
+                .config.Labels["io.cronometer.runtime.openssl-packages"] == "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0" and
                 .config.Labels["io.cronometer.runtime.openssl-upgrade-trigger"] == "CVE-2026-14456" and
                 .config.Labels["io.cronometer.runtime.util-linux-packages"] == "libuuid=2.42.3-r1" and
                 .config.Labels["io.cronometer.runtime.util-linux-upgrade-trigger"] == "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409,CVE-2026-78410" and
@@ -1474,7 +1474,7 @@ jobs:
                 (.config.Env | index("PG_VERSION=17.11")) != null
               ' "${image_file}" >/dev/null
               docker run --rm --platform linux/arm64 --entrypoint /bin/sh "${runtime_ref}" -c \
-                "apk list --installed libcrypto3 | grep -Fx 'libcrypto3-3.5.8-r0 aarch64 {openssl} (Apache-2.0) [installed]' && apk list --installed libssl3 | grep -Fx 'libssl3-3.5.8-r0 aarch64 {openssl} (Apache-2.0) [installed]' && apk list --installed libuuid | grep -Fx 'libuuid-2.42.3-r1 aarch64 {util-linux} (BSD-3-Clause) [installed]'"
+                "apk list --installed libcrypto3 | grep -Fx 'libcrypto3-3.5.9-r0 aarch64 {openssl} (Apache-2.0) [installed]' && apk list --installed libssl3 | grep -Fx 'libssl3-3.5.9-r0 aarch64 {openssl} (Apache-2.0) [installed]' && apk list --installed libuuid | grep -Fx 'libuuid-2.42.3-r1 aarch64 {util-linux} (BSD-3-Clause) [installed]'"
               ;;
             meilisearch)
               jq -e '
@@ -1499,19 +1499,19 @@ jobs:
                   "MEILI_SERVER_PROVIDER=docker"
                 ] and
                 .config.Labels["io.cronometer.runtime.component"] == "meilisearch" and
-                .config.Labels["io.cronometer.runtime.contract"] == "v1.53.1-openssl-3.5.8-r0-uid-gid-1000" and
+                .config.Labels["io.cronometer.runtime.contract"] == "v1.53.1-openssl-3.5.9-r0-uid-gid-1000" and
                 .config.Labels["io.cronometer.upstream.image"] == "docker.io/getmeili/meilisearch:v1.53.1" and
                 .config.Labels["io.cronometer.upstream.image.digest"] == "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431" and
                 .config.Labels["io.cronometer.upstream.image.arm64.digest"] == "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee" and
                 .config.Labels["io.cronometer.upstream.source"] == "https://github.com/meilisearch/meilisearch" and
                 .config.Labels["io.cronometer.upstream.source.revision"] == "577f7af28942b71782eab1e59f44ad8296ce0a92" and
                 .config.Labels["io.cronometer.upstream.version"] == "v1.53.1" and
-                .config.Labels["io.cronometer.runtime.openssl-packages"] == "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0" and
+                .config.Labels["io.cronometer.runtime.openssl-packages"] == "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0" and
                 .config.Labels["io.cronometer.runtime.openssl-upgrade-trigger"] == "CVE-2026-14456"
               ' "${image_file}" >/dev/null
               test "$(docker run --rm --platform linux/arm64 --entrypoint /bin/sh "${runtime_ref}" -c '/bin/meilisearch --version')" = 'meilisearch 1.53.1'
               docker run --rm --platform linux/arm64 --entrypoint /bin/sh "${runtime_ref}" -c \
-                "apk list --installed libcrypto3 | grep -Fx 'libcrypto3-3.5.8-r0 aarch64 {openssl} (Apache-2.0) [installed]' && apk list --installed libssl3 | grep -Fx 'libssl3-3.5.8-r0 aarch64 {openssl} (Apache-2.0) [installed]'"
+                "apk list --installed libcrypto3 | grep -Fx 'libcrypto3-3.5.9-r0 aarch64 {openssl} (Apache-2.0) [installed]' && apk list --installed libssl3 | grep -Fx 'libssl3-3.5.9-r0 aarch64 {openssl} (Apache-2.0) [installed]'"
               ;;
             *)
               echo "Unreviewed service component: ${COMPONENT}" >&2

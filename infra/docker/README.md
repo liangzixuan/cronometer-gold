@@ -115,5 +115,12 @@ pre-own PGDATA and the `/run/postgresql` and `/tmp` tmpfs mounts as 70. See
 `docs/quality/container-supply-chain.md` for the exact source, dependency, and
 scan evidence. The Meilisearch derivative is fixed to UID/GID 1000 and upgrades
 the upstream ARM64 image's `libcrypto3` and `libssl3` packages to exactly
-3.5.8-r0 before its strict final scan; only its repository-owned GHCR digest is
-deployable.
+3.5.9-r0 before its strict final scan; only its repository-owned GHCR digest is
+deployable. The PostgreSQL derivative requires the same OpenSSL revision.
+
+The October 1, 2026 source correction selects the packages offered by the
+official Alpine 3.22 and 3.24 ARM64 repositories. The original vulnerability
+findings retain their 3.5.8-r0 fixed version, and existing qualified image
+digests retain their historical scope. Fresh builds, runtime checks, strict
+scans and publication evidence are required before a new image is accepted.
+See the dated package evidence in `docs/quality/container-supply-chain.md`.

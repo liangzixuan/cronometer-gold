@@ -45,7 +45,7 @@ const CADDY_DOCUMENTATION_LINE = `\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_
 const POSTGRES_LIBUUID_VERSION = "2.42.3-r1";
 const POSTGRES_LIBUUID_TRIGGER =
   "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409,CVE-2026-78410";
-const POSTGRES_RUNTIME_CONTRACT = `openssl-3.5.8-r0-libuuid-${POSTGRES_LIBUUID_VERSION}-uid-gid-70-preowned-pgdata-and-tmpfs`;
+const POSTGRES_RUNTIME_CONTRACT = `openssl-3.5.9-r0-libuuid-${POSTGRES_LIBUUID_VERSION}-uid-gid-70-preowned-pgdata-and-tmpfs`;
 
 const CADDY_GRPC_REFERENCE = /google\.golang\.org\/grpc[^\r\n]*?\b(v\d+\.\d+\.\d+)\b/gu;
 const CADDY_X_NET_REFERENCE = /golang\.org\/x\/net[^\r\n]*?\b(v\d+\.\d+\.\d+)\b/gu;
@@ -896,8 +896,8 @@ test("exact-binds the reviewed service matrix and fail-closed component dispatch
   assert.match(identity, /^ {12}\*\)$/m);
   assert.match(identity, /Unreviewed service component: \$\{COMPONENT\}/);
   assert.match(identity, /^ {14}exit 1$/m);
-  assert.match(identity, /libcrypto3-3\.5\.8-r0 aarch64 \{openssl\}/);
-  assert.match(identity, /libssl3-3\.5\.8-r0 aarch64 \{openssl\}/);
+  assert.match(identity, /libcrypto3-3\.5\.9-r0 aarch64 \{openssl\}/);
+  assert.match(identity, /libssl3-3\.5\.9-r0 aarch64 \{openssl\}/);
   assertOneExactLine(
     identity,
     `                .config.Labels["io.cronometer.runtime.contract"] == "${POSTGRES_RUNTIME_CONTRACT}" and`,

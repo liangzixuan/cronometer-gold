@@ -291,12 +291,12 @@ def require_repository_runtime_contract(variable, config):
         }
         expected_labels = {
             "io.cronometer.runtime.component": "postgres",
-            "io.cronometer.runtime.contract": "openssl-3.5.8-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs",
+            "io.cronometer.runtime.contract": "openssl-3.5.9-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs",
             "io.cronometer.upstream.image": "docker.io/library/postgres:17.11-alpine3.24",
             "io.cronometer.upstream.image.digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
             "io.cronometer.upstream.image.arm64.digest": "sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2",
             "io.cronometer.upstream.version": "17.11",
-            "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0",
+            "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0",
             "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
             "io.cronometer.runtime.util-linux-packages": "libuuid=2.42.3-r1",
             "io.cronometer.runtime.util-linux-upgrade-trigger": "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409,CVE-2026-78410",
@@ -332,14 +332,14 @@ def require_repository_runtime_contract(variable, config):
         }
         expected_labels = {
             "io.cronometer.runtime.component": "meilisearch",
-            "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.8-r0-uid-gid-1000",
+            "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.9-r0-uid-gid-1000",
             "io.cronometer.upstream.image": "docker.io/getmeili/meilisearch:v1.53.1",
             "io.cronometer.upstream.image.digest": "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
             "io.cronometer.upstream.image.arm64.digest": "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee",
             "io.cronometer.upstream.source": "https://github.com/meilisearch/meilisearch",
             "io.cronometer.upstream.source.revision": "577f7af28942b71782eab1e59f44ad8296ce0a92",
             "io.cronometer.upstream.version": "v1.53.1",
-            "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0",
+            "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0",
             "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
         }
         expected_environment = {

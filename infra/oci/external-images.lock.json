@@ -31,12 +31,15 @@
             "fixedVersion": "3.5.8-r0"
           }
         ],
-        "requiredPackages": ["libcrypto3=3.5.8-r0", "libssl3=3.5.8-r0"],
+        "requiredPackages": ["libcrypto3=3.5.9-r0", "libssl3=3.5.9-r0"],
         "evidence": [
           "https://gitlab.alpinelinux.org/alpine/aports/-/commit/1b80b7c3bf5ba3f13eb748ae953d9215d5a4bb62",
-          "https://openssl-library.org/news/secadv/20260813.txt"
+          "https://openssl-library.org/news/secadv/20260813.txt",
+          "https://gitlab.alpinelinux.org/alpine/aports/-/commit/b6d0d5c5639c0034e9073c39e9ff139e28e71818",
+          "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/libcrypto3-3.5.9-r0.apk",
+          "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/libssl3-3.5.9-r0.apk"
         ],
-        "review": "The hosted strict ARM64 scan reported one HIGH finding for each installed OpenSSL runtime package. The signed upstream digest is restricted to the repository derivative build input and is prohibited from CI runtime fixtures and beta deployment. Hosted container run 33029133377 for source commit e46b91afe7d875c74e0ce27f5e129edfb8efc70d produced, scanned, attested, and immutably tagged the patched Meilisearch derivative; CI must consume that exact GHCR index digest. The container workflow must continue to install the exact fixed packages and scan the final derivative with an explicit empty ignore policy before creating any deployable immutable tag."
+        "review": "The hosted strict ARM64 scan reported one HIGH finding for each installed OpenSSL runtime package. The signed upstream digest is restricted to the repository derivative build input and is prohibited from CI runtime fixtures and beta deployment. Hosted container run 33029133377 for source commit e46b91afe7d875c74e0ce27f5e129edfb8efc70d produced, scanned, attested, and immutably tagged the patched Meilisearch derivative; CI must consume that exact GHCR index digest. The container workflow must continue to install the exact fixed packages and scan the final derivative with an explicit empty ignore policy before creating any deployable immutable tag. On 2026-10-01, the official Alpine 3.22 ARM64 index and package responses established availability of 3.5.9-r0, so prospective derivative builds now require that exact revision. The original findings, fixedVersion 3.5.8-r0, review date and qualified derivative digest remain historical evidence. The new pin requires a fresh signature-verified package build, runtime checks, strict vulnerability scan and publication evidence; repository metadata alone does not qualify a replacement image."
       },
       "provenance": {
         "method": "sigstore-keyless",

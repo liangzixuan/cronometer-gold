@@ -214,9 +214,9 @@ An earlier review found Go standard-library records attached to
 `/usr/local/bin/gosu`; the derivative deletes gosu and fixes the final user to
 `70:70`, which makes the official entrypoint's root-only privilege-switch branch
 unreachable. The 2026-08-26 hosted ARM64 scan then reported two HIGH findings,
-one each for Alpine `libcrypto3` and `libssl3` 3.5.7-r0. The derivative now
-installs exactly 3.5.8-r0 for both packages and asserts their full APK inventory
-records before the final strict scan. On 2026-09-05, exact-head supply run
+one each for Alpine `libcrypto3` and `libssl3` 3.5.7-r0. That remediation
+installed exactly 3.5.8-r0 for both packages and asserted their full APK
+inventory records before the final strict scan. On 2026-09-05, exact-head supply run
 `33959101567` found seven additional HIGH findings in Alpine `libuuid`
 2.42.1-r0: CVE-2026-53612, CVE-2026-53613, CVE-2026-53614,
 CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, and CVE-2026-78410.
@@ -236,11 +236,28 @@ controlled-beta runtime must present PGDATA and the `/var/run/postgresql` and
 its expected ARM64 child is
 `sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee`.
 That upstream child has the same two 3.5.7-r0 OpenSSL package findings. The
-repository derivative installs exactly `libcrypto3=3.5.8-r0` and
-`libssl3=3.5.8-r0`, runs as `1000:1000`, and adds an exact local healthcheck.
+prospective repository derivative installs exactly `libcrypto3=3.5.9-r0` and
+`libssl3=3.5.9-r0`, runs as `1000:1000`, and adds an exact local healthcheck.
 CI checks the binary version, complete package records, non-root/read-only
 behavior, health response, final zero-HIGH/zero-CRITICAL scan, SBOM, BuildKit
 provenance, GitHub attestation, and immutable commit tag.
+
+On October 1, 2026, the prospective PostgreSQL and Meilisearch builds moved to
+exact OpenSSL 3.5.9-r0. The official ARM64 repositories supplied this revision
+for [Alpine 3.24](https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/APKINDEX.tar.gz)
+and [Alpine 3.22](https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/APKINDEX.tar.gz).
+The corresponding aports revisions are
+[`29b9ec24b1b5b39aeef51fa2a044210e2ec5258e`](https://gitlab.alpinelinux.org/alpine/aports/-/commit/29b9ec24b1b5b39aeef51fa2a044210e2ec5258e)
+and [`b6d0d5c5639c0034e9073c39e9ff139e28e71818`](https://gitlab.alpinelinux.org/alpine/aports/-/commit/b6d0d5c5639c0034e9073c39e9ff139e28e71818),
+respectively. Alpine 3.24 `libuuid=2.42.3-r1` remains unchanged. The saved
+package responses place the conservative 24-hour admission boundary at
+2026-10-01 07:51:11 UTC. Metadata and package bytes do not establish APK
+signature verification or image acceptance. Fresh builds must pass the
+existing runtime, signature, provenance and zero-HIGH/zero-CRITICAL gates
+before publication. Original CVE-2026-14456 findings retain their
+`fixedVersion: 3.5.8-r0`, and the previously qualified service digests below
+remain evidence for their original builds. No replacement image is qualified
+by this source-pin correction.
 
 The system-runtime matrix runs on GitHub's native `ubuntu-24.04-arm` runner and
 fails unless both `RUNNER_ARCH=ARM64` and `uname -m=aarch64` are true before
@@ -304,7 +321,8 @@ TLS-required SQL, image health, and an existing-cluster restart as UID 70.
 `infra/oci/external-images.lock.json` is CI evidence for the exact signed
 Meilisearch input; it is not installed on a host and cannot authorize a runtime.
 The schema records `directDeploymentApproved: false`, the exact index and ARM64
-child, the two hosted HIGH findings, and the required 3.5.8-r0 package fixes. A
+child, the two hosted HIGH findings with their original 3.5.8-r0 fixed
+version, and the prospective required 3.5.9-r0 packages. A
 read-only job resolves the exact index and child configuration before the
 repository service matrix can start. It verifies the keyless Cosign signature
 for the tagged Meilisearch release workflow and GitHub Actions OIDC issuer. The
