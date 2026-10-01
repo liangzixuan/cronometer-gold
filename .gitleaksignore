@@ -18,3 +18,9 @@ f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:
 ae34e6295e754faeb7b9090e01e1bd14955b4f92:infra/docker/object-store-modules.json:generic-api-key:412
 ae34e6295e754faeb7b9090e01e1bd14955b4f92:infra/docker/object-store-modules.json:generic-api-key:536
 ae34e6295e754faeb7b9090e01e1bd14955b4f92:infra/docker/object-store-modules.json:generic-api-key:1113
+
+# Public installer source checksum; verified against the exact committed file bytes.
+ff14b339b5b825053f2e2b650638476efab67bdb:infra/azure/files/deployment-preflight.py:generic-api-key:31
+# Explicit repeated-hex fixtures for readiness validation and error redaction.
+ff14b339b5b825053f2e2b650638476efab67bdb:infra/azure/files/tests/static-contracts.py:generic-api-key:537
+ff14b339b5b825053f2e2b650638476efab67bdb:infra/azure/files/tests/static-contracts.py:generic-api-key:551

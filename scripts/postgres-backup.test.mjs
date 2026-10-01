@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn as realSpawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { existsSync, readFileSync } from "node:fs";
+import { constants, existsSync, readFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
@@ -68,7 +68,7 @@ state.spawn = (executable, supervisorArgs, options) => {
     let text = "";
     child.stdout.on("data", (chunk) => {
       text += chunk.toString();
-      const match = /READY:([0-9]+)/u.exec(text);
+      const match = /READY:([0-9]+)\n/u.exec(text);
       if (match) state.descendantPid = Number(match[1]);
     });
     return child;
@@ -625,6 +625,37 @@ async function liveIdentity(pid) {
 }
 const running = (identity) => identity && !["Z", "X"].includes(identity.state);
 
+async function copyNodeTool(directory) {
+  const originalPath = await fs.realpath(process.execPath);
+  const path = join(directory, "node");
+  await fs.copyFile(originalPath, path, constants.COPYFILE_EXCL);
+  await fs.chmod(path, 0o700);
+  const sha256 = hash(await fs.readFile(originalPath));
+  assert.equal(hash(await fs.readFile(path)), sha256, "fixture executable matches current Node");
+  return { path, sha256 };
+}
+
+test("native tool admission rejects a writable ancestor before spawning", async () => {
+  const fixture = await setup();
+  try {
+    await fs.chmod(fixture.local, 0o770);
+    await assert.rejects(
+      testedRunTool(fixture.options.tools.pgDump, [], {
+        signal: new AbortController().signal,
+        env: { PATH: "/usr/bin:/bin", LANG: "C" },
+        directory: fixture.temporary,
+        limit: 1024,
+      }),
+      /PostgreSQL local backup configuration failed/u,
+    );
+    assert.equal(state.children.length, 0);
+    assert.equal(state.calls.length, 0);
+  } finally {
+    await fs.chmod(fixture.local, 0o700);
+    await fixture.dispose();
+  }
+});
+
 for (const mode of ["cancel", "normal"]) {
   test("real owned supervisor terminates a TERM-resistant descendant after native leader " + mode, {
     timeout: 15_000,
@@ -641,7 +672,7 @@ for (const mode of ["cancel", "normal"]) {
       if (child && !child.closed) realKill(-child.pid, "SIGKILL");
     }, 8_000);
     try {
-      const nodePath = await fs.realpath(process.execPath);
+      const nodeTool = await copyNodeTool(fixture.local);
       const childCode =
         "process.on('SIGTERM',()=>{});process.send('ready');setInterval(()=>{},1000);";
       const leaderCode = [
@@ -656,28 +687,29 @@ for (const mode of ["cancel", "normal"]) {
         "setInterval(()=>{},1000);",
       ].join("");
       let settled = false,
-        rejected = false;
-      work = testedRunTool(
-        { path: nodePath, sha256: hash(await fs.readFile(nodePath)) },
-        ["-e", leaderCode],
-        {
-          signal: controller.signal,
-          env: { PATH: "/usr/bin:/bin", LANG: "C" },
-          directory: fixture.temporary,
-          limit: 1024,
-        },
-      ).then(
+        rejected = false,
+        rejection;
+      work = testedRunTool(nodeTool, ["-e", leaderCode], {
+        signal: controller.signal,
+        env: { PATH: "/usr/bin:/bin", LANG: "C" },
+        directory: fixture.temporary,
+        limit: 1024,
+      }).then(
         () => {
           settled = true;
         },
-        () => {
+        (error) => {
           settled = true;
           rejected = true;
+          rejection = error;
         },
       );
       while (!state.descendantPid && !settled)
         await new Promise((resolve) => setTimeout(resolve, 5));
-      assert.ok(state.descendantPid);
+      assert.ok(
+        state.descendantPid,
+        new Error("synthetic descendant did not report readiness", { cause: rejection }),
+      );
       supervisor = await liveIdentity(state.children[0].pid);
       descendant = await liveIdentity(state.descendantPid);
       if (mode === "cancel") {
@@ -688,7 +720,11 @@ for (const mode of ["cancel", "normal"]) {
       }
       await work;
       assert.equal(watchdogFired, false, "operator cleanup completes without fallback cleanup");
-      assert.equal(rejected, mode === "cancel");
+      assert.equal(
+        rejected,
+        mode === "cancel",
+        new Error("unexpected synthetic native tool result", { cause: rejection }),
+      );
       assert.equal(running(await liveIdentity(state.descendantPid)) || false, false);
       assert.ok(state.children.every((child) => child.closed));
       assert.deepEqual(
