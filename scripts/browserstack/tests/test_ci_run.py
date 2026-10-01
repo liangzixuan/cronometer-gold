@@ -143,7 +143,7 @@ class DraftTests(unittest.TestCase):
 
     def admitted_fixture(self):
         self.write('image-provenance.json', {'images': self.cfg['imageProducers'], 'buildkitVerified': True,
-                   'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False})
+                   'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeContractVerified': True, 'runtimeStarted': False})
 
     def test_record_build_binds_current_build_outputs(self):
         self.build_fixture()

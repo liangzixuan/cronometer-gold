@@ -450,3 +450,28 @@ The image uses an explicit nonroot scratch runtime. Captured-only mail behavior
 still requires a separately reviewed development SMTP endpoint, internal network
 isolation, outbound configuration rejection and actual runtime probes. This
 image producer does not provision that runtime or establish hosted acceptance.
+
+## October 1 browser and database fixture replacement
+
+The browser and database CI fixtures now select the qualified PostgreSQL and
+Meilisearch images produced from `b7efcdef0b14791e4287d7e3264dea3a1c241c7e`:
+
+- PostgreSQL: `ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4`.
+- Meilisearch: `ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe`.
+
+Saved producer results, immutable index/ARM64 manifest/config metadata and signed
+GitHub provenance bind both images to that source and workflow revision. Their
+configs satisfy the current OpenSSL 3.5.9-r0 runtime policy. The older fixture
+pair and its failed admission remain historical evidence.
+
+BrowserStack admission now applies the shared runtime contract after the
+original producer identity check. It records `runtimeContractVerified: true`
+only after both images pass, and fixture creation requires that marker. Offline
+regressions reject old OpenSSL labels, wrong process identities and missing
+environments even when all source labels match. Missing or false runtime markers
+also prevent fixture creation.
+
+Producer qualification and offline contracts do not establish a database CI or
+BrowserStack journey result for these replacement fixtures. Those results remain
+pending an actual automatic run; capture, session privacy and release gates
+remain unchanged.

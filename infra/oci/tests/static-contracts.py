@@ -1226,11 +1226,11 @@ assert database_job_match is not None
 database_job = database_job_match.group(0)
 ci_postgres_ref = (
     "ghcr.io/liangzixuan/cronometer-gold-postgres@"
-    "sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3"
+    "sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4"
 )
 ci_meili_ref = (
     "ghcr.io/liangzixuan/cronometer-gold-meilisearch@"
-    "sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa"
+    "sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe"
 )
 assert re.findall(r"(?m)^    runs-on: (.+)$", database_job) == [
     "ubuntu-24.04-arm",

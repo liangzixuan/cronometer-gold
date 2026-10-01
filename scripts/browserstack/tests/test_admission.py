@@ -31,7 +31,7 @@ class AdmissionTests(unittest.TestCase):
             index = int(label.rsplit('-', 1)[1])
             producer = self.cfg['imageProducers'][index]
             component = 'postgres' if index == 0 else 'meilisearch'
-            config = {'Labels': source_labels(component, producer['sourceSha'])}
+            config = runtime_config(component, producer['sourceSha'])
             target = self.private / label
             target.write_text(json.dumps([{'Os': 'linux', 'Architecture': 'arm64',
                 'RepoDigests': [producer['image']], 'Config': config}]))
@@ -57,7 +57,7 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(calls[index * 4 + 3].args[1], ['docker', 'image', 'inspect', producer['image']])
         receipt = json.loads((self.private / 'image-provenance.json').read_text())
         self.assertEqual(receipt, {'images': self.cfg['imageProducers'], 'buildkitVerified': True,
-                                  'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False})
+                                  'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeContractVerified': True, 'runtimeStarted': False})
 
     def test_changed_image_set_is_rejected_without_command(self):
         self.cfg['imageProducers'][0]['image'] = self.cfg['images'][1]
@@ -84,7 +84,7 @@ class AdmissionTests(unittest.TestCase):
             self.ns['start']()
         self.command.assert_not_called()
         (self.private / 'image-provenance.json').write_text(json.dumps({'images': [], 'buildkitVerified': True,
-            'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False}))
+            'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeContractVerified': True, 'runtimeStarted': False}))
         with self.assertRaisesRegex(RuntimeError, 'admission missing'):
             self.ns['start']()
         self.command.assert_not_called()
@@ -108,11 +108,107 @@ class AdmissionTests(unittest.TestCase):
                 self.assertEqual(self.command.call_count, 4)
 
 
+    def test_each_runtime_mismatch_prevents_admission_receipt(self):
+        for index in range(2):
+            for mutation in ('old-openssl', 'user', 'entrypoint', 'environment'):
+                with self.subTest(index=index, mutation=mutation):
+                    (self.private / 'image-provenance.json').unlink(missing_ok=True)
+                    def changed(label, argv, *unused):
+                        target = self.output(label, argv)
+                        if label == f'image-labels-{index}':
+                            value = json.loads(target.read_text())
+                            config = value[0]['Config']
+                            if mutation == 'old-openssl':
+                                for key in ('io.cronometer.runtime.contract', 'io.cronometer.runtime.openssl-packages'):
+                                    config['Labels'][key] = config['Labels'][key].replace('3.5.9-r0', '3.5.8-r0')
+                            elif mutation == 'user':
+                                config['User'] = '0:0'
+                            elif mutation == 'entrypoint':
+                                config['Entrypoint'] = ['/unreviewed']
+                            else:
+                                config['Env'] = []
+                            target.write_text(json.dumps(value))
+                        return target
+                    self.command.reset_mock()
+                    self.command.side_effect = changed
+                    with self.assertRaisesRegex(RuntimeError, 'Image runtime contract differs'):
+                        self.ns['admit_images']()
+                    self.assertEqual(self.command.call_count, (index + 1) * 4)
+                    self.assertFalse((self.private / 'image-provenance.json').exists())
+                    self.assertFalse(any(call.args[0] == 'create' for call in self.command.call_args_list))
+
+    def test_missing_or_false_runtime_contract_marker_never_starts_fixture(self):
+        for present in (False, True):
+            with self.subTest(marker_present=present):
+                receipt = {'images': self.cfg['imageProducers'], 'buildkitVerified': True,
+                           'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True,
+                           'runtimeStarted': False}
+                if present:
+                    receipt['runtimeContractVerified'] = False
+                (self.private / 'image-provenance.json').write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(RuntimeError, 'admission missing'):
+                    self.ns['start']()
+                self.command.assert_not_called()
+
+
 def source_labels(component, revision):
     return {'org.opencontainers.image.revision': revision,
             'org.opencontainers.image.source': 'https://github.com/liangzixuan/cronometer-gold',
             'org.opencontainers.image.title': 'cronometer-gold-' + component,
             'org.opencontainers.image.version': 'sha-' + revision}
+
+
+def runtime_config(component, revision):
+    # Bounded synthetic OCI configs; admission uses the real shared policy.
+    configs = {'postgres': {'User': '70:70',
+                  'Entrypoint': ['docker-entrypoint.sh'],
+                  'Cmd': ['postgres'],
+                  'StopSignal': 'SIGINT',
+                  'Volumes': {'/var/lib/postgresql/data': {}},
+                  'ExposedPorts': {'5432/tcp': {}},
+                  'Healthcheck': {'Test': ['CMD-SHELL', 'pg_isready']},
+                  'Env': ['GOSU_VERSION=', 'PGDATA=/var/lib/postgresql/data', 'PG_VERSION=17.11'],
+                  'Labels': {'io.cronometer.runtime.component': 'postgres',
+                             'io.cronometer.runtime.contract': 'openssl-3.5.9-r0-libuuid-2.42.3-r1-uid-gid-70-preowned-pgdata-and-tmpfs',
+                             'io.cronometer.upstream.image': 'docker.io/library/postgres:17.11-alpine3.24',
+                             'io.cronometer.upstream.image.digest': 'sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73',
+                             'io.cronometer.upstream.image.arm64.digest': 'sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2',
+                             'io.cronometer.upstream.version': '17.11',
+                             'io.cronometer.runtime.openssl-packages': 'libcrypto3=3.5.9-r0,libssl3=3.5.9-r0',
+                             'io.cronometer.runtime.openssl-upgrade-trigger': 'CVE-2026-14456',
+                             'io.cronometer.runtime.util-linux-packages': 'libuuid=2.42.3-r1',
+                             'io.cronometer.runtime.util-linux-upgrade-trigger': 'CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409,CVE-2026-78410'}},
+     'meilisearch': {'User': '1000:1000',
+                     'Entrypoint': ['tini', '--'],
+                     'Cmd': ['/bin/sh', '-c', '/bin/meilisearch'],
+                     'WorkingDir': '/meili_data',
+                     'Volumes': None,
+                     'StopSignal': None,
+                     'Shell': None,
+                     'ExposedPorts': {'7700/tcp': {}},
+                     'Healthcheck': {'Test': ['CMD-SHELL',
+                                              'curl --fail --silent http://127.0.0.1:7700/health '
+                                              '>/dev/null || exit 1'],
+                                     'Interval': 10000000000,
+                                     'Timeout': 5000000000,
+                                     'StartPeriod': 20000000000,
+                                     'Retries': 6},
+                     'Env': ['PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+                             'MEILI_HTTP_ADDR=0.0.0.0:7700',
+                             'MEILI_SERVER_PROVIDER=docker'],
+                     'Labels': {'io.cronometer.runtime.component': 'meilisearch',
+                                'io.cronometer.runtime.contract': 'v1.53.1-openssl-3.5.9-r0-uid-gid-1000',
+                                'io.cronometer.upstream.image': 'docker.io/getmeili/meilisearch:v1.53.1',
+                                'io.cronometer.upstream.image.digest': 'sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431',
+                                'io.cronometer.upstream.image.arm64.digest': 'sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee',
+                                'io.cronometer.upstream.source': 'https://github.com/meilisearch/meilisearch',
+                                'io.cronometer.upstream.source.revision': '577f7af28942b71782eab1e59f44ad8296ce0a92',
+                                'io.cronometer.upstream.version': 'v1.53.1',
+                                'io.cronometer.runtime.openssl-packages': 'libcrypto3=3.5.9-r0,libssl3=3.5.9-r0',
+                                'io.cronometer.runtime.openssl-upgrade-trigger': 'CVE-2026-14456'}}}
+    config = configs[component]
+    config['Labels'].update(source_labels(component, revision))
+    return config
 
 
 class ExistingSourceContractTests(unittest.TestCase):

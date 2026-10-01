@@ -121,7 +121,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3
+        image: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4
         env:
           POSTGRES_DB: nutrition_tracker
           POSTGRES_PASSWORD: nutrition_local_only
@@ -134,7 +134,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
       meilisearch:
-        image: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa
+        image: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe
         env:
           MEILI_ENV: development
           MEILI_MASTER_KEY: search-integration-key-20260815

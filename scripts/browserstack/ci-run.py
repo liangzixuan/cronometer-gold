@@ -187,8 +187,12 @@ def admit_images():
             policy.require_repository_source_contract(variables[0], image['Config'], item['sourceSha'])
         except SystemExit as error:
             raise RuntimeError('Image source identity differs from its original producer') from error
+        try:
+            policy.require_repository_runtime_contract(variables[0], image['Config'])
+        except SystemExit as error:
+            raise RuntimeError('Image runtime contract differs from the reviewed fixture policy') from error
     save(PRIVATE / 'image-provenance.json', {'images': producers, 'buildkitVerified': True,
-         'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False})
+         'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeContractVerified': True, 'runtimeStarted': False})
 
 
 def build_outputs_sha256():
@@ -331,7 +335,7 @@ def start():
 def _start_runtime():
     admitted = read(PRIVATE / 'image-provenance.json')
     require(admitted == {'images': CFG['imageProducers'], 'buildkitVerified': True,
-            'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeStarted': False}, 'Image provenance admission missing')
+            'githubSignedProvenanceVerified': True, 'runtimeImageIdentityVerified': True, 'runtimeContractVerified': True, 'runtimeStarted': False}, 'Image provenance admission missing')
     build = read(PRIVATE / 'build.json')
     require(build.get('command') == ' '.join(BUILD_COMMAND), 'Build command/tool mismatch')
     require(build.get('outputsSha256') == build_outputs_sha256(), 'Build output changed')
