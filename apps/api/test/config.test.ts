@@ -1,6 +1,9 @@
+import {
+  HOSTED_DEVELOPMENT_PROFILE,
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+} from "@nutrition-tracker/contracts";
 import { MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES } from "@nutrition-tracker/db";
 import { describe, expect, it } from "vitest";
-
 import { ConfigValidationError, loadApiDependencyConfig, loadConfig } from "../src/config.js";
 
 describe("loadConfig", () => {
@@ -43,6 +46,109 @@ describe("loadConfig", () => {
       ]);
       expect((error as Error).message).not.toContain(invalidPort);
     }
+  });
+});
+
+describe("hosted development captured email", () => {
+  const environment: NodeJS.ProcessEnv = {
+    DATABASE_URL: "postgresql://synthetic.invalid/nutrition",
+    NOURISHING_API_PROFILE: HOSTED_DEVELOPMENT_PROFILE,
+    NODE_ENV: "development",
+    SMTP_FROM: "Nourishing Development <no-reply@example.invalid>",
+    SMTP_HOST: "127.0.0.1",
+    SMTP_PORT: "1025",
+    EMAIL_VERIFICATION_PUBLIC_ORIGIN: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+    PASSWORD_RECOVERY_PUBLIC_ORIGIN: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+  };
+
+  it("selects the exact HTTPS origin while retaining loopback captured SMTP", () => {
+    expect(loadApiDependencyConfig(environment).emailVerification).toEqual({
+      profile: HOSTED_DEVELOPMENT_PROFILE,
+      from: environment.SMTP_FROM,
+      host: "127.0.0.1",
+      nodeEnv: "development",
+      port: 1025,
+      publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+      passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+      timeoutMs: 5_000,
+    });
+  });
+
+  it.each<[string, NodeJS.ProcessEnv]>([
+    ["unknown profile", { NOURISHING_API_PROFILE: "production" }],
+    ["blank profile", { NOURISHING_API_PROFILE: "" }],
+    ["unselected HTTPS origins", { NOURISHING_API_PROFILE: undefined }],
+    ["production mode", { NODE_ENV: "production" }],
+    ["test mode", { NODE_ENV: "test" }],
+    ["missing mode", { NODE_ENV: undefined }],
+    ["private SMTP hostname", { SMTP_HOST: "mailpit" }],
+    ["localhost SMTP hostname", { SMTP_HOST: "localhost" }],
+    ["foreign SMTP port", { SMTP_PORT: "2525" }],
+    ["unsafe sender", { SMTP_FROM: "safe@example.invalid\r\nBcc: other@example.invalid" }],
+    ["short timeout", { SMTP_TIMEOUT_MS: "99" }],
+    ["long timeout", { SMTP_TIMEOUT_MS: "10001" }],
+  ])("rejects %s", (_label, overrides) => {
+    expect(() => loadApiDependencyConfig({ ...environment, ...overrides })).toThrow(
+      ConfigValidationError,
+    );
+  });
+
+  it.each([
+    "NOURISHING_API_PROFILE",
+    "NODE_ENV",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_FROM",
+    "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+    "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+  ])("rejects an inherited %s", (field) => {
+    const input = { ...environment };
+    delete input[field];
+    Object.setPrototypeOf(input, { [field]: environment[field] });
+    expect(() => loadApiDependencyConfig(input)).toThrow(ConfigValidationError);
+  });
+
+  it.each([
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_FROM",
+    "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+    "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+  ])("requires explicit %s", (field) => {
+    const input = { ...environment };
+    delete input[field];
+    expect(() => loadApiDependencyConfig(input)).toThrow(ConfigValidationError);
+  });
+
+  it.each([
+    "",
+    "http://localhost:3443",
+    "https://127.0.0.1:3443",
+    "https://localhost",
+    "https://localhost:3444",
+    "https://localhost:3443/",
+    "https://localhost:3443/verify-email",
+    "https://localhost:3443?next=/diary",
+    "https://localhost:3443#token=invalid",
+    "https://user:password@localhost:3443",
+    "https://LOCALHOST:3443",
+    "https://localhost:3443.example.invalid",
+  ])("rejects a nonexact origin %s for either flow", (origin) => {
+    for (const field of ["EMAIL_VERIFICATION_PUBLIC_ORIGIN", "PASSWORD_RECOVERY_PUBLIC_ORIGIN"]) {
+      expect(() => loadApiDependencyConfig({ ...environment, [field]: origin })).toThrow(
+        ConfigValidationError,
+      );
+    }
+  });
+
+  it("does not silently disable email when only the hosted profile is selected", () => {
+    expect(() =>
+      loadApiDependencyConfig({
+        DATABASE_URL: environment.DATABASE_URL,
+        NOURISHING_API_PROFILE: HOSTED_DEVELOPMENT_PROFILE,
+        NODE_ENV: "development",
+      }),
+    ).toThrow(ConfigValidationError);
   });
 });
 

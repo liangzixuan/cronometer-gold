@@ -85,6 +85,9 @@ export async function createApiSearchRuntime(
   try {
     const localEmailDelivery = config.emailVerification
       ? new LocalMailpitEmailDelivery({
+          ...(config.emailVerification.profile === undefined
+            ? {}
+            : { profile: config.emailVerification.profile }),
           from: config.emailVerification.from,
           host: config.emailVerification.host,
           nodeEnv: config.emailVerification.nodeEnv,

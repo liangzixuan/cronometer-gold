@@ -1,5 +1,9 @@
 import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
+import {
+  HOSTED_DEVELOPMENT_PROFILE,
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+} from "@nutrition-tracker/contracts";
 
 const MAX_SMTP_REPLY_BYTES = 64 * 1_024;
 const MAX_SMTP_MESSAGE_BYTES = 32 * 1_024;
@@ -35,6 +39,7 @@ export class EmailDeliveryError extends Error {
 }
 
 export interface LocalMailpitEmailDeliveryOptions {
+  readonly profile?: typeof HOSTED_DEVELOPMENT_PROFILE;
   readonly from: string;
   readonly host: string;
   readonly nodeEnv: "development" | "test" | "production";
@@ -46,6 +51,7 @@ export interface LocalMailpitEmailDeliveryOptions {
 export class LocalMailpitEmailDelivery
   implements EmailVerificationDelivery, PasswordRecoveryDelivery
 {
+  readonly #profile: typeof HOSTED_DEVELOPMENT_PROFILE | undefined;
   readonly #from: string;
   readonly #host: "127.0.0.1";
   readonly #port: 1025;
@@ -58,12 +64,27 @@ export class LocalMailpitEmailDelivery
     if (options.host !== "127.0.0.1" || options.port !== 1025) {
       throw new EmailDeliveryConfigurationError("Local email delivery must use loopback Mailpit");
     }
+    if (
+      options.profile !== undefined &&
+      (!Object.hasOwn(options, "profile") ||
+        options.profile !== HOSTED_DEVELOPMENT_PROFILE ||
+        options.nodeEnv !== "development")
+    ) {
+      throw new EmailDeliveryConfigurationError("Invalid hosted development email profile");
+    }
+    this.#profile = options.profile;
     assertHeaderValue(options.from, "from");
     envelopeAddress(options.from);
     this.#from = options.from;
     this.#host = options.host;
     this.#port = options.port;
     this.#timeoutMs = boundedTimeout(options.timeoutMs ?? DEFAULT_SMTP_TIMEOUT_MS);
+  }
+
+  #validOrigin(url: URL, value: string): boolean {
+    return this.#profile === HOSTED_DEVELOPMENT_PROFILE
+      ? url.origin === HOSTED_DEVELOPMENT_WEB_ORIGIN && url.href === value
+      : url.protocol === "http:" && url.hostname === "127.0.0.1";
   }
 
   async sendVerificationEmail(input: {
@@ -77,8 +98,7 @@ export class LocalMailpitEmailDelivery
     }
     const url = new URL(input.verificationUrl);
     if (
-      url.protocol !== "http:" ||
-      url.hostname !== "127.0.0.1" ||
+      !this.#validOrigin(url, input.verificationUrl) ||
       url.username !== "" ||
       url.password !== "" ||
       url.pathname !== "/verify-email" ||
@@ -118,8 +138,7 @@ export class LocalMailpitEmailDelivery
     }
     const url = new URL(input.recoveryUrl);
     if (
-      url.protocol !== "http:" ||
-      url.hostname !== "127.0.0.1" ||
+      !this.#validOrigin(url, input.recoveryUrl) ||
       url.username !== "" ||
       url.password !== "" ||
       url.pathname !== "/reset-password" ||

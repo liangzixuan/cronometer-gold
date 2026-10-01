@@ -7,6 +7,10 @@ import {
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
 } from "@nutrition-tracker/artifact-store";
+import {
+  HOSTED_DEVELOPMENT_PROFILE,
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+} from "@nutrition-tracker/contracts";
 import { MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES } from "@nutrition-tracker/db";
 import { z } from "zod";
 
@@ -20,6 +24,7 @@ const environmentSchema = z.object({
 });
 
 const dependencyEnvironmentSchema = z.object({
+  NOURISHING_API_PROFILE: z.literal(HOSTED_DEVELOPMENT_PROFILE).optional(),
   DATABASE_RESTORE_EPOCH: z
     .string()
     .min(32)
@@ -149,6 +154,7 @@ export interface ApiDependencyConfig {
 }
 
 export interface ApiEmailVerificationDependencyConfig {
+  readonly profile?: typeof HOSTED_DEVELOPMENT_PROFILE;
   readonly from: string;
   readonly host: "127.0.0.1";
   readonly nodeEnv: "development" | "test";
@@ -238,6 +244,18 @@ export function loadApiDependencyConfig(
       ? undefined
       : "local-search-cursor-secret-change-before-shared-use-32-bytes");
   const issues: ConfigIssue[] = [];
+  const profile = result.data.NOURISHING_API_PROFILE;
+  if (
+    profile !== undefined &&
+    (!Object.hasOwn(environment, "NOURISHING_API_PROFILE") ||
+      !Object.hasOwn(environment, "NODE_ENV") ||
+      environment.NODE_ENV !== "development")
+  ) {
+    issues.push({
+      field: "NOURISHING_API_PROFILE",
+      message: "Hosted development requires an explicit development mode and profile",
+    });
+  }
   const emailEnvironmentFields = [
     "SMTP_HOST",
     "SMTP_PORT",
@@ -245,9 +263,16 @@ export function loadApiDependencyConfig(
     "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
     "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
   ] as const;
-  const emailEnvironmentConfigured = emailEnvironmentFields.some(
-    (field) => environment[field] !== undefined,
-  );
+  if (profile !== undefined) {
+    for (const field of emailEnvironmentFields) {
+      if (!Object.hasOwn(environment, field) || environment[field] === undefined) {
+        issues.push({ field, message: "Hosted development requires explicit mail configuration" });
+      }
+    }
+  }
+  const emailEnvironmentConfigured =
+    profile !== undefined ||
+    emailEnvironmentFields.some((field) => environment[field] !== undefined);
   let emailVerification: ApiEmailVerificationDependencyConfig | null = null;
   if (emailEnvironmentConfigured) {
     if (result.data.NODE_ENV === "production") {
@@ -262,19 +287,24 @@ export function loadApiDependencyConfig(
       if (!result.data.SMTP_FROM || !safeMailFrom(result.data.SMTP_FROM)) {
         issues.push({ field: "SMTP_FROM", message: "A safe local sender is required" });
       }
-      const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? "http://127.0.0.1:3000";
+      const defaultOrigin = profile === undefined ? "http://127.0.0.1:3000" : "";
+      const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? defaultOrigin;
       const passwordRecoveryPublicOrigin =
-        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN ?? "http://127.0.0.1:3000";
-      if (!isExactLoopbackOrigin(publicOrigin)) {
+        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN ?? defaultOrigin;
+      const validOrigin = (value: string) =>
+        profile === HOSTED_DEVELOPMENT_PROFILE
+          ? value === HOSTED_DEVELOPMENT_WEB_ORIGIN
+          : isExactLoopbackOrigin(value);
+      if (!validOrigin(publicOrigin)) {
         issues.push({
           field: "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
-          message: "Exact loopback HTTP origin is required for local verification",
+          message: "The exact email verification origin for the selected profile is required",
         });
       }
-      if (!isExactLoopbackOrigin(passwordRecoveryPublicOrigin)) {
+      if (!validOrigin(passwordRecoveryPublicOrigin)) {
         issues.push({
           field: "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
-          message: "Exact loopback HTTP origin is required for local recovery",
+          message: "The exact password recovery origin for the selected profile is required",
         });
       }
       if (
@@ -282,10 +312,11 @@ export function loadApiDependencyConfig(
         result.data.SMTP_PORT === 1025 &&
         result.data.SMTP_FROM &&
         safeMailFrom(result.data.SMTP_FROM) &&
-        isExactLoopbackOrigin(publicOrigin) &&
-        isExactLoopbackOrigin(passwordRecoveryPublicOrigin)
+        validOrigin(publicOrigin) &&
+        validOrigin(passwordRecoveryPublicOrigin)
       ) {
         emailVerification = {
+          ...(profile === undefined ? {} : { profile }),
           from: result.data.SMTP_FROM,
           host: result.data.SMTP_HOST,
           nodeEnv: result.data.NODE_ENV,

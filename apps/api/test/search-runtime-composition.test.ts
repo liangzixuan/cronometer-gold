@@ -1,3 +1,7 @@
+import {
+  HOSTED_DEVELOPMENT_PROFILE,
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+} from "@nutrition-tracker/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -180,6 +184,47 @@ beforeEach(() => {
 });
 
 describe("API dependency runtime composition", () => {
+  it("propagates the validated hosted email profile and exact origins", async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    mocks.createDatabaseFromEnvironment.mockReturnValue({ destroy });
+    const config = {
+      ...dependencyConfig(),
+      retention: null,
+      emailVerification: {
+        profile: HOSTED_DEVELOPMENT_PROFILE,
+        from: "Nourishing Development <no-reply@example.invalid>",
+        host: "127.0.0.1",
+        nodeEnv: "development",
+        port: 1025,
+        passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+        publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+        timeoutMs: 1_000,
+      },
+    } as const;
+    const runtime = await createApiSearchRuntime({ NODE_ENV: "development" }, config);
+    try {
+      expect(mocks.localMailpitEmailDelivery).toHaveBeenCalledWith({
+        profile: HOSTED_DEVELOPMENT_PROFILE,
+        from: config.emailVerification.from,
+        host: "127.0.0.1",
+        nodeEnv: "development",
+        port: 1025,
+        timeoutMs: 1_000,
+      });
+      expect(mocks.secureAuthService).toHaveBeenCalledWith(
+        expect.objectContaining({
+          emailVerificationPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+          passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+          emailVerificationDelivery: expect.any(Object),
+          passwordRecoveryDelivery: expect.any(Object),
+        }),
+      );
+    } finally {
+      await runtime.close();
+    }
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates one clock through auth, retention, and the artifact bulkhead seam", async () => {
     const destroy = vi.fn().mockResolvedValue(undefined);
     const database = { destroy };

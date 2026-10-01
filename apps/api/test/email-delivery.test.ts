@@ -1,35 +1,50 @@
+import { createHash } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
-
-import { afterEach, describe, expect, it } from "vitest";
-
+import {
+  HOSTED_DEVELOPMENT_PROFILE,
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+} from "@nutrition-tracker/contracts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadApiDependencyConfig } from "../src/config.js";
+import { type AuthRepository, SecureAuthService } from "../src/modules/auth/auth-service.js";
 import {
   EmailDeliveryConfigurationError,
   EmailDeliveryError,
   LocalMailpitEmailDelivery,
   sendSmtpMail,
 } from "../src/modules/auth/email-delivery.js";
+import { account } from "./fixtures.js";
 
 const servers: Server[] = [];
+const sockets = new Set<Socket>();
 
 afterEach(async () => {
+  for (const socket of sockets) socket.destroy();
+  sockets.clear();
   await Promise.all(
     servers
       .splice(0)
-      .map(
-        (server) =>
-          new Promise<void>((resolve, reject) =>
-            server.close((error) => (error ? reject(error) : resolve())),
-          ),
+      .map((server) =>
+        server.listening
+          ? new Promise<void>((resolve, reject) =>
+              server.close((error) => (error ? reject(error) : resolve())),
+            )
+          : Promise.resolve(),
       ),
   );
 });
 
-async function listen(connection: (socket: Socket) => void): Promise<number> {
-  const server = createServer(connection);
+async function listen(connection: (socket: Socket) => void, port = 0): Promise<number> {
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    socket.setTimeout(2_000, () => socket.destroy());
+    connection(socket);
+  });
   servers.push(server);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
+    server.listen({ port, host: "127.0.0.1", exclusive: true }, () => resolve());
   });
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Expected a TCP fixture port");
@@ -102,6 +117,157 @@ function successfulFixture(
     });
   };
 }
+
+describe("captured email profile boundaries", () => {
+  const options = {
+    from: "Nourishing Development <no-reply@example.invalid>",
+    host: "127.0.0.1",
+    nodeEnv: "development" as const,
+    port: 1025,
+    profile: HOSTED_DEVELOPMENT_PROFILE,
+    timeoutMs: 1_000,
+  } as const;
+
+  it.each(["production", "test"] as const)("rejects a selected profile in %s mode", (nodeEnv) => {
+    expect(() => new LocalMailpitEmailDelivery({ ...options, nodeEnv })).toThrow(
+      EmailDeliveryConfigurationError,
+    );
+  });
+
+  it.each(["", "production", "hosted-development "])("rejects unknown profile %s", (profile) => {
+    expect(
+      () =>
+        new LocalMailpitEmailDelivery({
+          ...options,
+          profile: profile as typeof HOSTED_DEVELOPMENT_PROFILE,
+        }),
+    ).toThrow(EmailDeliveryConfigurationError);
+  });
+
+  it("rejects inherited profile selection", () => {
+    const { profile, ...input } = options;
+    Object.setPrototypeOf(input, { profile });
+    expect(() => new LocalMailpitEmailDelivery(input)).toThrow(EmailDeliveryConfigurationError);
+  });
+
+  it.each([{ host: "localhost" }, { host: "mailpit" }, { host: "192.0.2.1" }, { port: 2525 }])(
+    "preserves loopback SMTP admission for %j",
+    (override) => {
+      expect(() => new LocalMailpitEmailDelivery({ ...options, ...override })).toThrow(
+        EmailDeliveryConfigurationError,
+      );
+    },
+  );
+
+  it("rejects malformed or foreign links in either flow before SMTP connection", async () => {
+    const delivery = new LocalMailpitEmailDelivery(options);
+    const token = `${"a".repeat(42)}A`;
+    for (const path of ["/verify-email", "/reset-password"]) {
+      const urls = [
+        ...[
+          "http://localhost:3443",
+          "https://127.0.0.1:3443",
+          "https://localhost:3444",
+          "https://localhost",
+          "https://LOCALHOST:3443",
+          "https://user:password@localhost:3443",
+          "http://127.0.0.1:3000",
+        ].map((origin) => `${origin}${path}#token=${token}`),
+        `${HOSTED_DEVELOPMENT_WEB_ORIGIN}/wrong#token=${token}`,
+        `${HOSTED_DEVELOPMENT_WEB_ORIGIN}${path}?next=/diary#token=${token}`,
+        `${HOSTED_DEVELOPMENT_WEB_ORIGIN}${path}#token=${token}&next=/diary`,
+        `${HOSTED_DEVELOPMENT_WEB_ORIGIN}${path}#token=${"a".repeat(42)}`,
+      ];
+      for (const url of urls) {
+        const common = { recipient: "capture@example.invalid", expiresAt: new Date("2030-01-01") };
+        await expect(
+          path === "/verify-email"
+            ? delivery.sendVerificationEmail({ ...common, verificationUrl: url })
+            : delivery.sendPasswordRecoveryEmail({ ...common, recoveryUrl: url }),
+        ).rejects.toBeInstanceOf(EmailDeliveryConfigurationError);
+      }
+    }
+  });
+
+  it.each([
+    ["hosted development", HOSTED_DEVELOPMENT_PROFILE, HOSTED_DEVELOPMENT_WEB_ORIGIN],
+    ["ordinary loopback", undefined, "http://127.0.0.1:3000"],
+  ] as const)(
+    "captures actual auth-generated links for %s",
+    { timeout: 15_000 },
+    async (_label, profile, origin) => {
+      const messages: string[] = [];
+      await listen(successfulFixture(messages), 1025);
+      const email = loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://synthetic.invalid/nutrition",
+        ...(profile === undefined ? {} : { NOURISHING_API_PROFILE: profile }),
+        NODE_ENV: "development",
+        SMTP_HOST: "127.0.0.1",
+        SMTP_PORT: "1025",
+        SMTP_FROM: options.from,
+        SMTP_TIMEOUT_MS: "1000",
+        EMAIL_VERIFICATION_PUBLIC_ORIGIN: origin,
+        PASSWORD_RECOVERY_PUBLIC_ORIGIN: origin,
+      }).emailVerification;
+      if (!email) throw new Error("Expected selected captured email");
+      const delivery = new LocalMailpitEmailDelivery(email);
+      const repository: AuthRepository = {
+        confirmEmailVerificationToken: vi.fn(async () => undefined),
+        confirmPasswordRecoveryToken: vi.fn(async () => undefined),
+        createReauthenticationProof: vi.fn(async () => undefined),
+        register: vi.fn(async () => account),
+        findPasswordCredential: vi.fn(async () => null),
+        createSession: vi.fn(async () => undefined),
+        findActiveSession: vi.fn(async () => account),
+        findPendingErasureRecoverySession: vi.fn(async () => null),
+        issueEmailVerificationToken: vi.fn(async (input) => {
+          await input.deliver();
+          return "issued" as const;
+        }),
+        issuePasswordRecoveryToken: vi.fn(async (input) => {
+          await input.deliver();
+          return "issued" as const;
+        }),
+        revokeSession: vi.fn(async () => true),
+      };
+      const service = new SecureAuthService({
+        repository,
+        emailVerificationDelivery: delivery,
+        emailVerificationPublicOrigin: email.publicOrigin,
+        passwordRecoveryDelivery: delivery,
+        passwordRecoveryPublicOrigin: email.passwordRecoveryPublicOrigin,
+        clock: () => new Date("2030-01-01T00:00:00Z"),
+      });
+      const syntheticAccount = {
+        ...account,
+        user: { ...account.user, email: "capture@example.invalid", emailVerified: false },
+      };
+      await expect(service.requestEmailVerification(syntheticAccount)).resolves.toEqual({
+        data: { status: "accepted" },
+      });
+      await expect(service.requestPasswordRecovery(syntheticAccount.user.email)).resolves.toEqual({
+        data: { status: "accepted" },
+      });
+      expect(messages).toHaveLength(2);
+      const issued = [
+        vi.mocked(repository.issueEmailVerificationToken).mock.calls[0]?.[0],
+        vi.mocked(repository.issuePasswordRecoveryToken).mock.calls[0]?.[0],
+      ];
+      for (const [index, path] of ["/verify-email", "/reset-password"].entries()) {
+        const link = messages[index]?.split("\r\n").find((line) => line.startsWith(origin));
+        if (!link) throw new Error("Missing captured generated link");
+        const url = new URL(link);
+        expect(url.origin).toBe(origin);
+        expect(url.pathname).toBe(path);
+        expect(url.search).toBe("");
+        expect(url.hash).toMatch(/^#token=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u);
+        const token = url.hash.slice("#token=".length);
+        expect(issued[index]?.tokenHash).toBe(createHash("sha256").update(token).digest("hex"));
+        expect(JSON.stringify(issued[index])).not.toContain(token);
+      }
+    },
+  );
+});
 
 describe("local Mailpit SMTP delivery", () => {
   it("parses multiline replies and dot-stuffs message content", async () => {
