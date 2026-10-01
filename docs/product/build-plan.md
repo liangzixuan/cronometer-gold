@@ -119,9 +119,10 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active product slice | Reproducible daily walkthrough and focused simplification | Real populated Dashboard/Diary/Add Food/Report flow, shared lifecycle checks, independent feature loading, reviewed Bootstrap Studio design handoff and repeatable setup. Preserve real persistence and existing integrity boundaries. |
+| High-priority October workstream | Windows frontend + hosted isolated development backend | A qualified, budget-bounded development backend and supported Windows Next/Expo profile complete the daily journeys with Ubuntu and Docker stopped. Prove environment isolation, authenticated HTTPS behavior and operation independent of the PC; follow the phased workstream below. |
+| Product acceptance target | Reproducible daily walkthrough and focused simplification | Real populated Dashboard/Diary/Add Food/Report flow, shared lifecycle checks, independent feature loading, reviewed Bootstrap Studio design handoff and repeatable setup. Preserve real persistence and existing integrity boundaries. |
 | Bounded approved maintenance | Expo compatibility refresh | Respect the approved release-age boundary, frozen install and applicable checks. This does not reopen catalogue qualification. |
-| Authorized operational work | Doppler secrets migration | Move development secrets, then scoped CI/staging consumers, with names-only inventory, restricted access, verified injection/sync and tested rollback. Production cutover retains its release requirements. See the migration sequence below. |
+| Authorized operational work | Doppler secrets migration | Prioritize the hosted-development consumer profile below, then scoped CI/staging consumers, with names-only inventory, restricted access, verified injection/sync and tested rollback. Preserve the existing local development configuration; production cutover retains its release requirements. See the migration sequence below. |
 | Preserved release prerequisite | Publication capacity and populated restore (ADR 0106), checklist C1 | Dedicated actual-command measurements at 12,500/25,000 synthetic records and restricted populated-restore replay/resume/rollback. Approved source work; service qualification and delivery pending. |
 | Completed beta prerequisite | V2 catalogue publication (ADR 0105) | Delivered at `0b6208df`; local and all three CI/nine container jobs passed after one approved database-only retry. Earlier failures preserved; capacity and target acceptance remain open. |
 | Completed beta prerequisite | Paged catalogue preparation through review (ADR 0104) | Delivered at `3816726`; bounded synthetic memory/authority proof, reviewed CI integration corrections and all three CI/nine container jobs passed. One approved quality retry and earlier failures remain preserved. |
@@ -155,12 +156,85 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
+### High-priority October workstream: Windows frontend and hosted development backend
+
+The user selected this workstream as a high priority for the October launch.
+Develop and review the Next.js and Expo frontends on Windows against a hosted,
+isolated development backend that remains available independently of this PC.
+Retain Appwrite's selected web-hosting role and the existing Fastify API,
+PostgreSQL, Meilisearch, workers, storage and authentication design. This is a
+planned development capability; a host, a Windows frontend profile and their
+acceptance evidence are still required.
+
+Deliver one working phase at a time, alongside the existing daily-product
+acceptance target. Reuse the reviewed backend, transport/domain packages,
+managed-runtime qualification and encrypted backup/restore operators, preserving
+their recorded source/local scope. CI's Linux/Docker jobs provide bounded
+integration and supply-chain evidence; they are not the long-lived backend.
+Keep the guarded local WSL stack as an explicitly selected optional fallback.
+The hosted profile must not silently switch to that stack or to production.
+
+1. **Qualify the environment and actual budget.** Select a supported backend host
+   only after verifying the account's remaining credits, expiry, included free
+   allowances, capacity and enforceable spending protection. Bound compute,
+   database/search/storage capacity, backups, logs, egress and test-email usage,
+   including restarts and idle operation. Record the owner, limits, monitoring
+   and stop/teardown behavior before the allowance expires. Existing credits or
+   verified free allowances must cover the complete environment with zero
+   out-of-pocket charges; an unavailable or insufficient allowance blocks
+   provisioning rather than authorizing a paid fallback. Host selection and
+   resource creation retain their applicable action-specific approvals.
+2. **Establish the isolated hosted development backend.** Qualify the current
+   Fastify/PostgreSQL/Meilisearch/worker/storage path with explicit synthetic
+   fixtures and a complete nutrient registry. Use separate development accounts,
+   credentials, data stores, artifact prefixes and API origin; do not import
+   production or historical private data. Keep database, search, storage and
+   operator/test-mail interfaces private behind the backend's access controls;
+   clients use the authenticated HTTPS API, without infrastructure credentials
+   or direct service access. Qualify private captured test-email delivery without
+   sending to real recipients or relaxing the existing Mailpit/production guards.
+   Apply the Doppler sequence below to scoped hosted workloads, and verify
+   migrations/readiness, worker and search operation, failure recovery, and an
+   actual downloaded encrypted-backup restore with required erasure replay.
+   Synthetic success does not establish live catalogue or production acceptance.
+3. **Implement the supported Windows frontend profile.** Document and validate
+   the Windows Node/package-manager prerequisites and maintained Next.js/Expo
+   frontend install/run commands. Reuse existing clients, BFF, domain logic and
+   parsers; select the exact development HTTPS API explicitly and reject a
+   production endpoint in this profile. Preserve authentication, origin/CORS,
+   redirect, TLS, cookie, session-revocation and native secure-storage controls.
+   Qualify the local web origin and its trust setup without disabling Secure
+   cookies or TLS verification. Only intended public configuration belongs in
+   browser/native bundles; server, database, search, storage, email and Doppler
+   workload secrets stay with their authorized server-side consumers. Current
+   Linux source/build instructions remain in force until the focused Windows
+   frontend workflow changes and their applicable checks are accepted. Native
+   signing, phone exposure and device acceptance retain their separate gates.
+4. **Accept the complete development workflow and operations.** With Ubuntu and
+   Docker stopped, run the actual Windows frontends through registration/login,
+   sign-out and revoked-session behavior, synthetic food search/barcode lookup,
+   diary add/edit, Dashboard, Nutrition Report and reload. Verify cross-owner
+   isolation, missing/revoked-secret failures, private-output redaction and that
+   development journeys issue no requests to production. Use independent hosted
+   API and worker evidence to prove operation without a PC connection. Record
+   the deployed revision, resource usage, latency, backup/restore results and
+   operator recovery steps; retain the existing API/privacy, dependency,
+   provenance/digest, reviewer and release gates. Development acceptance does
+   not close staging, production email, hosted-release or personal-device gates.
+
+This setup depends on internet access and hosted-service availability. Measure
+client-visible latency and any cold starts or throttling, and keep outages
+visible without claiming offline catalogue or diary reads. Monitor usage and
+credit expiry against the qualified budget. The optional local WSL profile
+supports deliberate local work; it does not make an unavailable hosted profile
+healthy or justify changing its environment automatically.
+
 ### Authorized operational work: Doppler secrets migration
 
 On September 30, 2026, the user authorized this migration and allowed it to be
 selected when ready without another general approval request. Sequence it as a
-bounded package alongside the launch work; it does not restart an expired work
-window or replace the existing product priorities.
+bounded package alongside the launch work, prioritizing the hosted-development
+consumer profile above. It does not restart an expired work window.
 
 The first launcher consumer has reviewed local source and a verified real
 Doppler injection: `DATABASE_URL` and `SEARCH_CURSOR_SECRET` were copied unchanged
@@ -176,7 +250,10 @@ explicit configuration precedence without printing values. Confirm included
 account allowance and use supported integrations and the installed CLI. Keep
 Nourishing configurations and credentials separate from other products.
 
-1. Migrate development inputs from their authorized current owners. Validate
+1. Migrate development inputs from their authorized current owners. Give the
+   hosted-development backend its own explicit configuration and scoped workload
+   credentials; do not repoint the existing `nourishing/dev` local launcher inputs
+   or retire `.env` while other consumers still require them. Validate
    least-privilege access, environment separation, redacted logs, missing/revoked
    credential behavior and the documented no-fallback execution policy. Never
    import historical Mac credentials or put private secrets in web/native bundles.
@@ -213,12 +290,12 @@ source writers or grant deployment, spending or credential-custody exceptions.
 
 | Work | Concrete next exit |
 | --- | --- |
-| One complete hosted path | Retain the selected Appwrite web-hosting role and settle a qualified backend for the API, PostgreSQL, Meilisearch, workers, storage and email within verified existing credits/free allowances and zero out-of-pocket charges. Verify staging operation and recovery from an actual downloaded off-host encrypted backup, including required erasure replay. The unpublished hosting candidate already implements managed qualification/controller and owned encrypted backup/restore operators; reconcile and qualify that work rather than rebuilding it. Azure remains evaluated, not deployed or accepted; the previously inspected VM was unavailable and current allowance/capacity must be verified. |
+| One complete hosted path | Start with the high-priority Windows frontend/hosted-development workstream above, retaining Appwrite web hosting and reusing the existing managed qualification/controller and owned encrypted backup/restore implementation within its recorded local scope. Extend to staging only under its access/recovery gates, including actual downloaded off-host encrypted-backup restore and erasure replay. Azure remains evaluated, not deployed or accepted; the previously inspected VM was unavailable and current allowance/capacity must be verified. |
 | Production identity email | Complete verification/recovery delivery, abuse controls and failure handling under the selected authentication design. Preserve account IDs, erasure/revocation and fresh-action authorization; local Mailpit does not close this gate. |
 | Focused QA tools | Use Polypane for responsive layout, accessibility, focus and zoom; Requestly for synthetic errors/delays and exploratory API debugging, then capture useful regressions in maintained tests. Use BrowserStack for deployed/CI journeys and a small justified browser matrix. The recorded matrix is one Windows/Chrome configuration; installations alone are not verified workflows. Native installation, lifecycle and upgrades require separate device acceptance. |
 | Repeatable design handoff | Keep Bootstrap Studio as the visual design source and React as the owner of behavior. Extend the existing frontend-design handoff with reviewable color, spacing and typography tokens plus component mappings; verify the resulting responsive and interactive UI. |
 | CodeScene follow-through | Work on relevant hotspots with revision-specific findings and documented deferrals. Observe the configured native PR checks on the next substantive authorized PR; do not create a dummy PR, request paid analysis or refactor unrelated code for a score. |
-| Current stack inventory | Keep one concise operational inventory with role, environment, source location, deployed revision, verification date and state (available, implemented, verified or deployed). Link historical receipts and distinguish main, the unpublished candidate and actual deployment. The Windows handoff maintains this in `STACK-STATUS.md`; refresh relevant external facts before making operational decisions. |
+| Current stack inventory | Keep one concise operational inventory with role, environment, source location, deployed revision, verification date and state (available, implemented, verified or deployed). Link historical receipts and distinguish checkouts, published revisions and actual deployment. The Windows handoff maintains this in `STACK-STATUS.md`; refresh relevant external facts before making operational decisions. |
 
 ### Preserved release prerequisites
 
