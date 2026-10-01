@@ -24,3 +24,9 @@ ff14b339b5b825053f2e2b650638476efab67bdb:infra/azure/files/deployment-preflight.
 # Explicit repeated-hex fixtures for readiness validation and error redaction.
 ff14b339b5b825053f2e2b650638476efab67bdb:infra/azure/files/tests/static-contracts.py:generic-api-key:537
 ff14b339b5b825053f2e2b650638476efab67bdb:infra/azure/files/tests/static-contracts.py:generic-api-key:551
+
+# Public Mailpit v1.31.3 source SHA-256 checksums, matched to its upstream archive and Git blobs.
+ea434aa3f1145938eba6d132f2b27274607387d2:infra/docker/mailpit-build-inputs.json:generic-api-key:49
+ea434aa3f1145938eba6d132f2b27274607387d2:infra/docker/mailpit-build-inputs.json:generic-api-key:146
+# Public oauth2 module pseudoversion in go-licenses v2.0.1; matched to saved MVS and upstream go.sum.
+ea434aa3f1145938eba6d132f2b27274607387d2:infra/docker/mailpit-build-inputs.json:generic-api-key:3890
