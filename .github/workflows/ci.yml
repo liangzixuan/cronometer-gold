@@ -36,6 +36,13 @@ jobs:
           python3 -m unittest discover -s infra/azure/tests -p 'test_*.py'
           python3 infra/azure/files/tests/static-contracts.py
 
+      - name: Validate the separate Azure development empty-host contract
+        run: |
+          terraform -chdir=infra/development/azure init -backend=false -lockfile=readonly -input=false
+          terraform -chdir=infra/development/azure fmt -check
+          terraform -chdir=infra/development/azure validate
+          python3 -B infra/development/azure/test-contract.py
+
       - name: Validate the OCI controlled-beta infrastructure
         run: |
           terraform -chdir=infra/oci init -backend=false -lockfile=readonly
