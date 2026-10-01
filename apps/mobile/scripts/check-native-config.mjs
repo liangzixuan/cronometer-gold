@@ -1,27 +1,16 @@
-import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
-const expoHome = fileURLToPath(new URL("../.expo/home/", import.meta.url));
-mkdirSync(expoHome, { recursive: true });
+import { readExpoNativeConfig } from "./run-expo.mjs";
 
-const result = spawnSync("expo", ["config", "--type", "introspect", "--json"], {
-  encoding: "utf8",
-  env: {
-    ...process.env,
-    __UNSAFE_EXPO_HOME_DIRECTORY: expoHome,
-    EXPO_NO_TELEMETRY: "1",
-  },
-  maxBuffer: 20_000_000,
-});
-if (result.error) throw result.error;
-if (result.status !== 0) {
-  console.error(result.stderr.trim() || "Expo native configuration introspection failed.");
+let config;
+try {
+  config = await readExpoNativeConfig();
+} catch {
+  console.error("Expo native configuration introspection failed.");
   process.exit(1);
 }
-
-const config = JSON.parse(result.stdout);
 const failures = [];
 const iosTransport = config.ios?.infoPlist?.NSAppTransportSecurity;
 const iosInfo = config.ios?.infoPlist ?? {};

@@ -55,6 +55,12 @@ unchanged tests, and leave system/user configuration alone. Do not simulate CLI
 output, skip assertions or treat this as working service integration. Service
 checks still require the actual local engine and their guarded lifecycle.
 
+The workspace uses `verifyDepsBeforeRun: error`. When installed dependencies are
+missing or out of sync, pnpm script and exec commands stop instead of installing
+packages. Run the separately scoped frozen install, verify the resulting payload,
+then retry the requested check. Keep `pnpm_config_verify_deps_before_run` unset in
+the invoking environment so dependency installation remains explicit.
+
 Application image builds must compile the selected workspace's dependency closure
 in dependency order after the strict frozen install. A root Turbo build can mask
 a missing dependency build through existing `dist` output. When changing workspace
@@ -109,7 +115,11 @@ Run application commands in the Linux checkout. The separately reviewed
 exception for a qualified Windows Next.js frontend checkout. Its frozen install,
 frontend checks, HTTPS trust and owned-process lifecycle need native Windows
 evidence before use; it does not authorize Windows backend or native release
-builds. Keep Linux CI/integration and all other application commands in WSL.
+builds. The [finite Windows Expo tooling](windows-mobile-tooling.md) profile adds
+only dependency/configuration checks, JavaScript export and their contracts
+prerequisite after native descendant ownership, parent-loss cleanup and actual
+command environment qualification. Interactive start/dev rejects before spawn.
+Keep Linux CI/integration and all other application commands in WSL.
 Prefer direct WSL arguments for
 simple operations, or one reviewed Bash script for a multi-step sequence. Avoid
 rebuilding nested PowerShell/Bash/Node quoting for every integration run. Reuse

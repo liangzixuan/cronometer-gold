@@ -4,7 +4,15 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 
-import { ExpoProcessError, runExpo } from "./run-expo.mjs";
+import { WindowsOwnedProcessError } from "../../../scripts/windows-owned-process.mjs";
+
+import {
+  ExpoProcessError,
+  prepareWindowsExpo,
+  readExpoNativeConfig,
+  resolveExpoCli,
+  runExpo,
+} from "./run-expo.mjs";
 
 let nextFakePid = 30_000;
 
@@ -63,6 +71,8 @@ test("starts Expo detached with private home and telemetry disabled", async () =
   const calls = [];
   const directories = [];
   await runExpo(["start", "--localhost"], {
+    platform: "linux",
+    groupExists: () => false,
     environment: {
       PATH: "/usr/bin",
       UNRELATED: "kept-for-compatible-direct-invocation",
@@ -77,8 +87,9 @@ test("starts Expo detached with private home and telemetry disabled", async () =
   assert.equal(directories.length, 1);
   assert.deepEqual(directories[0].options, { recursive: true });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].command, "expo");
-  assert.deepEqual(calls[0].arguments_, ["start", "--localhost"]);
+  assert.equal(calls[0].command, process.execPath);
+  assert.equal(calls[0].arguments_[0], resolveExpoCli());
+  assert.deepEqual(calls[0].arguments_.slice(1), ["start", "--localhost"]);
   assert.equal(calls[0].options.detached, true);
   assert.equal(calls[0].options.shell, false);
   assert.equal(calls[0].options.stdio, "inherit");
@@ -119,18 +130,24 @@ test("rejects every unreviewed Expo argument shape before filesystem or process 
 test("accepts the exact dependency-check Expo invocation", async () => {
   const calls = [];
   await runExpo(["install", "--check"], {
+    platform: "linux",
+    groupExists: () => false,
     mkdir: () => undefined,
     spawn: (command, arguments_) => {
       calls.push({ arguments_, command });
       return fakeChild();
     },
   });
-  assert.deepEqual(calls, [{ arguments_: ["install", "--check"], command: "expo" }]);
+  assert.deepEqual(calls, [
+    { arguments_: [resolveExpoCli(), "install", "--check"], command: process.execPath },
+  ]);
 });
 
 test("preserves child exit status and forwards supported signals to the child group", async () => {
   await assert.rejects(
     runExpo(["export", "--platform", "all", "--output-dir", "dist"], {
+      platform: "linux",
+      groupExists: () => false,
       mkdir: () => undefined,
       spawn: () => fakeChild({ status: 9 }),
     }),
@@ -405,5 +422,196 @@ test("escalates after Expo exits and terminates a signal-ignoring descendant", {
       }
     }
     await Promise.race([launched.catch(() => undefined), delay(1_000)]);
+  }
+});
+
+function windowsDependencies(extra = {}) {
+  return {
+    platform: "win32",
+    execPath: "C:\\Node\\node.exe",
+    environment: {
+      SystemRoot: "C:\\Windows",
+      PATH: "C:\\Node;C:\\Tools",
+      EXPO_PUBLIC_API_URL: "https://native-qualification.invalid",
+    },
+    readdir: () => [".env.example"],
+    ...extra,
+  };
+}
+
+test("Windows projects only reviewed frontend settings and retains online headless validation", () => {
+  const dependencies = windowsDependencies();
+  Object.assign(dependencies.environment, {
+    DATABASE_URL: "database-canary",
+    DOPPLER_TOKEN: "doppler-canary",
+    AWS_SECRET_ACCESS_KEY: "aws-canary",
+    SMTP_PASS: "mail-canary",
+    EXPO_PUBLIC_UNREVIEWED: "public-canary",
+    NODE_ENV: "unreviewed-mode",
+    BABEL_ENV: "unreviewed-mode",
+    NOURISHING_POWERSHELL: "C:\\Tools\\pwsh.exe",
+  });
+  const plan = prepareWindowsExpo(["install", "--check"], dependencies);
+  assert.equal(plan.executable, "C:\\Node\\node.exe");
+  assert.deepEqual(plan.arguments, [resolveExpoCli(), "install", "--check"]);
+  assert.equal(plan.powershellPath, "C:\\Tools\\pwsh.exe");
+  assert.equal(plan.environment.PATH, "C:\\Node;C:\\Windows\\System32");
+  assert.equal(plan.environment.EXPO_PUBLIC_API_URL, "https://native-qualification.invalid");
+  assert.equal(plan.environment.NODE_ENV, "development");
+  assert.equal(plan.environment.BABEL_ENV, "development");
+  assert.equal(plan.environment.CI, "1");
+  assert.equal(plan.environment.EXPO_UNSTABLE_HEADLESS, "1");
+  assert.equal(plan.environment.EXPO_NO_DEPENDENCY_VALIDATION, "0");
+  assert.equal(plan.environment.EXPO_NO_NEW_ARCH_COMPAT_CHECK, "0");
+  assert.equal(plan.environment.EXPO_NO_DOTENV, "1");
+  assert.equal(Object.hasOwn(plan.environment, "EXPO_OFFLINE"), false);
+  assert.equal(
+    Object.values(plan.environment).some((value) => value.includes("canary")),
+    false,
+  );
+  assert.equal(Object.hasOwn(plan.environment, "NOURISHING_POWERSHELL"), false);
+});
+
+test("Windows refuses case collisions, inherited fields, injection, bypasses and private dotenv", () => {
+  for (const extra of [
+    { systemroot: "C:\\Other" },
+    { NODE_OPTIONS: "--import=untrusted" },
+    { NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+    { NODE_EXTRA_CA_CERTS: "other.pem" },
+    { EXPO_OFFLINE: "0" },
+    { EXPO_NO_DEPENDENCY_VALIDATION: "1" },
+    { EXPO_NO_NEW_ARCH_COMPAT_CHECK: "1" },
+    { EXPO_NO_DOTENV: "0" },
+    { npm_config_strict_ssl: "false" },
+    { npm_config_offline: "true" },
+  ]) {
+    const dependencies = windowsDependencies();
+    Object.assign(dependencies.environment, extra);
+    assert.throws(() => prepareWindowsExpo(["install", "--check"], dependencies));
+  }
+  const inherited = windowsDependencies();
+  Object.setPrototypeOf(inherited.environment, { DOPPLER_TOKEN: "inherited" });
+  assert.throws(() => prepareWindowsExpo(["install", "--check"], inherited), /Inherited/u);
+  for (const name of [".env", ".env.local", ".env.production", ".ENV"]) {
+    assert.throws(
+      () =>
+        prepareWindowsExpo(["install", "--check"], windowsDependencies({ readdir: () => [name] })),
+      /dotenv/u,
+    );
+  }
+});
+
+test("Windows requires an exact separate development API origin without a fallback", () => {
+  for (const value of [
+    undefined,
+    "https://nourishing.app",
+    "http://localhost:4000",
+    "https://dev-api.nourishing.app/",
+    "https://dev-api.nourishing.app?production=1",
+  ]) {
+    const dependencies = windowsDependencies();
+    if (value === undefined) delete dependencies.environment.EXPO_PUBLIC_API_URL;
+    else dependencies.environment.EXPO_PUBLIC_API_URL = value;
+    assert.throws(
+      () => prepareWindowsExpo(["install", "--check"], dependencies),
+      /exact hosted development/u,
+    );
+  }
+});
+
+test("Windows start rejects before any filesystem or process access", async () => {
+  let touched = false;
+  await assert.rejects(
+    runExpo(
+      ["start", "--localhost"],
+      windowsDependencies({
+        readdir: () => {
+          touched = true;
+          return [];
+        },
+        mkdir: () => {
+          touched = true;
+        },
+        runWindowsOwnedProcess: () => {
+          touched = true;
+        },
+      }),
+    ),
+    /only finite/u,
+  );
+  assert.equal(touched, false);
+});
+
+test("Windows finite export uses owned adapter and config parses its captured JSON", async () => {
+  const calls = [];
+  const writes = [];
+  const dependencies = windowsDependencies({
+    mkdir() {},
+    stdout: { write: (value) => writes.push(value) },
+    stderr: { write() {} },
+    runWindowsOwnedProcess: async (plan) => {
+      calls.push(plan);
+      return {
+        stdout: plan.arguments[1] === "config" ? '{"newArchEnabled":true}' : "exported",
+        stderr: "",
+      };
+    },
+  });
+  await runExpo(["export", "--platform", "all", "--output-dir", "dist"], dependencies);
+  assert.equal(calls[0].environment.NODE_ENV, "production");
+  assert.equal(calls[0].timeoutMs, 240_000);
+  assert.deepEqual(writes, ["exported"]);
+  assert.deepEqual(await readExpoNativeConfig(dependencies), { newArchEnabled: true });
+  assert.deepEqual(calls[1].arguments.slice(1), ["config", "--type", "introspect", "--json"]);
+  assert.equal(calls[1].maxOutputBytes, 20_000_000);
+});
+
+test("installed Expo identity and exact pin are checked before launch", () => {
+  for (const expoManifest of [
+    { name: "other", version: "57.0.26", bin: { expo: "bin/cli" } },
+    { name: "expo", version: "57.0.25", bin: { expo: "bin/cli" } },
+    { name: "expo", version: "57.0.26", bin: { expo: "other" } },
+  ])
+    assert.throws(() => resolveExpoCli({ expoManifest }), /exact repository identity/u);
+});
+
+test("Windows failures preserve only bounded captured application diagnostics", async () => {
+  for (const failure of [
+    new WindowsOwnedProcessError("command did not complete naturally", {
+      stdout: "dependency report\\n",
+      stderr: "incompatible Expo version\\n",
+      activeZero: true,
+      outputDrained: true,
+      status: 1,
+    }),
+    new Error("controller-private-detail"),
+  ]) {
+    const output = { stdout: [], stderr: [] };
+    const dependencies = windowsDependencies({
+      mkdir() {},
+      stdout: {
+        write(value) {
+          output.stdout.push(value);
+        },
+      },
+      stderr: {
+        write(value) {
+          output.stderr.push(value);
+        },
+      },
+      runWindowsOwnedProcess: async () => {
+        throw failure;
+      },
+    });
+    await assert.rejects(
+      runExpo(["install", "--check"], dependencies),
+      (error) => error === failure,
+    );
+    if (failure instanceof WindowsOwnedProcessError) {
+      assert.deepEqual(output, {
+        stdout: ["dependency report\\n"],
+        stderr: ["incompatible Expo version\\n"],
+      });
+    } else assert.deepEqual(output, { stdout: [], stderr: [] });
   }
 });

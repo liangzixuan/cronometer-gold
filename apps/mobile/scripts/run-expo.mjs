@@ -1,12 +1,20 @@
-import { spawn as spawnProcess } from "node:child_process";
-import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawn as spawnProcess, spawnSync } from "node:child_process";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve, win32 } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { nestedProcessTerminationGraceMs } from "../../../scripts/local-development-shutdown-budget.mjs";
 
+import {
+  runWindowsOwnedProcess,
+  WindowsOwnedProcessError,
+} from "../../../scripts/windows-owned-process.mjs";
+
 const scriptPath = fileURLToPath(import.meta.url);
+const mobileDirectory = resolve(dirname(scriptPath), "..");
+const repositoryRoot = resolve(mobileDirectory, "../..");
 const expoHome = fileURLToPath(new URL("../.expo/home/", import.meta.url));
 const forwardedSignals = Object.freeze(["SIGINT", "SIGTERM", "SIGHUP"]);
 const reviewedExpoInvocations = Object.freeze([
@@ -26,6 +34,175 @@ function assertReviewedExpoInvocation(arguments_) {
   ) {
     throw new Error("Expo invocation is not reviewed for this repository");
   }
+}
+
+export function resolveExpoCli(dependencies = {}) {
+  const requireMobile = createRequire(resolve(mobileDirectory, "package.json"));
+  const manifest =
+    dependencies.mobileManifest ??
+    JSON.parse(readFileSync(resolve(mobileDirectory, "package.json"), "utf8"));
+  const installed = dependencies.expoManifest ?? requireMobile("expo/package.json");
+  const expected = manifest.dependencies?.expo;
+  if (
+    !/^\d+\.\d+\.\d+$/u.test(expected ?? "") ||
+    installed.name !== "expo" ||
+    installed.version !== expected ||
+    installed.bin?.expo !== "bin/cli"
+  ) {
+    throw new Error("Installed Expo must match its exact repository identity and version.");
+  }
+  return (dependencies.resolveExpo ?? (() => requireMobile.resolve("expo/bin/cli")))();
+}
+
+export function prepareWindowsExpo(arguments_, dependencies = {}) {
+  const finite = [
+    ["export", "--platform", "all", "--output-dir", "dist"],
+    ["install", "--check"],
+    ["config", "--type", "introspect", "--json"],
+  ];
+  if (
+    !Array.isArray(arguments_) ||
+    !finite.some(
+      (allowed) =>
+        allowed.length === arguments_.length &&
+        allowed.every((value, i) => value === arguments_[i]),
+    )
+  )
+    throw new TypeError("Windows Expo supports only finite export, dependency and config checks.");
+  const environment = dependencies.environment ?? process.env;
+  const own = new Map();
+  for (const name in environment) {
+    if (!Object.hasOwn(environment, name))
+      throw new TypeError("Inherited frontend environment entry.");
+    const descriptor = Object.getOwnPropertyDescriptor(environment, name);
+    const canonical = name.toUpperCase();
+    if (
+      !descriptor ||
+      !("value" in descriptor) ||
+      typeof descriptor.value !== "string" ||
+      descriptor.value.includes("\0") ||
+      own.has(canonical)
+    ) {
+      throw new TypeError("Invalid or case-colliding frontend environment.");
+    }
+    own.set(canonical, descriptor.value);
+  }
+  const blocked = [
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "NODE_EXTRA_CA_CERTS",
+    "NODE_TLS_REJECT_UNAUTHORIZED",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "OPENSSL_CONF",
+    "OPENSSL_MODULES",
+    "GIT_SSL_NO_VERIFY",
+    "CURL_INSECURE",
+    "EXPO_OFFLINE",
+  ];
+  if (
+    blocked.some((name) => own.has(name)) ||
+    ["NPM_CONFIG_STRICT_SSL", "PNPM_CONFIG_STRICT_SSL"].some(
+      (name) => own.get(name)?.toLowerCase() === "false",
+    ) ||
+    ["NPM_CONFIG_OFFLINE", "PNPM_CONFIG_OFFLINE"].some((name) =>
+      /^(?:1|true)$/iu.test(own.get(name) ?? ""),
+    ) ||
+    ["EXPO_NO_DEPENDENCY_VALIDATION", "EXPO_NO_NEW_ARCH_COMPAT_CHECK"].some(
+      (name) => own.has(name) && own.get(name) !== "0",
+    ) ||
+    (own.has("EXPO_NO_DOTENV") && own.get("EXPO_NO_DOTENV") !== "1")
+  ) {
+    throw new TypeError("Windows Expo refuses runtime injection, offline and validation bypasses.");
+  }
+  const apiOrigin = own.get("EXPO_PUBLIC_API_URL");
+  if (
+    !["https://dev-api.nourishing.app", "https://native-qualification.invalid"].includes(apiOrigin)
+  ) {
+    throw new TypeError(
+      "Select the exact hosted development or synthetic qualification API origin.",
+    );
+  }
+  const readdir = dependencies.readdir ?? readdirSync;
+  for (const directory of [repositoryRoot, mobileDirectory]) {
+    if (
+      readdir(directory).some((name) => /^\.env(?:\.|$)/iu.test(name) && name !== ".env.example")
+    ) {
+      throw new TypeError("Windows Expo refuses implicit private dotenv files.");
+    }
+  }
+  const executable = dependencies.execPath ?? process.execPath;
+  const systemRoot = own.get("SYSTEMROOT");
+  if (!win32.isAbsolute(executable) || !systemRoot || !win32.isAbsolute(systemRoot)) {
+    throw new TypeError("Windows Node and SystemRoot must be absolute paths.");
+  }
+  const projected = {};
+  for (const [canonical, name] of [
+    ["SYSTEMROOT", "SystemRoot"],
+    ["WINDIR", "WINDIR"],
+    ["TEMP", "TEMP"],
+    ["TMP", "TMP"],
+    ["USERPROFILE", "USERPROFILE"],
+    ["APPDATA", "APPDATA"],
+    ["LOCALAPPDATA", "LOCALAPPDATA"],
+  ]) {
+    if (own.has(canonical)) projected[name] = own.get(canonical);
+  }
+  Object.assign(projected, {
+    PATH: `${win32.dirname(executable)};${win32.join(systemRoot, "System32")}`,
+    CI: "1",
+    NODE_ENV: arguments_[0] === "export" ? "production" : "development",
+    BABEL_ENV: arguments_[0] === "export" ? "production" : "development",
+    __UNSAFE_EXPO_HOME_DIRECTORY: expoHome,
+    EXPO_NO_TELEMETRY: "1",
+    EXPO_NO_DOTENV: "1",
+    EXPO_UNSTABLE_HEADLESS: "1",
+    EXPO_NO_DEPENDENCY_VALIDATION: "0",
+    EXPO_NO_NEW_ARCH_COMPAT_CHECK: "0",
+    EXPO_PUBLIC_API_URL: apiOrigin,
+  });
+  return {
+    executable,
+    arguments: [resolveExpoCli(dependencies), ...arguments_],
+    cwd: mobileDirectory,
+    environment: projected,
+    timeoutMs: arguments_[0] === "export" ? 240_000 : 120_000,
+    maxOutputBytes: arguments_[0] === "config" ? 20_000_000 : 4_000_000,
+    powershellPath: own.get("NOURISHING_POWERSHELL"),
+  };
+}
+
+async function executeWindowsExpo(arguments_, dependencies) {
+  const plan = prepareWindowsExpo(arguments_, dependencies);
+  (dependencies.mkdir ?? mkdirSync)(expoHome, { recursive: true });
+  return await (dependencies.runWindowsOwnedProcess ?? runWindowsOwnedProcess)(plan);
+}
+
+export async function readExpoNativeConfig(dependencies = {}) {
+  const arguments_ = ["config", "--type", "introspect", "--json"];
+  if ((dependencies.platform ?? process.platform) === "win32") {
+    const result = await executeWindowsExpo(arguments_, dependencies);
+    return JSON.parse(result.stdout);
+  }
+  (dependencies.mkdir ?? mkdirSync)(expoHome, { recursive: true });
+  const result = (dependencies.spawnSync ?? spawnSync)(
+    dependencies.execPath ?? process.execPath,
+    [resolveExpoCli(dependencies), ...arguments_],
+    {
+      encoding: "utf8",
+      env: {
+        ...(dependencies.environment ?? process.env),
+        __UNSAFE_EXPO_HOME_DIRECTORY: expoHome,
+        EXPO_NO_TELEMETRY: "1",
+      },
+      maxBuffer: 20_000_000,
+      shell: false,
+      cwd: mobileDirectory,
+    },
+  );
+  if (result.error || result.status !== 0)
+    throw new Error("Expo native configuration introspection failed.");
+  return JSON.parse(result.stdout);
 }
 
 export class ExpoProcessError extends Error {
@@ -57,12 +234,10 @@ function monitorExpoChild(child, dependencies) {
   }
   const runtime = dependencies.signalRuntime ?? process;
   const kill = dependencies.kill ?? ((pid, signal) => process.kill(pid, signal));
-  const platform = dependencies.platform ?? process.platform;
   const groupExists =
     dependencies.groupExists ??
     ((pid) => {
       try {
-        if (platform === "win32") return child.exitCode === null && child.signalCode === null;
         process.kill(-pid, 0);
         return true;
       } catch (error) {
@@ -108,11 +283,7 @@ function monitorExpoChild(child, dependencies) {
   };
   const signalTree = (signal) => {
     try {
-      if (platform === "win32") {
-        child.kill(signal);
-      } else {
-        kill(-child.pid, signal);
-      }
+      kill(-child.pid, signal);
     } catch (error) {
       if (error?.code !== "ESRCH") return false;
     }
@@ -217,13 +388,28 @@ function monitorExpoChild(child, dependencies) {
 
 export async function runExpo(arguments_ = [], dependencies = {}) {
   assertReviewedExpoInvocation(arguments_);
+  if ((dependencies.platform ?? process.platform) === "win32") {
+    const writeOutput = ({ stdout = "", stderr = "" }) => {
+      (dependencies.stdout ?? process.stdout).write(stdout);
+      (dependencies.stderr ?? process.stderr).write(stderr);
+    };
+    try {
+      writeOutput(await executeWindowsExpo(arguments_, dependencies));
+    } catch (error) {
+      if (error instanceof WindowsOwnedProcessError) writeOutput(error.result);
+      throw error;
+    }
+    return;
+  }
+  const expoEntry = resolveExpoCli(dependencies);
   const mkdir = dependencies.mkdir ?? mkdirSync;
   mkdir(expoHome, { recursive: true });
 
   const spawn = dependencies.spawn ?? spawnProcess;
   let child;
   try {
-    child = spawn("expo", arguments_, {
+    child = spawn(dependencies.execPath ?? process.execPath, [expoEntry, ...arguments_], {
+      cwd: mobileDirectory,
       detached: true,
       env: {
         ...(dependencies.environment ?? process.env),
