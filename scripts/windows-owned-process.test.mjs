@@ -315,3 +315,217 @@ test("native cancellation settles a Ctrl+C-resistant grandchild", native, async 
     },
   );
 });
+
+test("session lifetime requires an explicit own boolean and never widens finite limits", () => {
+  assert.equal(
+    validateWindowsProcessRequest(request({ session: true, timeoutMs: 3_600_000 })).session,
+    true,
+  );
+  for (const extra of [
+    { session: true, timeoutMs: 3_600_001 },
+    { session: false, timeoutMs: 240_001 },
+    { session: "true" },
+    { session: 1 },
+  ])
+    assert.throws(() => validateWindowsProcessRequest(request(extra)));
+  const inherited = Object.assign(Object.create({ session: true }), request());
+  assert.throws(() => validateWindowsProcessRequest(inherited), /session/u);
+  const getter = request();
+  Object.defineProperty(getter, "session", {
+    get() {
+      assert.fail("session getter must not run");
+    },
+  });
+  assert.throws(() => validateWindowsProcessRequest(getter), /session/u);
+});
+
+function simulatedSession(extra = {}, observers = {}) {
+  const child = Object.assign(new EventEmitter(), {
+    pid: 42,
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    kill() {},
+  });
+  const controller = new AbortController();
+  const input = [];
+  child.stdin.on("data", (value) => input.push(value.toString()));
+  const promise = runWindowsOwnedProcess(
+    request({ session: true, signal: controller.signal, ...extra }),
+    observers,
+    {
+      platform: "win32",
+      resolvePowerShell: () => process.execPath,
+      spawn: () => child,
+      signalRuntime: new EventEmitter(),
+    },
+  );
+  child.stdout.write("S:101\n");
+  return { child, controller, input, promise };
+}
+function stoppedTerminal(extra = {}) {
+  return {
+    status: 0,
+    reason: "cancelled",
+    activeZero: true,
+    outputDrained: true,
+    forcedCleanup: false,
+    parentLost: false,
+    watchdogFired: false,
+    ctrlCDelivered: true,
+    leaderExitedAfterCtrlC: true,
+    ...extra,
+  };
+}
+function finishSession(child, terminal) {
+  child.stdout.write(`R:${JSON.stringify(terminal)}\n`);
+  child.emit("close", 0, null);
+}
+
+test("session live output precedes a separately verified requested stop", async () => {
+  const chunks = [];
+  const { child, controller, input, promise } = simulatedSession(
+    {},
+    { onOutput: ({ bytes }) => chunks.push(bytes.toString()) },
+  );
+  child.stdout.write("O:bGl2ZQo=\n");
+  assert.deepEqual(chunks, ["live\n"]);
+  controller.abort();
+  assert.equal(input.at(-1), "C");
+  finishSession(child, stoppedTerminal());
+  const result = await promise;
+  assert.equal(result.completion, "stopped");
+  assert.equal(result.stdout, "live\n");
+  assert.equal(result.reason, "cancelled");
+});
+
+test("session ordinary completion remains distinct and finite cancellation still rejects", async () => {
+  const natural = simulatedSession();
+  finishSession(
+    natural.child,
+    stoppedTerminal({ reason: "completed", ctrlCDelivered: false, leaderExitedAfterCtrlC: false }),
+  );
+  assert.equal((await natural.promise).completion, "completed");
+  const finite = simulatedSession({ session: false });
+  const rejected = assert.rejects(finite.promise, /cancelled/u);
+  finite.controller.abort();
+  finishSession(finite.child, stoppedTerminal());
+  await rejected;
+});
+
+test("session stop cannot hide missing Ctrl+C, nonzero exit, parent loss, timeout or cleanup failure", async () => {
+  for (const extra of [
+    { ctrlCDelivered: false },
+    { leaderExitedAfterCtrlC: false },
+    { status: 130 },
+    { parentLost: true },
+    { watchdogFired: true },
+    { reason: "timeout" },
+    { reason: "output limit exceeded" },
+    { reason: "parent lost" },
+    { forcedCleanup: true },
+    { activeZero: false },
+    { outputDrained: false },
+  ]) {
+    const run = simulatedSession();
+    const rejected = assert.rejects(run.promise, /did not complete naturally/u);
+    run.controller.abort();
+    finishSession(run.child, stoppedTerminal(extra));
+    await rejected;
+  }
+  const unsolicited = simulatedSession();
+  const rejected = assert.rejects(unsolicited.promise, /did not complete naturally/u);
+  finishSession(unsolicited.child, stoppedTerminal());
+  await rejected;
+});
+
+test("session observer failure remains a failure after otherwise clean Ctrl+C cleanup", async () => {
+  const run = simulatedSession(
+    {},
+    {
+      onOutput() {
+        throw new Error("synthetic observer failure");
+      },
+    },
+  );
+  const rejected = assert.rejects(run.promise, /observer failed/u);
+  run.child.stdout.write("O:bGl2ZQo=\n");
+  run.controller.abort();
+  finishSession(run.child, stoppedTerminal());
+  await rejected;
+});
+
+test(
+  "native session accepts only a requested real Ctrl+C exit with drained output and empty job",
+  native,
+  async () => {
+    const stop = new AbortController();
+    let output = "";
+    const result = await runWindowsOwnedProcess(
+      nativeRequest(
+        "const timer=setInterval(()=>{},1000);process.on('SIGINT',()=>{clearInterval(timer);process.stdout.write('stopped\\n')});process.stdout.write('session-ready\\n')",
+        { session: true, signal: stop.signal },
+      ),
+      {
+        onOutput({ bytes }) {
+          output += bytes.toString();
+          if (output.includes("session-ready\n")) stop.abort();
+        },
+      },
+    );
+    assert.equal(result.completion, "stopped");
+    assert.equal(result.status, 0);
+    assert.equal(result.ctrlCDelivered, true);
+    assert.equal(result.leaderExitedAfterCtrlC, true);
+    assert.equal(result.activeZero, true);
+    assert.equal(result.outputDrained, true);
+    assert.equal(result.forcedCleanup, false);
+    assert.equal(result.parentLost, false);
+    assert.equal(result.watchdogFired, false);
+    assert.match(result.stdout, /stopped\n$/u);
+  },
+);
+
+test(
+  "native session timeout and resistant cancellation remain failed, settled outcomes",
+  native,
+  async () => {
+    await assert.rejects(
+      runWindowsOwnedProcess(
+        nativeRequest("setInterval(()=>{},1000)", {
+          session: true,
+          timeoutMs: 400,
+        }),
+      ),
+      (error) => {
+        assert.equal(error.result.reason, "timeout");
+        assert.equal(error.result.activeZero, true);
+        assert.equal(error.result.completion, undefined);
+        return true;
+      },
+    );
+    const stop = new AbortController();
+    let output = "";
+    await assert.rejects(
+      runWindowsOwnedProcess(
+        nativeRequest(
+          "process.on('SIGINT',()=>{});setInterval(()=>{},1000);process.stdout.write('ready\\n')",
+          { session: true, signal: stop.signal },
+        ),
+        {
+          onOutput({ bytes }) {
+            output += bytes.toString();
+            if (output.includes("ready\n")) stop.abort();
+          },
+        },
+      ),
+      (error) => {
+        assert.equal(error.result.reason, "cancelled");
+        assert.equal(error.result.forcedCleanup, true);
+        assert.equal(error.result.activeZero, true);
+        assert.equal(error.result.completion, undefined);
+        return true;
+      },
+    );
+  },
+);

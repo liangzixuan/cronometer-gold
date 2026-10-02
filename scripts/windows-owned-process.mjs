@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const controller = fileURLToPath(new URL("./windows-owned-process.ps1", import.meta.url));
 const maximumOutputBytes = 20_000_000;
 const maximumTimeoutMs = 240_000;
+const maximumSessionMs = 3_600_000;
 
 export class WindowsOwnedProcessError extends Error {
   constructor(reason, result = {}) {
@@ -69,12 +70,19 @@ export function validateWindowsProcessRequest(options) {
     options.arguments.some((value) => typeof value !== "string" || value.includes("\0"))
   )
     throw new TypeError("Literal string arguments are required.");
+  const sessionField = Object.getOwnPropertyDescriptor(options, "session");
+  if (
+    ("session" in options && !sessionField) ||
+    (sessionField && (!("value" in sessionField) || typeof sessionField.value !== "boolean"))
+  )
+    throw new TypeError("The session option must be an own boolean.");
+  const session = sessionField?.value === true;
   const timeoutMs = options.timeoutMs;
   const maxOutputBytes = options.maxOutputBytes;
   if (
     !Number.isSafeInteger(timeoutMs) ||
     timeoutMs < 100 ||
-    timeoutMs > maximumTimeoutMs ||
+    timeoutMs > (session ? maximumSessionMs : maximumTimeoutMs) ||
     !Number.isSafeInteger(maxOutputBytes) ||
     maxOutputBytes < 1 ||
     maxOutputBytes > maximumOutputBytes
@@ -88,6 +96,7 @@ export function validateWindowsProcessRequest(options) {
     environment: plainEnvironment(options.environment),
     timeoutMs,
     maxOutputBytes,
+    session,
   };
   if (Buffer.byteLength(JSON.stringify(request), "utf8") > 65_536) {
     throw new TypeError("Windows command request is too large.");
@@ -120,6 +129,7 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
     let child;
     let terminal;
     let failure;
+    let stopRequested = false;
     let protocol = "";
     let outputBytes = 0;
     let started = false;
@@ -138,10 +148,8 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
       options.signal?.removeEventListener("abort", abort);
       for (const [signal, handler] of handlers) runtime.removeListener(signal, handler);
     };
-    const fail = (reason) => {
-      if (failure || settled) return;
-      failure = reason;
-      if (!child) return;
+    const cancel = () => {
+      if (!child || settled || cancellationTimer) return;
       if (!child.stdin.destroyed) child.stdin.write("C", () => {});
       cancellationTimer = setTimeout(() => {
         forcedController = true;
@@ -171,6 +179,17 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
         }, 3_000);
       }, 10_000);
     };
+    const fail = (reason) => {
+      if (failure || settled) return;
+      failure = reason;
+      cancel();
+    };
+    const requestStop = (reason) => {
+      if (!request.session) return fail(reason);
+      if (settled || failure) return;
+      stopRequested = true;
+      cancel();
+    };
     const observe = (name, event) => {
       try {
         observers[name]?.(event);
@@ -178,7 +197,7 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
         fail("observer failed");
       }
     };
-    const abort = () => fail("cancelled");
+    const abort = () => requestStop("cancelled");
     const consume = (line) => {
       const kind = line.slice(0, 2);
       const value = line.slice(2);
@@ -264,6 +283,12 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
         stdout: Buffer.concat(chunks.stdout).toString("utf8"),
         stderr: Buffer.concat(chunks.stderr).toString("utf8"),
       };
+      const stopped =
+        request.session &&
+        stopRequested &&
+        terminal?.reason === "cancelled" &&
+        terminal.ctrlCDelivered === true &&
+        terminal.leaderExitedAfterCtrlC === true;
       if (
         failure ||
         protocol.length ||
@@ -272,7 +297,9 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
         forcedController ||
         !terminal ||
         terminal.status !== 0 ||
-        terminal.reason !== "completed" ||
+        (terminal.reason !== "completed" && !stopped) ||
+        (request.session &&
+          (!started || terminal.parentLost !== false || terminal.watchdogFired !== false)) ||
         terminal.activeZero !== true ||
         terminal.outputDrained !== true ||
         terminal.forcedCleanup !== false
@@ -280,10 +307,13 @@ export async function runWindowsOwnedProcess(options, observers = {}, dependenci
         rejectCompletion(
           new WindowsOwnedProcessError(failure ?? "command did not complete naturally", result),
         );
-      } else resolveCompletion(result);
+      } else {
+        if (request.session) result.completion = stopped ? "stopped" : "completed";
+        resolveCompletion(result);
+      }
     });
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-      const handler = () => fail(`cancelled by ${signal}`);
+      const handler = () => requestStop(`cancelled by ${signal}`);
       handlers.set(signal, handler);
       runtime.on(signal, handler);
     }

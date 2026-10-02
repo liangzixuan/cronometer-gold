@@ -115,10 +115,19 @@ Run application commands in the Linux checkout. The separately reviewed
 exception for a qualified Windows Next.js frontend checkout. Its frozen install,
 frontend checks, HTTPS trust and owned-process lifecycle need native Windows
 evidence before use; it does not authorize Windows backend or native release
-builds. The [finite Windows Expo tooling](windows-mobile-tooling.md) profile adds
-only dependency/configuration checks, JavaScript export and their contracts
-prerequisite after native descendant ownership, parent-loss cleanup and actual
-command environment qualification. Interactive start/dev rejects before spawn.
+builds. The [Windows Expo tooling](windows-mobile-tooling.md) profile adds
+dependency/configuration checks, JavaScript export and their contracts prerequisite
+after native descendant ownership, parent-loss cleanup and actual command
+environment qualification. Its separate headless Metro session uses fixed
+localhost:8081, file watching, bounded live output and a one-hour maximum.
+Follow the runbook's finite pnpm dependency check with outer `CI=1` for the
+qualified Windows local-store installation, then start the repository Node
+launcher directly. Stop on a failed preflight and restore the caller's CI setting
+after the session. The Expo session child omits CI so watching stays enabled;
+pnpm start/dev is not qualified for clean Windows session interruption.
+Qualify that session's actual manifests/bundles, watched rebuild, loopback reload
+transport and owned shutdown before use. Keyboard UI, LAN/tunnel and phone
+access are outside this profile; finite command limits remain unchanged.
 Keep Linux CI/integration and all other application commands in WSL.
 Prefer direct WSL arguments for
 simple operations, or one reviewed Bash script for a multi-step sequence. Avoid

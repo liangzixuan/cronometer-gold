@@ -520,27 +520,109 @@ test("Windows requires an exact separate development API origin without a fallba
   }
 });
 
-test("Windows start rejects before any filesystem or process access", async () => {
-  let touched = false;
-  await assert.rejects(
-    runExpo(
-      ["start", "--localhost"],
-      windowsDependencies({
-        readdir: () => {
-          touched = true;
-          return [];
-        },
-        mkdir: () => {
-          touched = true;
-        },
-        runWindowsOwnedProcess: () => {
-          touched = true;
-        },
-      }),
-    ),
-    /only finite/u,
+test("Windows Metro has a fixed loopback port and one-hour headless watching session", () => {
+  const dependencies = windowsDependencies();
+  Object.assign(dependencies.environment, {
+    CI: "1",
+    NOURISHING_EXPO_PORT: "9999",
+    NOURISHING_EXPO_SESSION_TIMEOUT_MS: "1",
+    DATABASE_URL: "database-canary",
+    EXPO_PUBLIC_UNREVIEWED: "public-canary",
+  });
+  const plan = prepareWindowsExpo(["start", "--localhost"], dependencies);
+  assert.equal(plan.session, true);
+  assert.equal(plan.timeoutMs, 3_600_000);
+  assert.equal(plan.maxOutputBytes, 4_000_000);
+  assert.deepEqual(plan.arguments, [resolveExpoCli(), "start", "--localhost", "--port", "8081"]);
+  assert.equal(Object.hasOwn(plan.environment, "CI"), false);
+  assert.equal(plan.environment.NODE_ENV, "development");
+  for (const [name, value] of Object.entries({
+    EXPO_UNSTABLE_HEADLESS: "1",
+    EXPO_NO_DOTENV: "1",
+    EXPO_NO_TELEMETRY: "1",
+    EXPO_NO_DEPENDENCY_VALIDATION: "0",
+    EXPO_NO_NEW_ARCH_COMPAT_CHECK: "0",
+  }))
+    assert.equal(plan.environment[name], value);
+  assert.equal(
+    Object.values(plan.environment).some((value) => value.includes("canary")),
+    false,
   );
-  assert.equal(touched, false);
+  assert.equal(Object.hasOwn(plan.environment, "NOURISHING_EXPO_PORT"), false);
+  for (const arguments_ of [
+    ["start"],
+    ["start", "--localhost", "--port", "0"],
+    ["start", "--localhost", "--port", "8082"],
+    ["start", "--tunnel"],
+    ["start", "--localhost", "--android"],
+    ["start", "--localhost", "--web"],
+  ])
+    assert.throws(() =>
+      prepareWindowsExpo(arguments_, { readdir: () => assert.fail("no filesystem access") }),
+    );
+});
+
+test("Windows Metro streams output once and propagates explicit requested-stop state and signal", async () => {
+  for (const fails of [false, true]) {
+    const output = { stdout: [], stderr: [] };
+    const controller = new AbortController();
+    const failure = new WindowsOwnedProcessError("synthetic failure", {
+      stdout: "live",
+      stderr: "warning",
+    });
+    const dependencies = windowsDependencies({
+      mkdir() {},
+      signal: controller.signal,
+      stdout: { write: (value) => output.stdout.push(value.toString()) },
+      stderr: { write: (value) => output.stderr.push(value.toString()) },
+      runWindowsOwnedProcess: async (plan, observers) => {
+        assert.equal(plan.signal, controller.signal);
+        observers.onOutput({ stream: "stdout", bytes: Buffer.from("live") });
+        observers.onOutput({ stream: "stderr", bytes: Buffer.from("warning") });
+        assert.deepEqual(output, { stdout: ["live"], stderr: ["warning"] });
+        if (fails) throw failure;
+        return { completion: "stopped", stdout: "live", stderr: "warning" };
+      },
+    });
+    if (fails)
+      await assert.rejects(
+        runExpo(["start", "--localhost"], dependencies),
+        (error) => error === failure,
+      );
+    else
+      assert.equal((await runExpo(["start", "--localhost"], dependencies)).completion, "stopped");
+    assert.deepEqual(output, { stdout: ["live"], stderr: ["warning"] });
+  }
+});
+
+test("Windows Metro keeps profile, dotenv and runtime-injection guards before creation", async () => {
+  for (const extra of [
+    { EXPO_PUBLIC_API_URL: "https://api.nourishing.app" },
+    { EXPO_PUBLIC_API_URL: "http://localhost:4000" },
+    { NODE_OPTIONS: "--import=private" },
+    { EXPO_OFFLINE: "1" },
+    { EXPO_NO_DEPENDENCY_VALIDATION: "1" },
+    {
+      EXPO_PUBLIC_NOURISHING_PROFILE: "hosted-development",
+      EXPO_PUBLIC_API_URL: "https://dev-api.nourishing.app",
+      EAS_BUILD_PROFILE: "production",
+    },
+  ]) {
+    const dependencies = windowsDependencies({
+      mkdir: () => assert.fail("no mkdir"),
+      runWindowsOwnedProcess: () => assert.fail("no process"),
+    });
+    Object.assign(dependencies.environment, extra);
+    await assert.rejects(runExpo(["start", "--localhost"], dependencies));
+  }
+  assert.throws(
+    () =>
+      prepareWindowsExpo(
+        ["start", "--localhost"],
+        windowsDependencies({ readdir: () => [".env.local"] }),
+      ),
+    /dotenv/u,
+  );
 });
 
 test("Windows finite export uses owned adapter and config parses its captured JSON", async () => {

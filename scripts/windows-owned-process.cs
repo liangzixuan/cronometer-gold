@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 using System.IO;
 using Microsoft.Win32.SafeHandles;
 
-// Atomic job creation and console ownership are shared by finite Windows tooling.
+// Atomic job creation and console ownership serve finite commands and bounded headless sessions.
 // HANDLE_LIST deliberately excludes the controller control pipe and the private job handle.
 public sealed class WindowsOwnedProcess : IDisposable {
     [StructLayout(LayoutKind.Sequential)] struct Limits {
@@ -86,6 +86,7 @@ public sealed class WindowsOwnedProcess : IDisposable {
     static int initialConsoleStepUsed, ownerCreationStarted;
     public uint Pid { get; private set; }
     public volatile bool WatchdogFired;
+    public bool CtrlCDelivered { get; private set; }
     static void Check(bool ok,string operation) { if(!ok) throw new Win32Exception(Marshal.GetLastWin32Error(),operation); }
     public static void RequireNoConsole() {
         uint[] ids=new uint[1]; uint count=GetConsoleProcessList(ids,1);
@@ -113,8 +114,8 @@ public sealed class WindowsOwnedProcess : IDisposable {
         }
         b.Append('\\',slashes*2); return b.Append('"').ToString();
     }
-    public WindowsOwnedProcess(string executable,string[] arguments,string cwd,IDictionary<string,string> environment,int maximumMilliseconds,int maximumOutputBytes) {
-        if(maximumMilliseconds<100 || maximumMilliseconds>240000) throw new ArgumentOutOfRangeException("maximumMilliseconds");
+    public WindowsOwnedProcess(string executable,string[] arguments,string cwd,IDictionary<string,string> environment,int maximumMilliseconds,int maximumOutputBytes,bool session) {
+        if(maximumMilliseconds<100 || maximumMilliseconds>(session ? 3600000 : 240000)) throw new ArgumentOutOfRangeException("maximumMilliseconds");
         if(maximumOutputBytes<1 || maximumOutputBytes>20000000) throw new ArgumentOutOfRangeException("maximumOutputBytes");
         outputLimit=maximumOutputBytes;
         Interlocked.Exchange(ref ownerCreationStarted,1);
@@ -137,7 +138,7 @@ public sealed class WindowsOwnedProcess : IDisposable {
             Check(CreatePipe(out errorRead,out errorWrite,ref pipeAttributes,0),"Create stderr pipe");
             Check(SetHandleInformation(outputRead,1,0),"Keep stdout reader private");
             Check(SetHandleInformation(errorRead,1,0),"Keep stderr reader private");
-            Close(ref inputWrite); // Finite commands receive immediate stdin EOF.
+            Close(ref inputWrite); // Commands and headless sessions receive immediate stdin EOF.
             handleList=Marshal.AllocHGlobal(3*IntPtr.Size);
             Marshal.WriteIntPtr(handleList,0,inputRead);
             Marshal.WriteIntPtr(handleList,IntPtr.Size,outputWrite);
@@ -204,6 +205,7 @@ public sealed class WindowsOwnedProcess : IDisposable {
             var owned=new HashSet<uint>(ProcessIds()); owned.Add((uint)Environment.ProcessId);
             for(int i=0;i<n;i++) if(!owned.Contains(ids[i])) throw new InvalidOperationException("Unexpected process attached to owned console");
             Check(GenerateConsoleCtrlEvent(0,0),"Generate real Ctrl+C");
+            CtrlCDelivered=true;
             // The fixture leader waits for its child. Detach before checking job zero because
             // the isolated console host can itself belong to the job while this owner attaches.
             return WaitForSingleObject(process,(uint)milliseconds)==0;
@@ -214,6 +216,7 @@ public sealed class WindowsOwnedProcess : IDisposable {
         public string reason="startup failure";
         public int status=-1;
         public bool activeZero,outputDrained,forcedCleanup,parentLost,watchdogFired;
+        public bool ctrlCDelivered,leaderExitedAfterCtrlC;
         public uint pid;
     }
     public static string ReadRequestLine(TextReader reader) {
@@ -226,7 +229,7 @@ public sealed class WindowsOwnedProcess : IDisposable {
         }
         throw new InvalidOperationException("Controller request exceeds limit.");
     }
-    public static Result Run(string executable,string[] arguments,string cwd,IDictionary<string,string> environment,int timeoutMs,int maxOutputBytes,TextReader control) {
+    public static Result Run(string executable,string[] arguments,string cwd,IDictionary<string,string> environment,int timeoutMs,int maxOutputBytes,bool session,TextReader control) {
         var result=new Result();
         WindowsOwnedProcess owner=null;
         // This reader is the parent's non-inherited control pipe, not child stdin.
@@ -235,7 +238,7 @@ public sealed class WindowsOwnedProcess : IDisposable {
         long leaderExitedAt=-1;
         try {
             if(controlRead.IsCompleted) { result.reason="parent unavailable"; result.parentLost=true; result.activeZero=true; result.outputDrained=true; return result; }
-            owner=new WindowsOwnedProcess(executable,arguments,cwd,environment,timeoutMs,maxOutputBytes);
+            owner=new WindowsOwnedProcess(executable,arguments,cwd,environment,timeoutMs,maxOutputBytes,session);
             result.pid=owner.Pid;
             for(;;) {
                 if(controlRead.IsCompleted) {
@@ -266,10 +269,11 @@ public sealed class WindowsOwnedProcess : IDisposable {
                 try {
                     bool active=owner.Count().ActiveProcesses!=0;
                     if(active && result.reason=="cancelled" && WaitForSingleObject(owner.process,0)!=0) {
-                        try { owner.SendConsoleCtrlCAndWaitLeader(1000); } catch { }
+                        try { result.leaderExitedAfterCtrlC=owner.SendConsoleCtrlCAndWaitLeader(1000); } catch { }
                         active=!owner.WaitEmpty(1000);
                     }
                     if(active) { result.forcedCleanup=true; owner.StopAbnormally(); }
+                    result.ctrlCDelivered=owner.CtrlCDelivered;
                     result.activeZero=owner.WaitEmpty(3000);
                     result.watchdogFired=owner.WatchdogFired;
                     if(result.watchdogFired) result.forcedCleanup=true;

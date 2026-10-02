@@ -76,6 +76,11 @@ export function resolveExpoCli(dependencies = {}) {
 }
 
 export function prepareWindowsExpo(arguments_, dependencies = {}) {
+  const session =
+    Array.isArray(arguments_) &&
+    arguments_.length === 2 &&
+    arguments_[0] === "start" &&
+    arguments_[1] === "--localhost";
   const finite = [
     ["export", "--platform", "all", "--output-dir", "dist"],
     ["install", "--check"],
@@ -83,13 +88,16 @@ export function prepareWindowsExpo(arguments_, dependencies = {}) {
   ];
   if (
     !Array.isArray(arguments_) ||
-    !finite.some(
-      (allowed) =>
-        allowed.length === arguments_.length &&
-        allowed.every((value, i) => value === arguments_[i]),
-    )
+    (!session &&
+      !finite.some(
+        (allowed) =>
+          allowed.length === arguments_.length &&
+          allowed.every((value, i) => value === arguments_[i]),
+      ))
   )
-    throw new TypeError("Windows Expo supports only finite export, dependency and config checks.");
+    throw new TypeError(
+      "Windows Expo requires a reviewed finite command or headless localhost session.",
+    );
   const environment = dependencies.environment ?? process.env;
   const own = new Map();
   for (const name in environment) {
@@ -173,7 +181,7 @@ export function prepareWindowsExpo(arguments_, dependencies = {}) {
   }
   Object.assign(projected, {
     PATH: `${win32.dirname(executable)};${win32.join(systemRoot, "System32")}`,
-    CI: "1",
+    ...(session ? {} : { CI: "1" }),
     NODE_ENV: arguments_[0] === "export" ? "production" : "development",
     BABEL_ENV: arguments_[0] === "export" ? "production" : "development",
     __UNSAFE_EXPO_HOME_DIRECTORY: expoHome,
@@ -187,10 +195,15 @@ export function prepareWindowsExpo(arguments_, dependencies = {}) {
   });
   return {
     executable,
-    arguments: [resolveExpoCli(dependencies), ...arguments_],
+    arguments: [
+      resolveExpoCli(dependencies),
+      ...arguments_,
+      ...(session ? ["--port", "8081"] : []),
+    ],
     cwd: mobileDirectory,
     environment: projected,
-    timeoutMs: arguments_[0] === "export" ? 240_000 : 120_000,
+    timeoutMs: session ? 3_600_000 : arguments_[0] === "export" ? 240_000 : 120_000,
+    ...(session ? { session: true } : {}),
     maxOutputBytes: arguments_[0] === "config" ? 20_000_000 : 4_000_000,
     powershellPath: own.get("NOURISHING_POWERSHELL"),
   };
@@ -199,7 +212,12 @@ export function prepareWindowsExpo(arguments_, dependencies = {}) {
 async function executeWindowsExpo(arguments_, dependencies) {
   const plan = prepareWindowsExpo(arguments_, dependencies);
   (dependencies.mkdir ?? mkdirSync)(expoHome, { recursive: true });
-  return await (dependencies.runWindowsOwnedProcess ?? runWindowsOwnedProcess)(plan);
+  return await (dependencies.runWindowsOwnedProcess ?? runWindowsOwnedProcess)(
+    { ...plan, signal: dependencies.signal },
+    plan.session
+      ? { onOutput: ({ stream, bytes }) => (dependencies[stream] ?? process[stream]).write(bytes) }
+      : {},
+  );
 }
 
 export async function readExpoNativeConfig(dependencies = {}) {
@@ -418,10 +436,13 @@ export async function runExpo(arguments_ = [], dependencies = {}) {
       (dependencies.stdout ?? process.stdout).write(stdout);
       (dependencies.stderr ?? process.stderr).write(stderr);
     };
+    const session = arguments_[0] === "start";
     try {
-      writeOutput(await executeWindowsExpo(arguments_, dependencies));
+      const result = await executeWindowsExpo(arguments_, dependencies);
+      if (session) return result;
+      writeOutput(result);
     } catch (error) {
-      if (error instanceof WindowsOwnedProcessError) writeOutput(error.result);
+      if (!session && error instanceof WindowsOwnedProcessError) writeOutput(error.result);
       throw error;
     }
     return;

@@ -1,10 +1,11 @@
-# Finite Windows mobile tooling
+# Windows mobile tooling
 
-The maintained Expo wrapper supports three finite commands from a qualified
-Windows NTFS checkout: dependency checking, native configuration checking and
-JavaScript export. Windows `start` and `dev` reject before creating a child.
-Interactive Metro, phone access, native compilation, signing and release remain
-separate work. The Linux process-group path remains available in WSL.
+The maintained Expo wrapper supports dependency checking, native configuration
+checking and JavaScript export from a qualified Windows NTFS checkout. A separate
+headless Metro session serves the local Android/iOS development bundles with file
+watching and live output. It uses fixed localhost port 8081 and a one-hour maximum.
+Keyboard UI, LAN/tunnel access, phone exposure, native compilation, signing and
+release remain separate work. The Linux process-group path remains available in WSL.
 
 Source tests alone do not qualify this Windows path. Use it only after the native
 acceptance below has passed for the source and installed payload being used.
@@ -24,7 +25,9 @@ stops before pnpm runs a script. Install the approved frontend dependency closur
 explicitly with a frozen lockfile, then verify its payload and run the command
 again. Keep `pnpm_config_verify_deps_before_run` unset in the invoking environment;
 it overrides the workspace setting. An ordinary check must not trigger package
-installation or install scripts.
+installation or install scripts. The qualified Windows local-store installation
+uses outer `CI=1`; changing that environment can select a different pnpm store
+layout and correctly fail the guard. The examples restore the caller's CI value.
 
 Select the exact API origin explicitly. `https://native-qualification.invalid`
 is a synthetic, unavailable destination for finite tooling proofs.
@@ -39,9 +42,18 @@ before Expo starts. The synthetic qualification origin uses the ordinary profile
 ```powershell
 $env:NOURISHING_POWERSHELL = (Get-Command pwsh.exe -CommandType Application).Source
 $env:EXPO_PUBLIC_API_URL = 'https://native-qualification.invalid'
-pnpm --filter @nutrition-tracker/mobile dependencies:check
-pnpm --filter @nutrition-tracker/mobile config:check
-pnpm --filter @nutrition-tracker/mobile build
+$previousCI = $env:CI
+try {
+    $env:CI = '1'
+    pnpm --filter @nutrition-tracker/mobile dependencies:check
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency check failed.' }
+    pnpm --filter @nutrition-tracker/mobile config:check
+    if ($LASTEXITCODE -ne 0) { throw 'Configuration check failed.' }
+    pnpm --filter @nutrition-tracker/mobile build
+    if ($LASTEXITCODE -ne 0) { throw 'Mobile export failed.' }
+} finally {
+    $env:CI = $previousCI
+}
 ```
 
 The wrapper resolves the installed `expo/bin/cli` from the mobile workspace and
@@ -51,6 +63,51 @@ arguments. Dependency/config commands have a 120-second limit; export has a
 240-second limit. The controller has separate bounded startup and cleanup time.
 Output is bounded to 4 MB, or 20 MB for native configuration JSON. Exceeding a
 limit fails the command and cleans up its owned descendants.
+
+## Headless Metro session
+
+After the session's native acceptance, run this sequence from the repository
+root with the same exact public profile, qualified Node/PowerShell and frozen
+installation. The finite preflight must pass before the session starts:
+
+~~~powershell
+$env:EXPO_PUBLIC_NOURISHING_PROFILE = 'hosted-development'
+$env:EXPO_PUBLIC_API_URL = 'https://dev-api.nourishing.app'
+$previousCI = $env:CI
+try {
+    $env:CI = '1'
+    pnpm --filter @nutrition-tracker/mobile dependencies:check
+    if ($LASTEXITCODE -ne 0) { throw 'Dependency check failed; Metro was not started.' }
+    node apps/mobile/scripts/run-expo.mjs start --localhost
+    if ($LASTEXITCODE -ne 0) { throw 'Metro session failed.' }
+} finally {
+    $env:CI = $previousCI
+}
+~~~
+
+Use the direct Node entry for the Windows session. The pnpm start/dev lifecycle
+forwards Ctrl+C through its Windows shell and is not qualified for clean session
+interruption. Finite pnpm commands and the Linux development commands are unchanged.
+The wrapper supplies literal localhost and port 8081 arguments. An occupied port
+fails without selecting another port; custom ports, LAN, tunnels and automatic
+browser/device launch are not supported. A running Metro listener does not imply
+that the reserved API host is available.
+
+The Expo session child omits CI so the pinned Metro server watches files, even
+though the invoking sequence retains outer `CI=1` until it restores the prior value. It retains headless
+mode, both validation flags set to zero, private dotenv rejection and the same
+narrow public environment. No keyboard commands or stdin relay are provided.
+Output streams as it arrives, with a 4 MB combined limit; overflow fails and
+cleans up the session. There is no unbounded lifetime or environment override for
+duration. The one-hour deadline is a failed timeout, not a normal completed session.
+
+Ctrl+C requests an orderly stop through the existing owner. Programmatic callers
+can supply an AbortSignal. A successful session result distinguishes ordinary
+completion from a requested stop. A requested stop requires confirmed real Ctrl+C
+delivery, observed natural leader exit with status zero, drained output, an empty
+job and no forced cleanup or watchdog. Parent loss, timeout, output errors,
+unexpected descendants and uncertain cleanup remain failures. Finite commands
+retain their existing cancellation errors and 120/240-second limits.
 
 ## Environment and process ownership
 
@@ -113,6 +170,19 @@ its original scope. This proves finite tooling only; it does not accept a runnin
 Windows mobile frontend, persisted-session/API-origin isolation, a hosted API,
 personal devices or release artifacts.
 
+For the headless session, use a fresh bound qualification against the maintained
+direct Node command after the guarded finite preflight. Verify that every listener is IPv4 or IPv6 loopback, the readiness
+response identifies the exact project, and both platform manifests lead to actual
+Android/iOS bundles. Check the development API positive control and synthetic
+secret markers in outputs. Exercise file watching by changing an owned ignored
+synthetic entry and proving the rebuilt bundle changes; restore that fixture
+afterward. Verify local reload message delivery and rejection of a mismatched
+Origin. Prove occupied-port refusal without fallback, clean requested shutdown,
+bounded failure behavior and wrapper/controller loss for the session mode.
+Conserve tracked source, installed payload and aliases. Keep each fixture within
+five minutes, and distinguish forced safety cleanup from product acceptance.
+Reuse unchanged finite evidence only within its actual scope.
+
 
 ## Mobile origin and native identity
 
@@ -121,9 +191,10 @@ For the isolated development profile, set both public values explicitly:
 ```powershell
 $env:EXPO_PUBLIC_NOURISHING_PROFILE = 'hosted-development'
 $env:EXPO_PUBLIC_API_URL = 'https://dev-api.nourishing.app'
-pnpm --filter @nutrition-tracker/mobile config:check
-pnpm --filter @nutrition-tracker/mobile build
 ```
+
+Then run the guarded finite check/export sequence under Prerequisites and commands,
+retaining these two public values instead of the synthetic API origin.
 
 Dynamic Expo configuration selects `Nutrition Tracker Development` and
 `com.nutritionledger.app.development` for both native platforms. The slug and
@@ -155,4 +226,5 @@ Configuration/export proves source selection only. It cannot attest which app is
 installed or establish native SecureStore, hardware-key or redirect behavior.
 Actual isolated app installation, Android/iOS redirect refusal without credential
 forwarding, device lifecycle, hosted journeys and release acceptance remain
-separate requirements. Interactive Windows Metro is still unsupported.
+separate requirements. The headless local Metro session does not satisfy these
+device or hosted requirements; its keyboard UI remains unsupported.

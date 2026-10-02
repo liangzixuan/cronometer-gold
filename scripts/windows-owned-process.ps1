@@ -10,7 +10,7 @@ try {
     Add-Type -Path (Join-Path $PSScriptRoot 'windows-owned-process.cs')
     [void][WindowsOwnedProcess]::InitializeControllerConsole()
     $request = [WindowsOwnedProcess]::ReadRequestLine([Console]::In) | ConvertFrom-Json -AsHashtable
-    $expected = @('arguments', 'cwd', 'environment', 'executable', 'maxOutputBytes', 'timeoutMs')
+    $expected = @('arguments', 'cwd', 'environment', 'executable', 'maxOutputBytes', 'session', 'timeoutMs')
     if ((($request.Keys | Sort-Object) -join ',') -cne ($expected -join ',')) { throw 'Invalid request fields.' }
     foreach ($path in @($request.executable, $request.cwd)) {
         if ($path -isnot [string] -or -not [IO.Path]::IsPathFullyQualified($path) -or $path.Contains([char]0)) {
@@ -23,14 +23,16 @@ try {
     }
     if ($request.timeoutMs -isnot [long] -and $request.timeoutMs -isnot [int]) { throw 'Invalid time bound.' }
     if ($request.maxOutputBytes -isnot [long] -and $request.maxOutputBytes -isnot [int]) { throw 'Invalid output bound.' }
-    if ($request.timeoutMs -lt 100 -or $request.timeoutMs -gt 240000 -or $request.maxOutputBytes -lt 1 -or $request.maxOutputBytes -gt 20000000) { throw 'Invalid bounds.' }
+    if ($request.session -isnot [bool]) { throw 'Invalid session mode.' }
+    $maximumTime = if ($request.session) { 3600000 } else { 240000 }
+    if ($request.timeoutMs -lt 100 -or $request.timeoutMs -gt $maximumTime -or $request.maxOutputBytes -lt 1 -or $request.maxOutputBytes -gt 20000000) { throw 'Invalid bounds.' }
     if ($request.environment -isnot [Collections.IDictionary]) { throw 'Invalid environment.' }
     $environment = [Collections.Generic.Dictionary[string,string]]::new([StringComparer]::OrdinalIgnoreCase)
     foreach ($entry in $request.environment.GetEnumerator()) {
         if ($entry.Key -isnot [string] -or $entry.Value -isnot [string] -or $entry.Key.Length -eq 0 -or $entry.Key.Contains('=') -or $entry.Key.Contains([char]0) -or $entry.Value.Contains([char]0)) { throw 'Invalid environment entry.' }
         $environment.Add($entry.Key, $entry.Value)
     }
-    $result = [WindowsOwnedProcess]::Run($request.executable, [string[]]$request.arguments, $request.cwd, $environment, [int]$request.timeoutMs, [int]$request.maxOutputBytes, [Console]::In)
+    $result = [WindowsOwnedProcess]::Run($request.executable, [string[]]$request.arguments, $request.cwd, $environment, [int]$request.timeoutMs, [int]$request.maxOutputBytes, [bool]$request.session, [Console]::In)
     [Console]::Out.WriteLine('R:' + ($result | ConvertTo-Json -Compress))
     [Console]::Out.Flush()
     # Exit closes any failed output readers and the controller's non-inherited handles.

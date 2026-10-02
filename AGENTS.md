@@ -6,9 +6,12 @@ Work in the WSL Linux-filesystem checkout and preserve unrelated user changes.
 The scoped Windows Next.js frontend and contracts profile is an exception only
 under the hosted web development runbook (docs/quality/hosted-web-development.md),
 after its toolchain, HTTPS and owned-process qualification. Finite Windows Expo
-checks/export and their contracts prerequisite are a separate exception only
-under docs/quality/windows-mobile-tooling.md after native ownership and environment
-qualification; interactive start/dev remains unsupported. Keep full-stack,
+checks/export, their contracts prerequisite and bounded headless localhost Metro
+sessions are a separate exception only under docs/quality/windows-mobile-tooling.md
+after native ownership, environment and command qualification. On Windows, use
+the runbook's finite pnpm dependency preflight followed by the direct Node Metro
+launcher; pnpm start/dev is not qualified for clean session interruption. Metro keyboard UI,
+LAN/tunnel access and phone exposure remain unsupported by this profile. Keep full-stack,
 backend and native-release work in WSL; never build in OneDrive or UNC paths.
 These exceptions do not establish current Windows runtime or hosted acceptance.
 
