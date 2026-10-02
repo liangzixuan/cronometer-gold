@@ -59,7 +59,7 @@ export async function runDevelopmentSession(
   execute = limitedTool,
 ) {
   requireValue(process.platform === "linux" && process.arch === "x64");
-  requireValue(["execute", "prepare-dispose", "dispose"].includes(mode));
+  requireValue(["execute", "reconcile", "prepare-dispose", "dispose"].includes(mode));
   rejectAmbient(environment);
   requireValue(
     typeof inputPath === "string" &&
@@ -241,26 +241,30 @@ export async function runDevelopmentSession(
       await held.verify();
       phases.at(-1).binaryPlanSha256 = held.sha256;
       if (mode === "execute") await reads("groups", "before");
-      // Publish unknown outcome durably before the only mutating command.
-      await pure("intent", extra);
-      await held.verify();
-      await tool(
-        "apply",
-        ["apply", "-input=false", "-no-color", "-lock-timeout=0s", "-parallelism=1", held.path],
-        "apply.stdout",
-        300_000,
-      );
-      await held.verify();
-      phases.at(-1).binaryPlanSha256 = held.sha256;
+      if (mode !== "reconcile") {
+        // Publish unknown outcome durably before the only mutating command.
+        await pure("intent", extra);
+        await held.verify();
+        await tool(
+          "apply",
+          ["apply", "-input=false", "-no-color", "-lock-timeout=0s", "-parallelism=1", held.path],
+          "apply.stdout",
+          300_000,
+        );
+        await held.verify();
+        phases.at(-1).binaryPlanSha256 = held.sha256;
+      }
     } finally {
       await held.close();
     }
-    await tool(
-      "state-after",
-      ["show", "-json", resolve(directory, "terraform.tfstate")],
-      mode === "execute" ? "state.json" : "final-state.json",
-    );
-    await reads(mode === "execute" ? "resources" : "groups", "after");
+    if (mode !== "reconcile") {
+      await tool(
+        "state-after",
+        ["show", "-json", resolve(directory, "terraform.tfstate")],
+        mode === "execute" ? "state.json" : "final-state.json",
+      );
+      await reads(mode === "execute" ? "resources" : "groups", "after");
+    }
   }
   await writeFile(resolve(session.directory, "phases.json"), `${JSON.stringify(phases)}\n`, {
     flag: "wx",
@@ -294,7 +298,9 @@ async function main() {
     console.log(
       args[0] === "prepare-dispose"
         ? "Private deletion plan prepared for separate review; no deletion attempted."
-        : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
+        : args[0] === "reconcile"
+          ? "Private current ownership recorded; original execution outcome remains unconfirmed."
+          : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
     );
   } finally {
     for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(name, stop);

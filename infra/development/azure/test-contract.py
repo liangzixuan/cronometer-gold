@@ -1055,7 +1055,10 @@ class SessionPolicy(unittest.TestCase):
         if mode!='execute':
             rows.append(('state',tool,['show','-json',str(directory/'work/terraform.tfstate')],'state.json'))
             rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in S.read_commands({k:x['value'] for k,x in self.responses['create']['variables'].items()},'resources')]
-        if mode=='prepare-dispose':
+        if mode=='reconcile':
+            rows.append(('show',tool,['show','-json',descriptor],'rendered.json'))
+            binary=self.plan_directory/'plan.tfplan'
+        elif mode=='prepare-dispose':
             rows += [('prepare-dispose',tool,['plan','-destroy','-input=false','-no-color','-lock-timeout=0s','-parallelism=1','-var-file=inputs.tfvars.json','-out='+str(directory/'destroy.tfplan')],'prepare-dispose.stdout'),('show-dispose',tool,['show','-json',descriptor],'rendered.json')]
             binary=directory/'destroy.tfplan'
         else:
@@ -1069,7 +1072,7 @@ class SessionPolicy(unittest.TestCase):
             path=directory/output
             if output.endswith('.stdout') and not path.exists():path.write_bytes(b'synthetic process output');path.chmod(0o600)
             raw=path.read_bytes()
-            phase={'phase':label,'completed':True,'exitCode':0,'startedAt':NOW.isoformat(),'endedAt':NOW.isoformat(),
+            phase={'phase':label,'completed':True,'exitCode':0,'startedAt':self.args[-1].isoformat(),'endedAt':self.args[-1].isoformat(),
                 'executableSha256':executable,'arguments':args,'argumentsSha256':A.sha(json.dumps(args,separators=(',',':')).encode()),
                 'stdoutBytes':len(raw),'stdoutSha256':A.sha(raw)}
             if label in ('show','show-dispose','apply'):phase['binaryPlanSha256']=A.sha(binary.read_bytes())
@@ -1528,5 +1531,151 @@ class SshSensitivityRepresentation(unittest.TestCase):
             p = self.represented(whole); change(p, self.VM)["before_sensitive"] = {"admin_ssh_key": True}
             with self.subTest(whole=whole), self.assertRaises(A.Error):
                 A.audit_plan(p, evidence(), HASHES, NOW)
+
+
+class Reconciliation(unittest.TestCase):
+    setUp = SessionPolicy.setUp
+    prepare = SessionPolicy.prepare
+    auth = SessionPolicy.auth
+    material = SessionPolicy.material
+    fresh = SessionPolicy.fresh
+    phase_receipt = SessionPolicy.phase_receipt
+    deletion_request = SessionPolicy.deletion_request
+
+    def failed_execute(self, published=False):
+        self.prepare(); self.fresh()
+        (self.directory/'rendered.json').write_bytes(self.rendered_raw); (self.directory/'rendered.json').chmod(0o600)
+        Q.write_json(self.directory/'before-groups.json', {'value':[]}); S.intent(*self.args)
+        self.material()
+        if published:
+            self.phase_receipt(); real=S.A.publish_result
+            def uncertain(path,value): real(path,value); raise S.A.PublishedResultError('PRIVATE_CANARY')
+            with mock.patch.object(S.A,'publish_result',side_effect=uncertain),self.assertRaises(S.A.PublishedResultError): S.finish(*self.args)
+        self.failed_input=self.input; self.failed_directory=self.directory
+        self.failed_tree=Q.tree(self.failed_directory)
+
+    def request_reconciliation(self, instant=NOW):
+        self.request={'schema_version':1,'source_sha256':S.source_digest(),'operation_name':'nourishing-session-'+'c'*12,
+            'not_after_utc':(instant+timedelta(minutes=18)).isoformat().replace('+00:00','Z'), 'execute_request':str(self.failed_input),
+            'execute_directory':str(self.failed_directory),
+            'execute_session_sha256':A.sha((self.failed_directory/'session.json').read_bytes()),
+            'execute_intent_sha256':A.sha((self.failed_directory/'mutation-intent.json').read_bytes())}
+        self.input=self.root/'reconcile-request.json'; Q.write_json(self.input,self.request)
+
+    def ready(self, instant=NOW):
+        self.description=S.prepare('reconcile',self.input,instant); self.directory=Path(self.description['directory'])
+        self.args=('reconcile',self.input,self.directory,self.description['state_sha256'],instant)
+        Q.write_json(self.directory/'version.json',{'terraform_version':'1.5.7','platform':'linux_amd64'})
+        self.auth()
+        Q.write_json(self.directory/'state.json',self.responses['state'])
+        for name,value in self.responses['live'].items():Q.write_json(self.directory/('before-'+name+'.json'),value)
+        (self.directory/'rendered.json').write_bytes(self.rendered_raw); (self.directory/'rendered.json').chmod(0o600)
+        self.phase_receipt('reconcile')
+
+    def test_complete_state_without_original_phases_has_distinct_current_ownership(self):
+        self.failed_execute(); self.request_reconciliation(); self.ready()
+        self.assertFalse((self.failed_directory/'phases.json').exists()); self.assertFalse((self.failed_directory/'result.json').exists())
+        result=S.finish(*self.args); receipt=S.private(self.directory/'result.json')[0]
+        self.assertTrue(result['completed']); self.assertEqual(receipt['mode'],'reconcile')
+        self.assertEqual(receipt['original_execution_outcome'],'unconfirmed')
+        self.assertFalse(receipt['external_quiescence_verified']); self.assertTrue(receipt['reconciled'])
+        self.assertIn('consistency',receipt['historical_admission_scope'])
+        self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
+        phases=S.private(self.directory/'phases.json')[0]
+        self.assertFalse(any(p['arguments'][0] in ('apply','plan','refresh','import') for p in phases))
+        self.assertFalse((self.directory/'mutation-intent.json').exists())
+
+    def test_expired_current_plan_uses_only_recorded_historical_admission(self):
+        self.failed_execute(); later=NOW+timedelta(hours=1)
+        with self.assertRaises(A.Error): A.audit_plan(json.loads(self.rendered_raw),evidence(),HASHES,later)
+        self.request_reconciliation(later); self.ready(later)
+        self.assertTrue(S.finish(*self.args)['completed']); self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
+
+    def test_publication_uncertainty_preserves_old_result_and_reconciles_separately(self):
+        self.failed_execute(True); self.request_reconciliation(); self.ready()
+        self.assertTrue(S.finish(*self.args)['completed']); self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
+        self.assertEqual(S.private(self.failed_directory/'result.json')[0]['mode'],'execute')
+
+    def test_reconciled_ownership_feeds_separately_prepared_and_reviewed_disposal(self):
+        self.failed_execute(); self.request_reconciliation(); self.ready(); S.finish(*self.args)
+        ownership=self.directory/'result.json'; self.deletion_request('prepare-dispose',ownership)
+        S.audit(*self.args); Q.write_json(self.directory/'rendered.json',self.responses['destroy'])
+        (self.directory/'destroy.tfplan').write_bytes(b'synthetic destruction plan'); (self.directory/'destroy.tfplan').chmod(0o600)
+        self.phase_receipt(); S.finish(*self.args); self.disposal=self.directory/'result.json'
+        self.deletion_request('dispose',self.disposal); Q.write_json(self.directory/'rendered.json',self.responses['destroy']); S.intent(*self.args)
+        (self.directory/'work/terraform.tfstate').write_text(json.dumps({**self.responses['raw'],'serial':2,'resources':[]})+'\n')
+        Q.write_json(self.directory/'final-state.json',{'format_version':'1.0','terraform_version':'1.5.7'})
+        Q.write_json(self.directory/'after-groups.json',{'value':[]}); self.phase_receipt()
+        self.assertTrue(S.finish(*self.args)['completed']); self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
+
+    def test_original_custody_and_historical_intent_substitutions_reject(self):
+        self.failed_execute(); self.request_reconciliation()
+        for key in ('source_sha256','execute_session_sha256','execute_intent_sha256'):
+            self.input.write_text(json.dumps(self.request|{key:'0'*64}))
+            with self.subTest(key=key),self.assertRaises(S.A.Error): S.prepare('reconcile',self.input,NOW)
+        self.input.write_text(json.dumps(self.request))
+        intent=self.failed_directory/'mutation-intent.json'; original=intent.read_bytes(); value=json.loads(original)
+        for change in ({'createdAt':'2026-10-01T07:59:59Z'},{'createdAt':'2026-10-01T08:30:00Z'},
+                       {'mode':'dispose'},{'outcome':'completed'},{'binary_plan_sha256':'0'*64},{'owned_state_sha256':'0'*64}):
+            intent.write_text(json.dumps(value|change)); self.input.write_text(json.dumps(self.request|{'execute_intent_sha256':A.sha(intent.read_bytes())}))
+            with self.subTest(change=change),self.assertRaises(S.A.Error): S.prepare('reconcile',self.input,NOW+timedelta(minutes=1))
+        intent.write_bytes(original); self.input.write_text(json.dumps(self.request))
+        for file in (self.failed_directory/'rendered.json',self.failed_directory/'before-groups.json',self.plan_directory/'plan.tfplan'):
+            saved=file.read_bytes(); file.write_bytes(b'{}')
+            with self.subTest(file=file.name),self.assertRaises((S.A.Error,ValueError)): S.prepare('reconcile',self.input,NOW)
+            file.write_bytes(saved)
+        self.assertFalse((self.root/self.request['operation_name']).exists())
+
+    def test_missing_state_and_intent_unsafe_or_unexpected_original_files_reject(self):
+        self.failed_execute(); self.request_reconciliation()
+        for file in (self.failed_directory/'mutation-intent.json',self.failed_directory/'work/terraform.tfstate'):
+            saved=file.read_bytes(); file.unlink()
+            with self.subTest(file=file.name),self.assertRaises((S.A.Error,OSError)): S.prepare('reconcile',self.input,NOW)
+            file.write_bytes(saved);file.chmod(0o600)
+        bad=self.failed_directory/'unreviewed.json';Q.write_json(bad,{})
+        with self.assertRaises(S.A.Error):S.prepare('reconcile',self.input,NOW)
+        bad.unlink();state=self.failed_directory/'work/terraform.tfstate';saved=state.read_bytes();state.unlink();state.symlink_to(self.identity)
+        with self.assertRaises((S.A.Error,OSError)):S.prepare('reconcile',self.input,NOW)
+        state.unlink();state.write_bytes(saved);state.chmod(0o600)
+
+    def test_partial_raw_rendered_pending_foreign_and_replaced_graph_reject(self):
+        self.failed_execute(); self.request_reconciliation(); self.ready()
+        files=[self.directory/'state.json',self.directory/'before-os.json',self.directory/'before-members.json',self.directory/'before-vm.json']
+        mutations=[lambda d:d['values']['root_module']['resources'].pop(),lambda d:d['properties'].update(provisioningState='Updating'),
+            lambda d:d['value'].append({'id':'/foreign'}),lambda d:d['properties'].update(vmId='ffffffff-ffff-ffff-ffff-ffffffffffff')]
+        for file,change in zip(files,mutations):
+            raw=file.read_bytes();value=json.loads(raw);change(value);file.write_text(json.dumps(value));self.phase_receipt('reconcile')
+            with self.subTest(file=file.name),self.assertRaises(S.A.Error):S.finish(*self.args)
+            file.write_bytes(raw)
+        self.phase_receipt('reconcile'); self.assertFalse((self.directory/'result.json').exists())
+
+    def test_original_or_copied_state_cannot_change_during_reconciliation(self):
+        self.failed_execute(); self.request_reconciliation(); self.ready()
+        for file in (self.failed_directory/'work/terraform.tfstate',self.directory/'work/terraform.tfstate'):
+            raw=file.read_bytes();value=json.loads(raw);value['serial']+=1;file.write_text(json.dumps(value))
+            with self.subTest(file=str(file)),self.assertRaises(S.A.Error):S.finish(*self.args)
+            file.write_bytes(raw)
+        original=self.failed_directory/'state.json';raw=original.read_bytes();original.write_bytes(raw+b' ')
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+        original.write_bytes(raw)
+
+    def test_reconciliation_phase_order_outputs_and_current_auth_are_required(self):
+        self.failed_execute(); self.request_reconciliation(); self.ready()
+        file=self.directory/'phases.json';phases=S.private(file)[0]
+        for change in (lambda p:p.pop(),lambda p:p.reverse(),lambda p:p[0].update(exitCode=False),
+                       lambda p:p[0].update(arguments=['apply']),lambda p:p[0].update(stdoutSha256='0'*64),
+                       lambda p:p[-1].update(binaryPlanSha256='0'*64)):
+            value=copy.deepcopy(phases);change(value);file.write_text(json.dumps(value))
+            with self.subTest(change=change),self.assertRaises(S.A.Error):S.finish(*self.args)
+        file.write_text(json.dumps(phases));auth=self.directory/'auth-account.json';value=S.private(auth)[0];value['id']='ffffffff-ffff-ffff-ffff-ffffffffffff';auth.write_text(json.dumps(value));self.phase_receipt('reconcile')
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists())
+
+    def test_reconciliation_publication_uncertainty_keeps_original_and_new_evidence(self):
+        self.failed_execute(); self.request_reconciliation(); self.ready();real=S.A.publish_result
+        def uncertain(path,value):real(path,value);raise S.A.PublishedResultError('PRIVATE_CANARY')
+        with mock.patch.object(S.A,'publish_result',side_effect=uncertain),self.assertRaises(S.A.PublishedResultError):S.finish(*self.args)
+        self.assertTrue(S.private(self.directory/'result.json')[0]['reconciled'])
+        self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
 
 if __name__ == '__main__': unittest.main(verbosity=2)

@@ -138,7 +138,7 @@ qualified invocations.
 
 ## Execute and dispose of an owned empty-host session
 
-The native Linux session command has three fixed modes. Select any real mutation
+The native Linux session command has four fixed modes. Select any real mutation
 separately after reviewing the exact plan and current resource budget. The local
 tests use synthetic Azure/Terraform responses and do not qualify a real allocation,
 shutdown or deletion.
@@ -146,6 +146,7 @@ shutdown or deletion.
 ```sh
 node scripts/azure-development-session.mjs --source-digest
 node scripts/azure-development-session.mjs execute --input /absolute/private/execute.json
+node scripts/azure-development-session.mjs reconcile --input /absolute/private/reconcile.json
 node scripts/azure-development-session.mjs prepare-dispose --input /absolute/private/prepare-dispose.json
 node scripts/azure-development-session.mjs dispose --input /absolute/private/dispose.json
 ```
@@ -159,8 +160,12 @@ the entire bound inside the authorized work window. Mode-specific fields are:
 
 - `execute`: `plan_request`, `plan_result`, `plan_result_sha256`, referring to the
   retained successful development plan and its original protected request.
+- `reconcile`: `execute_request`, `execute_directory`, `execute_session_sha256`
+  and `execute_intent_sha256`, binding the original protected execute request,
+  private directory, session snapshot and durable unknown-outcome intent.
 - `prepare-dispose`: `ownership_result`, `ownership_result_sha256`, referring to
-  the completed execution result and its retained exact local state.
+  the completed execution or separate reconciliation result and its retained
+  exact local state.
 - `dispose`: `disposal_result`, `disposal_result_sha256`, referring to a separately
   reviewed successful preparation result. Its deletion plan is valid for at most
   fifteen minutes and must retain the same original ownership/state bindings.
@@ -187,6 +192,32 @@ Completion requires the fixed ordered child sequence, exact tool/argument and
 binary bindings, and hashes/sizes matching every retained stdout response. The
 mutation intent must match the mode, source, request, plan and prior state, and
 precede apply. These records remain unsigned local observations, not attestations.
+
+`reconcile` makes a separate read-only ownership record when a failed execution
+left complete state. It preserves the original directory, authenticates its
+request/session/intent and retained admission artifacts, and checks admission at
+the recorded intent time. This establishes retained policy consistency only:
+the old intent did not hash those admission outputs, so their original observation
+chronology is not attested. The new result binds their currently observed hashes;
+it does not renew old credit evidence or claim the original apply completed.
+
+The caller must first establish that the original owned processes settled and
+that no other actor uses the state or resource group. These are external
+preconditions. The CLI has no persisted process-owner identity and cannot infer
+descendant settlement from PID absence; its result records
+`external_quiescence_verified: false`. A real qualification wrapper must retain
+its own observed ownership/settlement evidence.
+
+Reconciliation copies protected complete state into a new private operation,
+renders that exact copy and the original held binary, authenticates the current
+profile, and checks fresh terminal resource membership, relationships and available
+generation markers. Missing, partial, changed, emergency or ambiguous state,
+pending provisioning and foreign or replaced resources fail. No apply, plan,
+refresh, import or state repair runs. Original phases may be absent; they are not
+reconstructed. The new result says `mode: "reconcile"`, `reconciled: true` and
+`original_execution_outcome: "unconfirmed"`. It can feed the separately reviewed
+deletion workflow below. Partial-allocation recovery remains unsupported, and
+neither reconciliation nor schedule readback proves an actual shutdown occurred.
 
 `prepare-dispose` authenticates the current native profile and rereads the owned
 graph before producing a saved delete-only plan for exactly the retained eleven
@@ -218,7 +249,7 @@ recovery is not established.
 The command retains its private operation directory: plan, original bindings,
 state/backups, any `errored.tfstate`, bounded stdout, mutation intent and available
 readbacks. It does not automatically retry, destroy, remove or reconcile an
-uncertain operation. The unchanged supervisor discards raw stderr, so complete
+uncertain operation. Complete-state reconciliation requires its own explicit request. The unchanged supervisor discards raw stderr, so complete
 emergency diagnostic or state recovery is not established. A failed process may
 have started a remote operation; local settlement is not Azure cancellation.
 Publication failure may leave a complete result with durability or verification

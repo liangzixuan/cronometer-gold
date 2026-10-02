@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -81,6 +92,20 @@ async function fixture(t) {
         const label = phase.replace(/^(before|after)-/u, "").replace(/\.json$/u, "");
         if (state.fail === "readback" && phase === "after-vm.json")
           throw new Error("synthetic lost readback after mutation");
+        if (state.fail === "readback-child" && phase === "after-vm.json")
+          await runTool(
+            python,
+            [
+              "-I",
+              "-B",
+              "-c",
+              `from pathlib import Path; Path(${JSON.stringify(join(f.root, "readback-child-started"))}).write_text('started'); raise SystemExit(7)`,
+            ],
+            {
+              ...options,
+              outputPath: undefined,
+            },
+          );
         value = label === "groups" ? { value: [] } : f.responses.live[label];
       } else {
         const record = Object.values(f.native)
@@ -147,11 +172,11 @@ async function fixture(t) {
           assert.match(argv[2], /^\/proc\/[0-9]+\/fd\/[0-9]+$/u);
           assert.equal(
             await readFile(argv[2], "utf8"),
-            state.mode === "execute"
+            ["execute", "reconcile"].includes(state.mode)
               ? "private synthetic binary plan"
               : "synthetic destruction plan",
           );
-          if (state.mode === "execute") text = f.rendered;
+          if (["execute", "reconcile"].includes(state.mode)) text = f.rendered;
           else value = f.responses.destroy;
         }
       }
@@ -192,6 +217,20 @@ async function fixture(t) {
         // Preserve the actual state bytes across read-only sessions; create/apply alone writes state.
         const statePath = join(options.directory, "terraform.tfstate");
         await writeFile(statePath, `${JSON.stringify(raw)}\n`, { mode: 0o600 });
+        if (state.fail === "apply-complete")
+          await runTool(
+            python,
+            [
+              "-I",
+              "-B",
+              "-c",
+              `from pathlib import Path; Path(${JSON.stringify(join(f.root, "apply-child-started"))}).write_text('started'); raise SystemExit(7)`,
+            ],
+            {
+              ...options,
+              outputPath: undefined,
+            },
+          );
         if (state.fail === "abort")
           controller.abort(new Error("synthetic interruption after actual boundary reached"));
       }
@@ -314,5 +353,138 @@ for (const failure of ["apply", "readback", "abort", "cleanup", "publication"]) 
       await readFile(join(f.root, "nourishing-dev-0123456789ab/plan.tfplan"), "utf8"),
       "private synthetic binary plan",
     );
+  });
+}
+
+async function snapshot(path) {
+  const entries = {};
+  for (const name of (await readdir(path, { recursive: true })).sort()) {
+    const full = join(path, name),
+      info = await lstat(full);
+    entries[name] = {
+      mode: info.mode & 0o777,
+      value: info.isSymbolicLink()
+        ? await readlink(full)
+        : info.isFile()
+          ? hash(await readFile(full))
+          : "directory",
+    };
+  }
+  return entries;
+}
+
+for (const failure of ["apply-complete", "readback-child", "publication"]) {
+  test(`read-only reconciliation after ${failure} preserves failure and supports separate disposal`, {
+    timeout: 120000,
+  }, async (t) => {
+    const f = await fixture(t);
+    f.state.fail = failure;
+    await assert.rejects(f.execute());
+    if (failure === "readback-child")
+      assert.equal(await readFile(join(f.root, "readback-child-started"), "utf8"), "started");
+    if (failure === "apply-complete")
+      assert.equal(await readFile(join(f.root, "apply-child-started"), "utf8"), "started");
+    const original = join(f.root, "nourishing-session-0123456789ab"),
+      before = await snapshot(original);
+    f.state.fail = undefined;
+    f.state.mode = "reconcile";
+    const input = join(f.root, "reconcile.json");
+    await json(input, {
+      schema_version: 1,
+      source_sha256: await sourceDigest(),
+      operation_name: `nourishing-session-${"c".repeat(12)}`,
+      not_after_utc: "2026-10-01T08:18:00Z",
+      execute_request: f.input,
+      execute_directory: original,
+      execute_session_sha256: hash(await readFile(join(original, "session.json"))),
+      execute_intent_sha256: hash(await readFile(join(original, "mutation-intent.json"))),
+    });
+    if (failure === "readback-child") {
+      for (const [kind, suffix] of [
+        ["child", "d"],
+        ["abort", "e"],
+      ]) {
+        const failedInput = join(f.root, `reconcile-${kind}.json`);
+        const request = JSON.parse(await readFile(input));
+        request.operation_name = `nourishing-session-${suffix.repeat(12)}`;
+        await json(failedInput, request);
+        const stop = new AbortController();
+        const start = f.state.calls.length;
+        const reject = async (tool, argv, options) => {
+          if (basename(options.outputPath ?? "") === "before-vm.json") {
+            if (kind === "child") {
+              const python = { path: await realpath("/usr/bin/python3") };
+              python.sha256 = hash(await readFile(python.path));
+              return runTool(
+                python,
+                [
+                  "-I",
+                  "-B",
+                  "-c",
+                  `from pathlib import Path; Path(${JSON.stringify(join(f.root, "reconcile-child-started"))}).write_text('started'); raise SystemExit(7)`,
+                ],
+                { ...options, outputPath: undefined },
+              );
+            }
+            const observed = await f.run(tool, argv, options);
+            stop.abort(new Error("synthetic reconciliation interruption"));
+            return observed;
+          }
+          return f.run(tool, argv, options);
+        };
+        await assert.rejects(
+          runDevelopmentSession(
+            "reconcile",
+            failedInput,
+            { environment: {}, signal: stop.signal },
+            reject,
+          ),
+        );
+        if (kind === "child")
+          assert.equal(await readFile(join(f.root, "reconcile-child-started"), "utf8"), "started");
+        await absent(join(f.root, request.operation_name, "result.json"));
+        await absent(join(f.root, request.operation_name, "mutation-intent.json"));
+        assert.ok(
+          f.state.calls
+            .slice(start)
+            .every((c) => !["apply", "plan", "refresh", "import"].includes(c.argv[0])),
+        );
+        assert.deepEqual(await snapshot(original), before);
+      }
+    }
+    const start = f.state.calls.length;
+    let result = await runDevelopmentSession("reconcile", input, { environment: {} }, f.run);
+    const calls = f.state.calls.slice(start);
+    assert.ok(calls.length > 0);
+    assert.ok(calls.every((c) => !["apply", "plan", "refresh", "import"].includes(c.argv[0])));
+    let retained = join(result.directory, "result.json"),
+      receipt = JSON.parse(await readFile(retained));
+    assert.equal(receipt.mode, "reconcile");
+    assert.equal(receipt.original_execution_outcome, "unconfirmed");
+    assert.equal(receipt.external_quiescence_verified, false);
+    assert.equal(receipt.reconciled, true);
+    await absent(join(result.directory, "mutation-intent.json"));
+    assert.deepEqual(await snapshot(original), before);
+    if (failure === "readback-child") {
+      await absent(join(original, "result.json"));
+      await absent(join(original, "phases.json"));
+    }
+    for (const mode of ["prepare-dispose", "dispose"]) {
+      f.state.mode = mode;
+      const next = join(f.root, `${mode}.json`),
+        key = mode === "prepare-dispose" ? "ownership" : "disposal";
+      await json(next, {
+        schema_version: 1,
+        source_sha256: await sourceDigest(),
+        operation_name: `nourishing-session-${(mode === "prepare-dispose" ? "a" : "b").repeat(12)}`,
+        not_after_utc: "2026-10-01T08:18:00Z",
+        [`${key}_result`]: retained,
+        [`${key}_result_sha256`]: hash(await readFile(retained)),
+      });
+      result = await runDevelopmentSession(mode, next, { environment: {} }, f.run);
+      retained = join(result.directory, "result.json");
+    }
+    assert.equal(JSON.parse(await readFile(retained)).disposed, true);
+    assert.deepEqual(await snapshot(original), before);
   });
 }
