@@ -112,6 +112,39 @@ def signal_scope():
         for number, handler in previous.items():
             signal.signal(number, handler)
 
+def commands(expected):
+    """Fixed native CLI commands; describing them does not execute authentication."""
+    url = "https://management.azure.com/subscriptions/" + expected["subscriptionId"] + "?api-version=" + API_VERSION
+    return [
+        ("version", ["version"]),
+        ("extensions", ["extension", "list"]),
+        ("account", ["account", "show", "--subscription", expected["subscriptionId"], "--query", ACCOUNT_QUERY]),
+        ("subscription", ["rest", "--method", "get", "--url", url,
+                          "--subscription", expected["subscriptionId"], "--query", SUBSCRIPTION_QUERY]),
+    ]
+
+def validate_response(label, value, expected):
+    """Validate one captured projected response, without making a live-read claim."""
+    if label == "version":
+        require(isinstance(value, dict) and set(value) == {"azure-cli", "azure-cli-core", "azure-cli-telemetry", "extensions"}
+                and value["azure-cli"] == value["azure-cli-core"] == CLI_VERSION
+                and value["extensions"] == {}, "CLI version or extension mismatch")
+    elif label == "extensions":
+        require(value == [], "CLI extensions are not permitted")
+    elif label == "account":
+        require(value == {"id": expected["subscriptionId"], "tenantId": expected["tenantId"],
+                          "state": "Enabled", "environmentName": "AzureCloud"}, "account identity or state mismatch")
+    elif label == "subscription":
+        require(isinstance(value, dict) and set(value) == {"subscriptionId", "tenantId", "state", "subscriptionPolicies"}
+                and value["subscriptionId"] == expected["subscriptionId"]
+                and value["tenantId"] == expected["tenantId"] and value["state"] == "Enabled",
+                "live subscription identity or state mismatch")
+        policies = value["subscriptionPolicies"]
+        require(isinstance(policies, dict) and policies.get("quotaId") == "AzureForStudents_2018-01-01"
+                and policies.get("spendingLimit") == "On", "Students subscription protection required")
+    else:
+        raise Error("unreviewed authentication response")
+
 def preflight(cli, profile, expected_identity, expected_source, *, runner=A.run_json):
     require(source_digest() == expected_source, "reviewed source changed")
     tool = tool_digest(cli)
@@ -134,24 +167,8 @@ def preflight(cli, profile, expected_identity, expected_source, *, runner=A.run_
             # These bind parsed projected JSON, not raw CLI response bytes or a signature.
             responses[label] = A.sha(json.dumps(value, sort_keys=True, separators=(",", ":")).encode())
             return value
-        version = read("version", ["version"])
-        require(isinstance(version, dict) and set(version) == {"azure-cli", "azure-cli-core", "azure-cli-telemetry", "extensions"}
-                and version["azure-cli"] == version["azure-cli-core"] == CLI_VERSION
-                and version["extensions"] == {}, "CLI version or extension mismatch")
-        require(read("extensions", ["extension", "list"]) == [], "CLI extensions are not permitted")
-        account = read("account", ["account", "show", "--subscription", expected["subscriptionId"], "--query", ACCOUNT_QUERY])
-        require(account == {"id": expected["subscriptionId"], "tenantId": expected["tenantId"],
-                            "state": "Enabled", "environmentName": "AzureCloud"}, "account identity or state mismatch")
-        url = "https://management.azure.com/subscriptions/" + expected["subscriptionId"] + "?api-version=" + API_VERSION
-        subscription = read("subscription", ["rest", "--method", "get", "--url", url,
-                            "--subscription", expected["subscriptionId"], "--query", SUBSCRIPTION_QUERY])
-        require(isinstance(subscription, dict) and set(subscription) == {"subscriptionId", "tenantId", "state", "subscriptionPolicies"}
-                and subscription["subscriptionId"] == expected["subscriptionId"]
-                and subscription["tenantId"] == expected["tenantId"] and subscription["state"] == "Enabled",
-                "live subscription identity or state mismatch")
-        policies = subscription["subscriptionPolicies"]
-        require(isinstance(policies, dict) and policies.get("quotaId") == "AzureForStudents_2018-01-01"
-                and policies.get("spendingLimit") == "On", "Students subscription protection required")
+        for label, args in commands(expected):
+            validate_response(label, read(label, args), expected)
     conserve()
     return {"schema_version": 1, "scope": SCOPE, "started_at_utc": started,
             "completed_at_utc": datetime.now(timezone.utc).isoformat(), "source_sha256": expected_source,

@@ -515,4 +515,148 @@ class Authentication(unittest.TestCase):
         self.assertEqual(json.loads(self.result.read_text()),{'scope':'synthetic'})
         self.assertIn('Complete authentication result was published',captured.getvalue());self.assertNotIn('PRIVATE_CANARY',captured.getvalue())
 
+
+Q = load("development_plan_input", HERE / "prepare-plan-input.py")
+
+class PlanPreparation(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='nourishing-plan-input-', dir=Path.home())
+        self.addCleanup(self.temporary.cleanup); self.root = Path(self.temporary.name)
+        self.profile = self.root/'profile'; self.profile.mkdir(mode=0o700)
+        settings = configparser.ConfigParser(); settings.read_dict(P.SETTINGS)
+        with (self.profile/'config').open('w') as output: settings.write(output)
+        (self.profile/'config').chmod(0o600)
+        (self.profile/'clouds.config').write_text('[AzureCloud]\nsubscription = '+SUB+'\n')
+        (self.profile/'clouds.config').chmod(0o600)
+        self.expected = {'subscriptionId':SUB,'tenantId':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}
+        self.identity = self.root/'identity.json'; Q.write_json(self.identity,self.expected)
+        self.tf = self.root/'terraform'; self.tf.write_bytes(b'#!/bin/false\n'); self.tf.chmod(0o755)
+        self.provider = self.root/'provider'; self.provider.mkdir(mode=0o700)
+        pins = {}
+        for name,mode in [('terraform-provider-azurerm_v4.79.0_x5',0o755),('LICENSE.txt',0o644)]:
+            raw=('synthetic-'+name).encode(); p=self.provider/name;p.write_bytes(raw);p.chmod(mode)
+            pins[name]=(A.sha(raw),mode)
+        for owner,name,value in [(Q.A,'TF_SHA256',A.sha(self.tf.read_bytes())),(Q.A,'PROVIDER_FILES',pins)]:
+            patch=mock.patch.object(owner,name,value);patch.start();self.addCleanup(patch.stop)
+        patch=mock.patch.object(Q.P,'tool_digest',return_value=(P.CLI_SHA256,100));patch.start();self.addCleanup(patch.stop)
+        self.documents=evidence();paths={}
+        for kind,value in self.documents.items():
+            file=self.root/(kind+'.json');Q.write_json(file,value);paths[kind]=str(file)
+        self.request={'schema_version':1,'source_sha256':Q.source_digest(),'identity_file':str(self.identity),
+            'profile_directory':str(self.profile),'terraform':str(self.tf),'provider_directory':str(self.provider),
+            'operation_name':PREFIX,'admin_ipv4_cidr':'8.8.8.8/32','ssh_public_key':B.SSH_KEY,
+            'shutdown_deadline_utc':'2026-10-01T10:00:00Z','not_after_utc':'2026-10-01T08:20:00Z','evidence_paths':paths}
+        self.input=self.root/'request.json';Q.write_json(self.input,self.request)
+    def prepare(self):
+        self.description=Q.prepare(self.input,NOW);self.directory=Path(self.description['directory'])
+        self.args=(self.input,self.directory,self.description['state_sha256'],NOW)
+        return self.description
+    def complete_files(self):
+        expected=self.expected
+        values=[{'azure-cli':P.CLI_VERSION,'azure-cli-core':P.CLI_VERSION,'azure-cli-telemetry':'1','extensions':{}},[],
+                {'id':SUB,'tenantId':expected['tenantId'],'state':'Enabled','environmentName':'AzureCloud'},
+                {**expected,'state':'Enabled','subscriptionPolicies':{'quotaId':'AzureForStudents_2018-01-01','spendingLimit':'On'}}]
+        for (label,_),value in zip(Q.P.commands(expected),values):Q.write_json(self.directory/('auth-'+label+'.json'),value)
+        Q.write_json(self.directory/'version.json',{'terraform_version':'1.5.7','platform':'linux_amd64'})
+        document=plan();variables=json.loads((self.directory/'work/inputs.tfvars.json').read_text())
+        document['variables']={k:{'value':v} for k,v in variables.items()}
+        Q.write_json(self.directory/'rendered.json',document)
+        (self.directory/'plan.tfplan').write_bytes(b'private synthetic binary plan');(self.directory/'plan.tfplan').chmod(0o600)
+        names=['prepare','auth-version','auth-extensions','auth-account','auth-subscription','authenticate','version','init','plan','show']
+        phases=[{'phase':n,'completed':True,'exitCode':0} for n in names];phases[-1]['binaryPlanSha256']=A.sha((self.directory/'plan.tfplan').read_bytes())
+        Q.write_json(self.directory/'phases.json',phases)
+    def test_private_prepare_and_exact_offline_mirror(self):
+        result=self.prepare();Q.verify(*self.args)
+        self.assertEqual(set(result['azure']),{'path','sha256'})
+        self.assertEqual(result['auth_commands'],Q.P.commands(self.expected))
+        config=(self.directory/'terraform.rc').read_text()
+        self.assertIn('filesystem_mirror',config);self.assertNotIn('direct',config)
+        self.assertEqual(set(p.name for p in (self.directory/'work').iterdir()),set(Q.TF_FILES)|{'inputs.tfvars.json'})
+        with self.assertRaises(FileExistsError):Q.prepare(self.input,NOW)
+    def test_auth_extraction_retains_pure_exact_validation(self):
+        self.prepare();self.complete_files();self.assertEqual(set(Q.authenticate(*self.args)),{'version','extensions','account','subscription'})
+        file=self.directory/'auth-account.json';file.write_text('{}')
+        with self.assertRaises(Q.A.Error):Q.authenticate(*self.args)
+    def test_real_auditor_and_create_only_publication_retain_plan(self):
+        self.prepare();self.complete_files();result=Q.finish(*self.args)
+        self.assertTrue(result['completed']);self.assertEqual(set(p.name for p in self.directory.iterdir()),{'result.json','plan.tfplan','phases.json'})
+        receipt=json.loads((self.directory/'result.json').read_text())
+        self.assertEqual(receipt['resource_count'],11);self.assertEqual(receipt['binary_plan_sha256'],A.sha((self.directory/'plan.tfplan').read_bytes()))
+        self.assertEqual((self.directory/'result.json').stat().st_mode&0o777,0o600)
+        with self.assertRaises((Q.A.Error,OSError)):Q.finish(*self.args)
+    def test_exact_existing_source_and_snapshot_reject_changed_inputs(self):
+        self.prepare()
+        paths=[self.identity,self.tf,self.profile/'config',self.root/'credit.json',self.provider/'LICENSE.txt',self.directory/'work/main.tf',self.directory/'session.json']
+        for path in paths:
+            raw=path.read_bytes();path.write_bytes(raw+b'\n')
+            with self.subTest(path=path.name),self.assertRaises((Q.A.Error,ValueError)):Q.verify(*self.args)
+            path.write_bytes(raw)
+        Q.verify(*self.args)
+    def test_missing_duplicate_stale_and_unsafe_request_rejected_before_directory(self):
+        raw=self.input.read_bytes()
+        variants=[{**self.request,'extra':1},{**self.request,'operation_name':'../other'},
+                  {**self.request,'admin_ipv4_cidr':'127.0.0.1/32'},{**self.request,'source_sha256':'0'*64},
+                  {**self.request,'not_after_utc':'2026-10-01T07:00:00Z'},
+                  {**self.request,'evidence_paths':{}}]
+        for value in variants:
+            self.input.write_text(json.dumps(value))
+            with self.subTest(value=value),self.assertRaises((Q.A.Error,ValueError)):Q.prepare(self.input,NOW)
+            self.assertFalse((self.root/PREFIX).exists())
+        self.input.write_bytes(raw[:-2]+b',"schema_version":1}\n')
+        with self.assertRaises(Q.A.Error):Q.prepare(self.input,NOW)
+        self.input.write_bytes(raw);self.input.chmod(0o644)
+        with self.assertRaises(Q.A.Error):Q.prepare(self.input,NOW)
+        self.input.chmod(0o600)
+        with self.assertRaises(Q.A.Error):Q.prepare(self.input,NOW+timedelta(hours=5))
+    def test_session_allowlist_link_and_aggregate_bounds(self):
+        self.prepare();extra=self.directory/'unexpected';extra.write_text('x')
+        with self.assertRaises(Q.A.Error):Q.verify(*self.args)
+        extra.unlink();extra.symlink_to(self.identity)
+        with self.assertRaises(Q.A.Error):Q.verify(*self.args)
+        extra.unlink()
+        output=self.directory/'rendered.json';output.write_bytes(b'123');output.chmod(0o600)
+        with mock.patch.dict(Q.OUTPUTS,{'rendered.json':2}),self.assertRaises(Q.A.Error):Q.verify(*self.args)
+        output.unlink()
+        with mock.patch.object(Q,'MAX_AGGREGATE',2),self.assertRaises(Q.A.Error):Q.tree(self.directory)
+        for i in range(97):(self.directory/('unexpected'+str(i))).touch(mode=0o600)
+        with self.assertRaises(Q.A.Error):Q.tree(self.directory)
+    def test_plan_policy_failure_and_cleanup_failure_never_publish(self):
+        self.prepare();self.complete_files()
+        file=self.directory/'rendered.json';raw=file.read_bytes();file.write_text('{}')
+        with self.assertRaises(Q.A.Error):Q.finish(*self.args)
+        file.write_bytes(raw)
+        with mock.patch.object(Q.shutil,'rmtree',side_effect=OSError('PRIVATE_CANARY')),self.assertRaises(OSError):Q.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists());self.assertTrue((self.directory/'plan.tfplan').exists())
+    def test_after_publication_failure_preserves_complete_result(self):
+        self.prepare();self.complete_files();real=Q.A.publish_result
+        def interrupted(path,result):real(path,result);raise Q.A.PublishedResultError('PRIVATE_CANARY')
+        with mock.patch.object(Q.A,'publish_result',side_effect=interrupted),self.assertRaises(Q.A.PublishedResultError):Q.finish(*self.args)
+        self.assertTrue(json.loads((self.directory/'result.json').read_text())['completed'])
+        self.assertTrue((self.directory/'plan.tfplan').exists())
+    def test_replaced_operation_is_not_cleaned_or_published(self):
+        self.prepare();self.complete_files()
+        original=self.directory;renamed=self.root/'retained-operation';original.rename(renamed)
+        original.mkdir(mode=0o700)
+        (original/'session.json').write_bytes((renamed/'session.json').read_bytes());(original/'session.json').chmod(0o600)
+        with self.assertRaisesRegex(Q.A.Error,'operation or inputs changed'):Q.finish(*self.args)
+        self.assertTrue((renamed/'plan.tfplan').exists());self.assertTrue((original/'session.json').exists())
+    def test_binary_binding_and_requested_values_are_required(self):
+        self.prepare();self.complete_files()
+        binary=self.directory/'plan.tfplan';original=binary.read_bytes();binary.write_bytes(b'changed private binary')
+        with self.assertRaises(Q.A.Error):Q.finish(*self.args)
+        binary.write_bytes(original)
+        file=self.directory/'rendered.json';value=json.loads(file.read_text())
+        value['variables']['admin_ipv4_cidr']['value']='1.1.1.1/32'
+        values={k:v['value'] for k,v in value['variables'].items()}
+        for entry in value['resource_changes']:entry['change']['after']=Q.A.expected_values(values)[entry['address']]
+        file.write_text(json.dumps(value))
+        with self.assertRaisesRegex(Q.A.Error,'inputs differ'):Q.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists())
+    def test_pure_helper_has_no_child_executor(self):
+        import ast
+        module=ast.parse((HERE/'prepare-plan-input.py').read_text())
+        for node in ast.walk(module):
+            if isinstance(node,ast.Import):self.assertFalse({'subprocess','resource'}&{n.name for n in node.names})
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):self.assertNotIn(node.func.attr,{'run_json','Popen','system','audit_binary_plan'})
+
 if __name__ == '__main__': unittest.main(verbosity=2)

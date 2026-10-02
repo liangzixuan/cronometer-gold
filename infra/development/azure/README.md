@@ -55,6 +55,31 @@ The new private result contains only check outcomes, source/input/configuration 
 
 Success establishes current read-only authentication and subscription identity/protection. Credit balance/expiry, billing-profile protection, quota, allowance, resource ownership, plan/apply, host execution and runtime/device/release acceptance require their separate evidence and approvals. The six-family saved-plan evidence below must still be freshly collected for its consuming action.
 
+## Prepare a private development plan
+
+The Linux command `node scripts/azure-development-plan.mjs --input /absolute/private/request.json` prepares and audits one binary plan. It never applies a plan, registers providers or installs tools. Select a real invocation separately, with current allowance evidence and explicit operational inputs. Local synthetic qualification does not establish Azure planning or host acceptance.
+
+The request is a mode0600 JSON file in an owned mode0700 directory. It contains exactly these fields:
+
+- `schema_version`: `1`.
+- `source_sha256`: the independently reviewed result of `node scripts/azure-development-plan.mjs --source-digest`.
+- `identity_file`, `profile_directory`: the protected expected-identity JSON and native Azure profile described above.
+- `terraform`, `provider_directory`: the qualified Linux Terraform 1.5.7 executable and exact AzureRM 4.79.0 directory containing the authenticated binary and license.
+- `operation_name`: a new `nourishing-dev-` name followed by twelve lowercase hexadecimal characters.
+- `admin_ipv4_cidr`, `ssh_public_key`, `shutdown_deadline_utc`: the actual public administrator /32, public SSH key and same-day UTC shutdown deadline. Existing auditor restrictions remain in force.
+- `not_after_utc`: the explicit invocation horizon. At startup at least ten minutes plus a thirty-second cleanup reserve must fit before it. The caller must place it within the currently authorized work window.
+- `evidence_paths`: exactly `credit`, `providers`, `compute`, `quota`, `sku` and `image`, each naming its protected original receipt JSON. All six families are revalidated around execution.
+
+The operation directory is created exclusively beside the request, using `operation_name`; an existing directory is rejected. The command authenticates source, native CLI, Python, Terraform, provider and input bytes. It copies only the four Terraform files, frozen lock and qualified provider into private scratch and generates explicit variables. A filesystem-only provider mirror has no network fallback. Ambient Terraform, cloud-credential, Python, Node-loading and proxy overrides are rejected. Every child receives an explicit minimal environment; private response values and plan contents are not printed.
+
+Node owns each Python, Azure CLI and Terraform process directly through the shared Linux supervisor. The Python helper only validates, reads, copies, removes verified scratch and publishes results; it starts no subprocesses. The fixed sequence validates authentication, checks Terraform identity, initializes without a backend or lock update, plans with ordinary exit-zero semantics and renders the retained private plan descriptor. There is no shell command, arbitrary Terraform argument, runner override or pin override in the CLI. The exported function's injected command boundary exists for synthetic sequence tests.
+
+Each child runs under the pinned `prlimit` executable with a 512-MiB per-file limit. Captured JSON is limited to 20 MiB, ordinary command output to 64 KiB and stderr to the shared runner's 64-KiB bound. The command admits a narrow session file set, checks at most 96 entries and an aggregate bound of 1,132 MiB after each child. These post-command checks do not continuously cap aggregate disk use. The ten-minute operation budget includes phase deadlines; a planning child has at most four minutes. INT, TERM and HUP request owned cleanup. Parent loss closes supervisor IPC and terminates that owned group. If the OS refuses final group termination, success is forbidden and finite recovery is not established.
+
+On success, `plan.tfplan`, `phases.json` and the create-only mode0600 `result.json` remain in the operation directory. The binary digest must match the exact descriptor rendered by Terraform, and rendered variables must match the protected request. The result binds source, tools, original evidence and authentication responses; retain the request and all original input files for a later audit/apply decision. The phase records and parsed-response hashes are unsigned local observations. Verified scratch is removed before publication. Any failed phase retains private partial files for inspection; a post-publication failure may leave a complete result with durability or final verification unconfirmed. Never infer acceptance from file presence alone.
+
+Tests cover the pure input/auditor/publication stages and a full injected sequence with synthetic Azure/Terraform responses. Separate actual native fixtures qualify the limiter, output/file limits, descriptor conservation, timeout, resistant descendants and parent loss. They do not execute an Azure plan, authenticate a real provider session or qualify allocation, shutdown, deployment or release.
+
 ## Saved-plan audit boundary
 
 `audit-plan.py` accepts only a protected binary `.tfplan`, rendered internally through the qualified Linux AMD64 Terraform executable. It reuses the existing beta auditor's protected file and descriptor helpers without changing beta policy. Supply the independently reviewed source digest and binary-plan SHA256. The source digest covers the executable policy, Terraform files, provider lock and reused helper; printing a digest does not approve those bytes.
