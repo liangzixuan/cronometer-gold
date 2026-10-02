@@ -659,4 +659,187 @@ class PlanPreparation(unittest.TestCase):
             if isinstance(node,ast.Import):self.assertFalse({'subprocess','resource'}&{n.name for n in node.names})
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):self.assertNotIn(node.func.attr,{'run_json','Popen','system','audit_binary_plan'})
 
+
+E = load("development_evidence", HERE / "collect-evidence.py")
+
+def native_fixture():
+    old = evidence(); documents = {}
+    for kind in sorted(A.EVIDENCE_KINDS):
+        commands = []
+        for family, label, *_ in A.NATIVE_READS:
+            if family != kind: continue
+            value = selected(old, kind, label); raw = json.dumps(value) + '\n'
+            commands.append({'format':A.NATIVE_FORMAT,'label':label,'arguments':A.native_arguments(label,SUB,PROFILE),
+                'startedAt':'2026-10-01T07:00:00Z','endedAt':'2026-10-01T07:00:01Z','completed':True,'timedOut':False,'exitCode':0,
+                'stdout':raw,'selected':value,'stdoutBytes':len(raw.encode()),'stdoutSha256':A.sha(raw.encode()),
+                'stderrBytes':0,'stderrSha256':A.sha(b'')})
+        documents[kind]={'format':A.NATIVE_FORMAT,'schemaVersion':2,'readOnly':True,'mutationAttempted':False,
+                         'provenance':A.native_provenance(),'commands':commands}
+    return documents
+
+class NativeEvidencePolicy(unittest.TestCase):
+    def accepts(self, docs): return A.evidence_values(docs,HASHES,SUB,NOW+timedelta(hours=2),NOW)
+    def test_native_and_windows_facts_match_without_relabeling(self):
+        self.assertEqual(self.accepts(native_fixture()),self.accepts(evidence()))
+    def test_every_exact_native_argument_and_provenance_is_required(self):
+        original=native_fixture()
+        for kind,doc in original.items():
+            for i,record in enumerate(doc['commands']):
+                for index in range(len(record['arguments'])):
+                    bad=copy.deepcopy(original);bad[kind]['commands'][i]['arguments'][index]+='-substituted'
+                    with self.subTest(kind=kind,label=record['label'],index=index),self.assertRaises(A.Error):self.accepts(bad)
+            for key in doc['provenance']:
+                bad=copy.deepcopy(original);bad[kind]['provenance'][key]='unreviewed'
+                with self.subTest(kind=kind,key=key),self.assertRaises(A.Error):self.accepts(bad)
+    def test_original_raw_response_and_actual_diagnostic_metadata_are_bound(self):
+        for key,value in [('stdout','{}'),('selected',{}),('stdoutBytes',0),('stdoutSha256','0'*64),
+                          ('stderrBytes',-1),('stderrBytes',65537),('stderrSha256','0'*64),('completed',False),
+                          ('exitCode',True),('exitCode',False),('exitCode',0.0),('startedAt','2026-09-30T01:00:00Z'),('endedAt','2026-10-01T09:00:00Z')]:
+            bad=native_fixture();bad['credit']['commands'][0][key]=value
+            with self.subTest(key=key,value=value),self.assertRaises(A.Error):self.accepts(bad)
+        bad=native_fixture();item=bad['credit']['commands'][0];item['stdout']='{"duplicate":1,"duplicate":2}';item['stdoutBytes']=len(item['stdout']);item['stdoutSha256']=A.sha(item['stdout'].encode())
+        with self.assertRaises(A.Error):self.accepts(bad)
+    def test_native_raw_binding_preserves_nested_json_types(self):
+        for original,substituted in [(0,False),(1,True),(1,1.0),({'items':[0]},{'items':[False]})]:
+            bad=native_fixture();item=bad['credit']['commands'][0]
+            item['selected']['bindingProbe']=original
+            item['stdout']=json.dumps(item['selected']);item['stdoutBytes']=len(item['stdout'].encode());item['stdoutSha256']=A.sha(item['stdout'].encode())
+            item['selected']['bindingProbe']=substituted
+            with self.subTest(original=original,substituted=substituted),self.assertRaises(A.Error):self.accepts(bad)
+    def test_mixed_unknown_partial_and_extra_formats_are_rejected(self):
+        for mode in ['mixed','unknown','numeric-schema','missing','extra','legacy-native-item','unknown-legacy-schema']:
+            bad=native_fixture()
+            if mode=='mixed':bad['credit']=evidence()['credit']
+            if mode=='unknown':bad['credit']['format']='other'
+            if mode=='numeric-schema':bad['credit']['schemaVersion']=2.0
+            if mode=='missing':bad['credit']['commands'].pop()
+            if mode=='extra':bad['credit']['commands'].append(copy.deepcopy(bad['credit']['commands'][0]))
+            if mode=='legacy-native-item':bad=evidence();bad['providers']['commands'][0]['format']=A.NATIVE_FORMAT
+            if mode=='unknown-legacy-schema':bad=evidence();bad['credit']['schemaVersion']=3
+            with self.subTest(mode=mode),self.assertRaises(A.Error):self.accepts(bad)
+    def test_each_family_value_gate_survives_raw_receipt_rebinding(self):
+        changes=[('providers','after-subscription-policy',('subscriptionPolicies','spendingLimit'),'Off'),
+                 ('providers','after-billing-property',('billingProfileStatus',),'Inactive'),
+                 ('compute','after-compute-registration-once',('registrationState',),'NotRegistered'),
+                 ('credit','credit-balance-summary',('balanceSummary','currentBalance','value'),19),
+                 ('credit','credit-lots',('hasNext',),True),
+                 ('quota','centralus-positive-and-arm-family-quotas',('hasNext',),True),
+                 ('sku','centralus-Standard_B4ps_v2-exact',('nextLink',),'https://foreign.invalid'),
+                 ('image','selected-exact-CentralUS-Canonical-Arm64-image',('architecture',),'x64')]
+        for kind,label,path,value in changes:
+            bad=native_fixture();item=next(x for x in bad[kind]['commands'] if x['label']==label)
+            setpath(item['selected'],path,value);item['stdout']=json.dumps(item['selected']);item['stdoutBytes']=len(item['stdout'].encode());item['stdoutSha256']=A.sha(item['stdout'].encode())
+            with self.subTest(kind=kind,label=label),self.assertRaises(A.Error):self.accepts(bad)
+    def test_billing_paths_cannot_inject_or_redirect(self):
+        for value in [None,PROFILE+'?x=1',PROFILE+'#fragment',PROFILE+'/extra',PROFILE.replace('synthetic','..',1),PROFILE+'%2fother','https://foreign.invalid']:
+            with self.subTest(value=value),self.assertRaises(A.Error):A.native_arguments('credit-lots',SUB,value)
+
+class EvidencePreparation(unittest.TestCase):
+    def setUp(self):
+        self.temporary=tempfile.TemporaryDirectory(prefix='nourishing-evidence-fixture-',dir=Path.home());self.addCleanup(self.temporary.cleanup)
+        self.root=Path(self.temporary.name);self.profile=self.root/'profile';self.profile.mkdir(mode=0o700)
+        config=configparser.ConfigParser();config.read_dict(P.SETTINGS)
+        with (self.profile/'config').open('w') as out:config.write(out)
+        (self.profile/'config').chmod(0o600);(self.profile/'clouds.config').write_text('[AzureCloud]\nsubscription = '+SUB+'\n');(self.profile/'clouds.config').chmod(0o600)
+        self.expected={'subscriptionId':SUB,'tenantId':'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}
+        self.identity=self.root/'identity.json';E.write_json(self.identity,self.expected)
+        self.request={'schema_version':1,'source_sha256':E.A.native_source_digest(),'identity_file':str(self.identity),
+            'profile_directory':str(self.profile),'operation_name':'nourishing-evidence-0123456789ab',
+            'not_after_utc':'2026-10-01T08:12:00Z','shutdown_deadline_utc':'2026-10-01T10:00:00Z'}
+        self.input=self.root/'request.json';E.write_json(self.input,self.request)
+        patch=mock.patch.object(E.P,'tool_digest',return_value=(P.CLI_SHA256,100));patch.start();self.addCleanup(patch.stop)
+    def prepare(self):
+        description=E.prepare(self.input,NOW-timedelta(seconds=5));self.directory=Path(description['directory'])
+        self.args=(self.input,self.directory,description['state_sha256'],NOW);return description
+    def complete_files(self):
+        auth=[{'azure-cli':P.CLI_VERSION,'azure-cli-core':P.CLI_VERSION,'azure-cli-telemetry':'1','extensions':{}},[],
+              {'id':SUB,'tenantId':self.expected['tenantId'],'state':'Enabled','environmentName':'AzureCloud'},
+              {**self.expected,'state':'Enabled','subscriptionPolicies':{'quotaId':'AzureForStudents_2018-01-01','spendingLimit':'On'}}]
+        phases=[]
+        def put(label,args,value):
+            file=self.directory/(label+'.json');E.write_json(file,value);raw=file.read_bytes()
+            phases.append({'label':label,'arguments':args,'executableSha256':P.CLI_SHA256,'startedAt':'2026-10-01T08:00:00Z','endedAt':'2026-10-01T08:00:00Z',
+                'completed':True,'exitCode':0,'stdoutBytes':len(raw),'stdoutSha256':A.sha(raw),'stderrBytes':0,'stderrSha256':A.sha(b'')})
+        for (label,args),value in zip(E.P.commands(self.expected),auth):put('auth-'+label,args+['--only-show-errors','--output','json'],value)
+        old=evidence()
+        for kind,label,*_ in A.NATIVE_READS:put('read-'+label,A.native_arguments(label,SUB,PROFILE),selected(old,kind,label))
+        E.write_json(self.directory/'phases.json',phases)
+    def test_complete_private_index_binds_six_families_and_retains_inputs(self):
+        description=self.prepare();self.complete_files();result=E.finish(*self.args)
+        self.assertTrue(result['completed']);index,_=E.A.private_json(self.directory/'index.json')
+        self.assertEqual(set(index['evidence_sha256']),A.EVIDENCE_KINDS)
+        for kind,digest in index['evidence_sha256'].items():self.assertEqual(E.A.private_json(self.directory/(kind+'.json'))[1],digest)
+        self.assertTrue((self.directory/'session.json').exists());self.assertEqual(description['azure']['path'],'/usr/bin/az')
+        with self.assertRaises(FileExistsError):E.finish(*self.args)
+    def test_authentication_precedes_all_collection_and_billing_precedes_credit(self):
+        self.prepare()
+        with self.assertRaises(E.A.Error):E.requests(*self.args)
+        self.complete_files();self.assertEqual(len(E.requests(*self.args)),2);self.assertEqual(len(E.requests(*self.args,remaining=True)),8)
+        path=self.directory/'auth-account.json';raw=path.read_bytes();path.write_text('{}')
+        with self.assertRaises(E.A.Error):E.requests(*self.args)
+        path.write_bytes(raw);path=self.directory/'read-after-billing-property.json';value=json.loads(path.read_text());value['billingProfileId']=PROFILE+'?foreign=1';path.write_text(json.dumps(value))
+        with self.assertRaises(E.A.Error):E.requests(*self.args,remaining=True)
+    def test_request_profile_identity_source_and_session_are_conserved(self):
+        self.prepare()
+        for path in [self.identity,self.input,self.profile/'config',self.directory/'session.json']:
+            raw=path.read_bytes();path.write_bytes(raw+b'\n')
+            with self.subTest(path=path.name),self.assertRaises(E.A.Error):E.verify(*self.args)
+            path.write_bytes(raw)
+        with mock.patch.object(E.A,'native_source_digest',return_value='0'*64),self.assertRaises(E.A.Error):E.verify(*self.args)
+        with mock.patch.object(E.P,'tool_digest',return_value=('0'*64,100)),self.assertRaises(E.A.Error):E.verify(*self.args)
+    def test_wrong_request_deadline_modes_duplicates_and_existing_operation_rejected(self):
+        raw=self.input.read_bytes()
+        for key,value in [('schema_version',True),('schema_version',1.0),('operation_name','../other'),('not_after_utc','2026-10-01T07:00:00Z'),('not_after_utc','2026-10-01T09:00:00Z'),
+                          ('shutdown_deadline_utc','2026-10-02T10:00:00Z'),('shutdown_deadline_utc','2026-10-01T10:00:01Z')]:
+            self.input.write_text(json.dumps({**self.request,key:value}))
+            with self.subTest(key=key),self.assertRaises(E.A.Error):E.prepare(self.input,NOW)
+        self.input.write_bytes(raw[:-2]+b',"schema_version":1}\n')
+        with self.assertRaises(E.A.Error):E.prepare(self.input,NOW)
+        self.input.write_bytes(raw);self.input.chmod(0o644)
+        with self.assertRaises(E.A.Error):E.prepare(self.input,NOW)
+        self.input.chmod(0o600);self.prepare()
+        with self.assertRaises(FileExistsError):E.prepare(self.input,NOW)
+    def test_unexpected_links_scratch_and_aggregate_are_rejected(self):
+        self.prepare();file=self.directory/'unexpected';file.write_text('PRIVATE_CANARY')
+        with self.assertRaises(E.A.Error):E.verify(*self.args)
+        file.unlink();file=self.directory/'auth-version.json';file.symlink_to(self.identity)
+        with self.assertRaises(E.A.Error):E.verify(*self.args)
+        file.unlink();(self.directory/'tmp/extra').write_text('PRIVATE_CANARY')
+        with self.assertRaises(E.A.Error):E.verify(*self.args)
+        (self.directory/'tmp/extra').unlink()
+        with mock.patch.object(E,'MAX_AGGREGATE',1),self.assertRaises(E.A.Error):E.verify(*self.args)
+    def test_partial_nonzero_missing_stale_and_mutated_phases_never_publish(self):
+        self.prepare();self.complete_files();file=self.directory/'phases.json';raw=file.read_bytes()
+        changes=[lambda p:p.pop(),lambda p:p[0].update(exitCode=1),lambda p:p[0].update(stderrBytes=-1),
+                 lambda p:p[0].update(startedAt='2026-10-01T09:00:00Z'),lambda p:p[0].update(stdoutSha256='0'*64),
+                 lambda p:p[4]['arguments'].append('--debug')]
+        for change in changes:
+            value=json.loads(raw);change(value);file.write_text(json.dumps(value))
+            with self.subTest(change=change),self.assertRaises(E.A.Error):E.finish(*self.args)
+            self.assertFalse((self.directory/'index.json').exists())
+        file.write_bytes(raw);path=self.directory/'read-credit-lots.json';path.write_text('{}')
+        with self.assertRaises(E.A.Error):E.finish(*self.args)
+        self.assertFalse((self.directory/'index.json').exists())
+    def test_family_publication_failure_and_uncertain_index_are_explicit(self):
+        self.prepare();self.complete_files();real=E.write_json
+        def reject(path,value):
+            if path.name=='providers.json':raise OSError('PRIVATE_CANARY')
+            return real(path,value)
+        with mock.patch.object(E,'write_json',side_effect=reject),self.assertRaises(OSError):E.finish(*self.args)
+        self.assertFalse((self.directory/'index.json').exists());self.assertTrue((self.directory/'credit.json').exists())
+        for kind in A.EVIDENCE_KINDS:(self.directory/(kind+'.json')).unlink(missing_ok=True)
+        real_publish=E.A.publish_result
+        def uncertain(path,value):real_publish(path,value);raise E.A.PublishedResultError('PRIVATE_CANARY')
+        with mock.patch.object(E.A,'publish_result',side_effect=uncertain),self.assertRaises(E.A.PublishedResultError):E.finish(*self.args)
+        self.assertTrue(json.loads((self.directory/'index.json').read_text())['completed'])
+    def test_sanitized_failure_and_pure_helper_no_spawning(self):
+        stream=io.StringIO()
+        with mock.patch.object(E,'prepare',side_effect=OSError('PRIVATE_CANARY')),contextlib.redirect_stderr(stream):self.assertEqual(E.main(['prepare',str(self.input)]),1)
+        self.assertNotIn('PRIVATE_CANARY',stream.getvalue());self.assertIn('partial or published',stream.getvalue())
+        import ast
+        for node in ast.walk(ast.parse((HERE/'collect-evidence.py').read_text())):
+            if isinstance(node,ast.Import):self.assertFalse({'subprocess','resource'}&{n.name for n in node.names})
+            if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):self.assertNotIn(node.func.attr,{'Popen','system','run_json','preflight','audit_binary_plan'})
+
+
 if __name__ == '__main__': unittest.main(verbosity=2)

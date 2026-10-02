@@ -26,7 +26,7 @@ export const PRLIMIT = Object.freeze({
   path: "/usr/bin/prlimit",
   sha256: "17064f67e650d6152a6902b013aab496b54c87587c8eea6f5023aafee6154069",
 });
-const PYTHON = Object.freeze({
+export const PYTHON = Object.freeze({
   path: "/usr/bin/python3.12",
   sha256: "e50d468e8b0adfb05733f5b87b3cff34829c4a8c1aea50c865aa8bdfe4bb150f",
 });

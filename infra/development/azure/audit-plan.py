@@ -80,6 +80,111 @@ def receipt_utc(value, label):
         value = value[:-6] + "Z"
     return utc(value, label)
 
+# Native receipts use the actual Linux launcher and exact fixed projections.
+# Historical Windows receipts retain their separate validation below.
+NATIVE_FORMAT = "nourishing.azure-native-evidence.v1"
+NATIVE_CLI_SHA256 = "732d82c05ee1b264d3f30221fd51bb234cb7a95d863c0b69526b0c95b60df021"
+NATIVE_SOURCES = ["infra/development/azure/" + n for n in (
+    ".terraform.lock.hcl", "versions.tf", "variables.tf", "main.tf", "outputs.tf",
+    "audit-plan.py", "auth-preflight.py", "collect-evidence.py")]
+NATIVE_SOURCES += ["infra/azure/tests/audit_saved_plan.py", "scripts/azure-development-evidence.mjs",
+                   "scripts/azure-development-plan.mjs", "scripts/postgres-operator-process.mjs"]
+NATIVE_READS = [
+    ("providers", "after-subscription-policy", "{base}", "2022-12-01",
+     "{id:id,subscriptionId:subscriptionId,displayName:displayName,state:state,subscriptionPolicies:subscriptionPolicies}"),
+    ("providers", "after-billing-property", "{base}/providers/Microsoft.Billing/billingProperty/default", "2024-04-01",
+     "{billingAccountId:properties.billingAccountId,billingProfileId:properties.billingProfileId,billingProfileSpendingLimit:properties.billingProfileSpendingLimit,billingProfileStatus:properties.billingProfileStatus,subscriptionBillingStatus:properties.subscriptionBillingStatus,subscriptionBillingType:properties.subscriptionBillingType}"),
+    ("credit", "credit-balance-summary", "{profile}/providers/Microsoft.Consumption/credits/balanceSummary", "2026-06-01",
+     "{balanceSummary:properties.balanceSummary,billingCurrency:properties.billingCurrency,creditCurrency:properties.creditCurrency,isEstimatedBalance:properties.isEstimatedBalance,pendingEligibleCharges:properties.pendingEligibleCharges,pendingCreditAdjustments:properties.pendingCreditAdjustments,expiredCredit:properties.expiredCredit}"),
+    ("credit", "credit-lots", "{profile}/providers/Microsoft.Consumption/lots", "2026-06-01",
+     "{credits:value[].{name:name,source:properties.source,status:properties.status,startDate:properties.startDate,expirationDate:properties.expirationDate,originalAmount:properties.originalAmount,closedBalance:properties.closedBalance,isEstimatedBalance:properties.isEstimatedBalance},hasNext:nextLink!=null}"),
+    ("compute", "after-compute-registration-once", "{base}/providers/Microsoft.Compute", "2021-04-01", "{namespace:namespace,registrationState:registrationState}"),
+    ("providers", "after-Microsoft.Network-once", "{base}/providers/Microsoft.Network", "2021-04-01", "{namespace:namespace,registrationState:registrationState}"),
+    ("providers", "after-Microsoft.DevTestLab-once", "{base}/providers/Microsoft.DevTestLab", "2021-04-01", "{namespace:namespace,registrationState:registrationState}"),
+    ("quota", "centralus-positive-and-arm-family-quotas", "{base}/providers/Microsoft.Compute/locations/centralus/usages", "2025-04-01",
+     "{totalEntries:length(value),hasNext:nextLink!=null,nextLink:nextLink,matches:value[?limit > `0` || contains(name.value, `psv`) || contains(name.value, `PSv`) || contains(name.value, `psV`)].{name:name.value,currentValue:currentValue,limit:limit,unit:unit}}"),
+    ("sku", "centralus-Standard_B4ps_v2-exact", "{base}/providers/Microsoft.Compute/skus", "2021-07-01&%24filter=location%20eq%20%27centralus%27",
+     "{matches:value[?resourceType==`virtualMachines` && name==`Standard_B4ps_v2`].{name:name,family:family,locations:locations,restrictions:restrictions,capabilities:capabilities[?name==`vCPUs` || name==`vCPUsAvailable` || name==`MemoryGB` || name==`CpuArchitectureType` || name==`HyperVGenerations` || name==`TrustedLaunchDisabled` || name==`PremiumIO` || name==`EncryptionAtHostSupported` || name==`AcceleratedNetworkingEnabled`]},hasNext:nextLink!=null,nextLink:nextLink}"),
+    ("image", "selected-exact-CentralUS-Canonical-Arm64-image", None, None,
+     "{id:id,name:name,location:location,architecture:architecture,hyperVGeneration:hyperVGeneration,features:features,plan:plan,imageDeprecationStatus:imageDeprecationStatus,osDiskImage:osDiskImage,automaticOSUpgradeProperties:automaticOSUpgradeProperties,disallowed:disallowed}"),
+]
+
+def native_source_digest():
+    source_digest()
+    entries = []
+    for name in NATIVE_SOURCES:
+        path = REPO / name
+        require(path.resolve(strict=True) == path, "native source symlink rejected")
+        for entry in [path, *path.parents[:-1]]:
+            info = entry.lstat()
+            require(info.st_uid in (0, os.getuid()) and not info.st_mode & 0o022, "unsafe native source")
+        require(path.is_file(), "regular native source required")
+        entries.append([name, sha(path.read_bytes()), stat.S_IMODE(path.stat().st_mode)])
+    return sha(json.dumps(entries, separators=(",", ":")).encode())
+
+def native_provenance():
+    return {"platform": "linux-x64", "executable": "/usr/bin/az", "executableSha256": NATIVE_CLI_SHA256,
+            "cliVersion": "2.90.0", "sourceSha256": native_source_digest()}
+
+def native_profile(value):
+    require(isinstance(value, str) and re.fullmatch(
+        r"/providers/Microsoft.Billing/billingAccounts/[A-Za-z0-9][A-Za-z0-9._:-]*/billingProfiles/[A-Za-z0-9][A-Za-z0-9._:-]*", value),
+        "unsafe native billing profile")
+    return value
+
+def native_arguments(label, subscription, profile=None):
+    require(isinstance(subscription, str) and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", subscription),
+            "canonical native subscription required")
+    rows = [v for v in NATIVE_READS if v[1] == label]
+    require(len(rows) == 1, "unknown native read")
+    _, _, path, version, query = rows[0]
+    if path is None:
+        args = ["vm", "image", "show", "--location", LOCATION, "--urn", IMAGE]
+    else:
+        if "{profile}" in path: native_profile(profile)
+        endpoint = path.format(base="/subscriptions/" + subscription, profile=profile)
+        args = ["rest", "--method", "get", "--url", "https://management.azure.com" + endpoint + "?api-version=" + version]
+    return args + ["--subscription", subscription, "--query", query, "--only-show-errors", "--output", "json"]
+
+def native_record(item, now):
+    require(set(item) == {"format", "label", "arguments", "startedAt", "endedAt", "completed", "timedOut", "exitCode",
+                         "stdoutSha256", "stdoutBytes", "stderrSha256", "stderrBytes", "stdout", "selected"},
+            "exact native read receipt required")
+    require(item["format"] == NATIVE_FORMAT and item["completed"] is True and item["timedOut"] is False,
+            "incomplete native read")
+    require(isinstance(item["stdout"], str), "original native stdout required")
+    raw = item["stdout"].encode("utf-8")
+    require(type(item["stdoutBytes"]) is int and 0 < item["stdoutBytes"] == len(raw) <= 131072
+            and sha(raw) == item["stdoutSha256"]
+            and json.dumps(strict_json(raw), sort_keys=True, separators=(",", ":"), allow_nan=False)
+            == json.dumps(item["selected"], sort_keys=True, separators=(",", ":"), allow_nan=False),
+            "native response binding differs")
+    require(type(item["stderrBytes"]) is int and 0 <= item["stderrBytes"] <= 65536, "native diagnostic bound differs")
+    if item["stderrBytes"] == 0:
+        require(item["stderrSha256"] == sha(b""), "empty native diagnostic digest differs")
+
+def native_documents(documents, subscription, now):
+    formats = {doc.get("format") for doc in documents.values()}
+    if formats == {None}:
+        require(all(doc.get("schemaVersion", 1) == 1 for doc in documents.values()), "unknown evidence schema")
+        return
+    require(formats == {NATIVE_FORMAT}, "mixed or unknown evidence formats")
+    provenance = native_provenance()
+    for kind, doc in documents.items():
+        require(set(doc) == {"format", "schemaVersion", "readOnly", "mutationAttempted", "provenance", "commands"}
+                and type(doc["schemaVersion"]) is int and doc["schemaVersion"] == 2 and doc["readOnly"] is True and doc["mutationAttempted"] is False
+                and doc["provenance"] == provenance, "native evidence provenance differs")
+        expected = [row[1] for row in NATIVE_READS if row[0] == kind]
+        require([v.get("label") for v in doc["commands"]] == expected, "native family coverage differs")
+    billing = record(documents["providers"], "after-billing-property", now)["selected"]
+    profile = native_profile(billing.get("billingProfileId"))
+    for doc in documents.values():
+        for item in doc["commands"]:
+            record(doc, item["label"], now)
+            require(item["arguments"] == native_arguments(item["label"], subscription, profile),
+                    "native command or projection differs")
+
+
 def record(doc, label, now):
     entries = doc.get("records", doc.get("commands"))
     item = unique(entries, "label", "receipt records").get(label)
@@ -94,10 +199,17 @@ def record(doc, label, now):
     for key in ("stdoutSha256", "stderrSha256"):
         require(isinstance(item.get(key), str) and re.fullmatch(r"[0-9a-f]{64}", item[key]), "missing original output digest")
     require(isinstance(item.get("selected"), (dict, list)), "missing selected ARM response")
+    if doc.get("format") == NATIVE_FORMAT:
+        native_record(item, now)
+    else:
+        require("format" not in item, "native receipt requires native document")
     return item
 
 def rest(item, subscription, path):
     args = item.get("arguments")
+    if item.get("format") == NATIVE_FORMAT:
+        require(args[:3] == ["rest", "--method", "get"] and urlsplit(args[4]).path == path, "native GET endpoint differs")
+        return item["selected"]
     require(isinstance(args, list) and args[:5] == ["-IBm", "azure.cli", "rest", "--method", "get"], "receipt is not an Azure CLI GET")
     require(all(isinstance(x, str) for x in args) and len(args) == len(set(args)), "ambiguous receipt arguments")
     def arg(flag):
@@ -113,6 +225,7 @@ def rest(item, subscription, path):
 def evidence_values(documents, hashes, subscription, deadline, now):
     require(set(documents) == EVIDENCE_KINDS and set(hashes) == EVIDENCE_KINDS, "six original evidence families are required")
     require(all(isinstance(v, str) and re.fullmatch(r"[0-9a-f]{64}", v) for v in hashes.values()), "invalid evidence digest")
+    native_documents(documents, subscription, now)
     used = []
     def read(kind, label, path):
         item = record(documents[kind], label, now); used.append(receipt_utc(item["startedAt"], "read start"))
@@ -172,8 +285,11 @@ def evidence_values(documents, hashes, subscription, deadline, now):
     image = record(documents["image"], "selected-exact-CentralUS-Canonical-Arm64-image", now)
     used.append(receipt_utc(image["startedAt"], "image read start"))
     args = image.get("arguments", [])
-    require(args[:3] == ["vm", "image", "show"] and args[3:7] == ["--location", LOCATION, "--urn", IMAGE]
-            and len(args) == 9 and args[7] == "--query", "image read command mismatch")
+    if image.get("format") == NATIVE_FORMAT:
+        require(args == native_arguments(image["label"], subscription), "native image command differs")
+    else:
+        require(args[:3] == ["vm", "image", "show"] and args[3:7] == ["--location", LOCATION, "--urn", IMAGE]
+                and len(args) == 9 and args[7] == "--query", "image read command mismatch")
     image = image["selected"]
     require(image.get("name") == IMAGE.split(":")[-1] and image.get("location") == LOCATION
             and image.get("architecture") == "Arm64" and image.get("hyperVGeneration") == "V2"

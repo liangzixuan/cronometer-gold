@@ -37,6 +37,8 @@ jobs:
           python3 infra/azure/files/tests/static-contracts.py
 
       - name: Validate the separate Azure development empty-host contract
+        env:
+          TF_DATA_DIR: ${{ runner.temp }}/nourishing-development-terraform-${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           terraform -chdir=infra/development/azure init -backend=false -lockfile=readonly -input=false
           terraform -chdir=infra/development/azure fmt -check

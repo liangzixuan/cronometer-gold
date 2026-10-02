@@ -49,7 +49,7 @@ async function identity(pid) {
       start: fields[19],
     };
   } catch (error) {
-    if (error.code === "ENOENT") return undefined;
+    if (error.code === "ENOENT" || error.code === "ESRCH") return undefined;
     throw error;
   }
 }

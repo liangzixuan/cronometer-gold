@@ -172,6 +172,8 @@ export async function runTool(
   let control = Promise.resolve();
   const startedStreams = [];
   const hash = createHash("sha256");
+  const stderrHash = createHash("sha256");
+  let stderrBytes = 0;
   const chunks = [];
   const destination = outputPath
     ? createWriteStream(outputPath, { flags: "wx", mode: 0o600 })
@@ -339,10 +341,10 @@ export async function runTool(
     );
     startedStreams.push(
       (async () => {
-        let count = 0;
         for await (const chunk of child.stderr) {
-          count += chunk.byteLength;
-          if (count > STDERR_BYTES) throw failure("diagnostic limit");
+          stderrBytes += chunk.byteLength;
+          if (stderrBytes > STDERR_BYTES) throw failure("diagnostic limit");
+          stderrHash.update(chunk);
         }
       })().catch(() => {
         failed = true;
@@ -365,6 +367,8 @@ export async function runTool(
     output = {
       bytes: outputBytes,
       sha256: hash.digest("hex"),
+      stderrBytes,
+      stderrSha256: stderrHash.digest("hex"),
       text: outputPath ? undefined : Buffer.concat(chunks).toString("utf8"),
     };
   } catch {

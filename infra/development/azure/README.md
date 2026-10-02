@@ -80,6 +80,62 @@ On success, `plan.tfplan`, `phases.json` and the create-only mode0600 `result.js
 
 Tests cover the pure input/auditor/publication stages and a full injected sequence with synthetic Azure/Terraform responses. Separate actual native fixtures qualify the limiter, output/file limits, descriptor conservation, timeout, resistant descendants and parent loss. They do not execute an Azure plan, authenticate a real provider session or qualify allocation, shutdown, deployment or release.
 
+## Native six-family evidence collection
+
+`scripts/azure-development-evidence.mjs` collects the ten fixed read responses used by
+the existing development plan policy. It uses native Azure CLI 2.90.0 through the
+pinned limiter and owned process supervisor. The four authentication reads must
+pass before collection. Billing-profile discovery is a fixed subscription GET;
+credit reads use only its validated identifier. The command neither registers a
+provider nor follows a missing-capacity, pagination or alternate-endpoint fallback.
+
+```sh
+node scripts/azure-development-evidence.mjs --source-digest
+node scripts/azure-development-evidence.mjs --input /absolute/private/evidence-request.json
+```
+
+The protected mode0600 request, inside an owned mode0700 directory, has exactly:
+`schema_version: 1`, reviewed `source_sha256`, `identity_file`, `profile_directory`,
+`operation_name` (`nourishing-evidence-` plus twelve lowercase hexadecimal digits),
+`not_after_utc` and `shutdown_deadline_utc`. Identity and profile follow the native
+authentication preflight's existing protections. No administrator IP or SSH key is
+needed for collection. The invocation horizon must leave ten minutes for work and
+thirty seconds for cleanup and be no more than fifteen minutes away. Shutdown must
+be a whole UTC minute on the same day, one to four hours away throughout collection.
+These timestamps qualify evidence for later policy checks; collection schedules
+no shutdown and allocates nothing.
+
+The command creates a new private operation directory and retains raw projected
+responses, phase records, source/input bindings and six family files. The complete
+`index.json` is published create-only after all original allowance, freshness,
+identity, protection, quota, SKU and image rules pass. Its `evidence_sha256` binds
+the six files for the plan request's existing `evidence_paths`. Files alone do not
+prove command success. Failed operations retain bounded private partial material;
+an error after index publication leaves its durability or caller verification
+unconfirmed. Inspect and preserve that evidence before another operation.
+
+Native family files use `nourishing.azure-native-evidence.v1` / schemaVersion2,
+with actual `/usr/bin/az` argv, pinned launcher/version/source, original UTC bounds,
+raw stdout bytes tied to parsed selected values, and observed stderr byte counts
+and hashes. Stderr text is never returned or published. The auditor accepts this
+explicit format separately from the historical Windows records; it does not
+relabel old evidence. These are unsigned local observations, not provider
+attestations or permission to apply a plan.
+
+Each native command is bounded to sixty seconds within the shared ten-minute work
+budget. Response size is 128 KiB, stderr 64 KiB. An allowlisted operation inventory
+checks a 4 MiB aggregate bound after each command; this is not a continuous aggregate
+disk quota. The inherited 512 MiB per-file limiter is a separate protection. Existing
+supervisor ownership and parent-loss behavior remain unchanged. If the OS refuses
+final process-group termination, success is suppressed and finite recovery is not
+established. No new cleanup or provider policy is inferred from the metadata fields.
+
+Tests run the real pure helper and owned synthetic children with injected Azure
+responses, plus exact native/legacy policy regressions and real stderr observations.
+They establish local source behavior only. Actual native collection, a saved Azure
+plan, resource ownership, shutdown/disposal and hosted runtime remain separately
+qualified invocations.
+
 ## Saved-plan audit boundary
 
 `audit-plan.py` accepts only a protected binary `.tfplan`, rendered internally through the qualified Linux AMD64 Terraform executable. It reuses the existing beta auditor's protected file and descriptor helpers without changing beta policy. Supply the independently reviewed source digest and binary-plan SHA256. The source digest covers the executable policy, Terraform files, provider lock and reused helper; printing a digest does not approve those bytes.
@@ -104,7 +160,7 @@ Plan/evidence files require exact mode0600 inside an owned mode0700 directory. T
 
 The result must be new and private. It is fully written and file-synced before atomic create-only publication. A post-publication directory-sync or temporary-cleanup failure reports that a complete result exists and durability/cleanup remains unconfirmed; it never claims no output. No plan values, SSH key or account response values are printed. The result contains only hashes and a local policy scope; it is not a signature, deployment attestation or permission to apply.
 
-The six inputs retain the existing Azure collector formats: host assessment `records` for credit lots/balance; development provider `commands` for subscription/billing/Network/DevTestLab; Compute registration `commands`; exact quota and B4ps SKU `commands`; exact image `commands`. The auditor binds command identity, completion, timestamps and original receipt bytes. It consumes the selected Azure response fields and retained stdout/stderr digests; receipts that omit raw stdout do not acquire raw-byte verification through this check. Inputs are locally collected and unsigned.
+Historical six-family inputs retain their original Azure collector formats: host assessment `records` for credit lots/balance; development provider `commands` for subscription/billing/Network/DevTestLab; Compute registration `commands`; exact quota and B4ps SKU `commands`; exact image `commands`. The auditor binds command identity, completion, timestamps and original receipt bytes. It consumes the selected Azure response fields and retained stdout/stderr digests; receipts that omit raw stdout do not acquire raw-byte verification through this check. Inputs are locally collected and unsigned.
 
 `live_preflight` is the exact derived subset: earliest selected read start, subscription, both spending limits, USD balance/expiry, regional/family remaining cores and all six original report hashes. Every selected read must be at most four hours old. The plan must be at most fifteen minutes old. The command recomputes these facts from original receipts and rejects mismatches. The same-day shutdown deadline must align to a UTC minute and remain one to four hours away, both when planned and when audited. Terraform preconditions recheck time and credit inputs at apply, but cannot recollect account facts; a future session executor must do that separately.
 

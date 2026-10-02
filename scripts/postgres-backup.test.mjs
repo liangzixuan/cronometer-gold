@@ -791,3 +791,39 @@ for (const mode of [
     }
   });
 }
+
+for (const diagnostic of ["", "PRIVATE_DIAGNOSTIC_µ\nsecond chunk\n"]) {
+  test("successful native result binds observed stderr " +
+    (diagnostic ? "bytes" : "empty stream"), { timeout: 10_000 }, async () => {
+    const fixture = await setup();
+    state.real = true;
+    try {
+      const nodeTool = await copyNodeTool(fixture.local);
+      const result = await testedRunTool(
+        nodeTool,
+        ["-e", `process.stdout.write('ok');process.stderr.write(${JSON.stringify(diagnostic)});`],
+        {
+          signal: AbortSignal.timeout(7000),
+          env: { PATH: "/usr/bin:/bin", LANG: "C" },
+          directory: fixture.temporary,
+          limit: 1024,
+        },
+      );
+      assert.equal(result.text, "ok");
+      assert.equal(result.stderrBytes, Buffer.byteLength(diagnostic));
+      assert.equal(result.stderrSha256, hash(diagnostic));
+      assert.deepEqual(Object.keys(result).sort(), [
+        "bytes",
+        "sha256",
+        "stderrBytes",
+        "stderrSha256",
+        "text",
+      ]);
+      assert.ok(!JSON.stringify(result).includes("PRIVATE_DIAGNOSTIC"));
+      assert.ok(state.children.every((child) => child.closed));
+    } finally {
+      state.real = false;
+      await fixture.dispose();
+    }
+  });
+}
