@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Synthetic contract tests; no Azure credentials, requests, plans or resources."""
 import copy
+import configparser
+import contextlib
 import ctypes
+import io
 import itertools
 import signal
 import subprocess
@@ -23,6 +26,7 @@ def load(name, path):
     module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
 A = load("development_auditor", HERE / "audit-plan.py")
 B = load("independent_beta_fixture", REPO / "infra/azure/tests/test_audit_saved_plan.py")
+P = load("development_auth_preflight", HERE / "auth-preflight.py")
 NOW = datetime(2026, 10, 1, 8, 0, tzinfo=timezone.utc)
 SUB = "11111111-2222-3333-4444-555555555555"
 PREFIX = "nourishing-dev-0123456789ab"
@@ -307,5 +311,208 @@ class Contract(unittest.TestCase):
             for name,(_,mode) in A.PROVIDER_FILES.items():
                 (root/name).write_bytes(b'synthetic wrong package');(root/name).chmod(mode)
             with self.assertRaisesRegex(A.Error,'qualified provider package digest changed'):A.provider_digest(root,private)
+
+class Authentication(unittest.TestCase):
+    def setUp(self):
+        # Canonical user-owned ancestors match the production path checks; no live profile is read.
+        self.temporary = tempfile.TemporaryDirectory(prefix='nourishing-auth-test-', dir=Path.home())
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.profile = self.root / 'profile'; self.profile.mkdir(mode=0o700)
+        self.expected = {'subscriptionId': SUB, 'tenantId': 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'}
+        self.input = self.root / 'expected.json'; self.input.write_text(json.dumps(self.expected)); self.input.chmod(0o600)
+        self.config = self.profile / 'config'
+        settings = configparser.ConfigParser(); settings.read_dict(P.SETTINGS)
+        with self.config.open('w') as output: settings.write(output)
+        self.config.chmod(0o600)
+        self.clouds = self.profile / 'clouds.config'
+        self.clouds.write_text('[AzureCloud]\nsubscription = '+SUB+'\n'); self.clouds.chmod(0o644)
+        self.version = {'azure-cli': P.CLI_VERSION, 'azure-cli-core': P.CLI_VERSION, 'azure-cli-telemetry': '1.1.0', 'extensions': {}}
+        self.account = {'id':SUB, 'tenantId':self.expected['tenantId'], 'state':'Enabled', 'environmentName':'AzureCloud'}
+        self.subscription = {**self.expected, 'state':'Enabled', 'subscriptionPolicies':{'quotaId':'AzureForStudents_2018-01-01','spendingLimit':'On','locationPlacementId':'Public_2014-09-01'}}
+        self.values = [self.version, [], self.account, self.subscription]
+        self.cli = self.root / 'az'
+        self.write_cli("import json,sys\nvalues="+repr(self.values)+"\nindex={'version':0,'extension':1,'account':2,'rest':3}[sys.argv[1]]\nprint(json.dumps(values[index]))\n")
+        self.patch = mock.patch.object(P, 'CLI_SHA256', A.sha(self.cli.read_bytes())); self.patch.start(); self.addCleanup(self.patch.stop)
+        self.source = P.source_digest()
+        self.result = self.root / 'result.json'
+    def write_cli(self, body):
+        self.cli.write_text('#!/usr/bin/python3\n'+body); self.cli.chmod(0o755)
+    def args(self):
+        return ['--cli',str(self.cli),'--profile',str(self.profile),'--expected-identity',str(self.input),
+                '--source-sha256',self.source,'--result',str(self.result)]
+    def check(self, **kwargs):
+        return P.preflight(self.cli,self.profile,self.input,self.source,**kwargs)
+    def test_actual_cli_and_private_create_only_result(self):
+        captured = io.StringIO()
+        with contextlib.redirect_stdout(captured): self.assertEqual(P.main(self.args()),0)
+        result = json.loads(self.result.read_text())
+        self.assertEqual(result['authentication'],'passed'); self.assertEqual(self.result.stat().st_mode & 0o777,0o600)
+        self.assertEqual(set(result['parsed_response_sha256']), {'version','extensions','account','subscription'})
+        for value in self.expected.values(): self.assertNotIn(value,captured.getvalue()+self.result.read_text())
+        original = self.result.read_bytes()
+        with contextlib.redirect_stdout(captured): self.assertEqual(P.main(self.args()),1)
+        self.assertEqual(self.result.read_bytes(),original)
+    def test_exact_commands_environment_and_response_hashes(self):
+        # A different valid cached default must not replace either explicit subscription selection.
+        self.clouds.write_text('[AzureCloud]\nsubscription = '+self.expected['tenantId']+'\n')
+        commands=[]; environments=[]
+        def runner(command,cwd,env,timeout):
+            self.assertEqual(timeout,60); self.assertEqual(str(cwd),env['HOME']); self.assertEqual(env['TMPDIR'],env['HOME'])
+            self.assertEqual(set(env),{'HOME','TMPDIR','PATH','LANG','AZURE_CONFIG_DIR','AZURE_CORE_COLLECT_TELEMETRY','AZURE_EXTENSION_USE_DYNAMIC_INSTALL','AZURE_LOGGING_ENABLE_LOG_FILE'})
+            commands.append(command); environments.append(env)
+            return self.values[len(commands)-1]
+        with mock.patch.dict(os.environ,{'ARM_CLIENT_SECRET':'PRIVATE_CANARY','AZURE_CLIENT_SECRET':'PRIVATE_CANARY','PYTHONPATH':'PRIVATE_CANARY','HTTPS_PROXY':'PRIVATE_CANARY'}):
+            result=self.check(runner=runner)
+        suffix=['--only-show-errors','--output','json']
+        self.assertEqual(commands[0],[str(self.cli),'version',*suffix])
+        self.assertEqual(commands[1],[str(self.cli),'extension','list',*suffix])
+        self.assertEqual(commands[2],[str(self.cli),'account','show','--subscription',SUB,'--query',P.ACCOUNT_QUERY,*suffix])
+        self.assertEqual(commands[3],[str(self.cli),'rest','--method','get','--url','https://management.azure.com/subscriptions/'+SUB+'?api-version=2022-12-01','--subscription',SUB,'--query',P.SUBSCRIPTION_QUERY,*suffix])
+        self.assertNotIn('PRIVATE_CANARY',repr(environments)+json.dumps(result))
+        self.assertFalse(Path(environments[0]['HOME']).exists())
+        self.assertEqual(result['parsed_response_sha256']['subscription'],A.sha(json.dumps(self.subscription,sort_keys=True,separators=(',',':')).encode()))
+    def test_expected_identity_rejects_ambiguous_and_noncanonical_fields(self):
+        variants = ['{}','[]',json.dumps({**self.expected,'extra':'PRIVATE_CANARY'}),'{"subscriptionId":"x","subscriptionId":"y","tenantId":"z"}',
+                    json.dumps({**self.expected,'tenantId':None}),json.dumps({**self.expected,'tenantId':self.expected['tenantId'].upper()}),
+                    json.dumps({**self.expected,'subscriptionId':'https://attacker.invalid/'})]
+        for raw in variants:
+            with self.subTest(raw=raw):
+                self.input.write_text(raw)
+                with self.assertRaises(P.Error): self.check(runner=mock.Mock(side_effect=AssertionError('must not execute')))
+    def test_input_and_tool_path_protection(self):
+        self.input.chmod(0o644)
+        with self.assertRaises(P.Error): self.check()
+        self.input.chmod(0o600)
+        link=self.root/'linked.json';link.symlink_to(self.input)
+        with self.assertRaises(P.Error): P.identity(link)
+        hard=self.root/'hard.json';os.link(self.input,hard)
+        with self.assertRaises(P.Error): self.check()
+        hard.unlink(); self.cli.chmod(0o777)
+        with self.assertRaises(P.Error): self.check()
+        self.cli.chmod(0o755); self.cli.write_text('unqualified bytes')
+        with self.assertRaises(P.Error): self.check()
+    def test_exact_config_and_cloud_policy(self):
+        original=self.config.read_text(); clouds=self.clouds.read_text()
+        for extra in ['\n[core]\ncollect_telemetry=yes\n','\n[DEFAULT]\nclient_secret=PRIVATE_CANARY\n','\n[identity]\nauthority=PRIVATE_CANARY\n',
+                      '\n[extension]\nuse_dynamic_install=yes\n']:
+            self.config.write_text(original+extra)
+            with self.subTest(extra=extra),self.assertRaises((P.Error,configparser.Error)): self.check()
+        self.config.write_text(original)
+        for value in [clouds+'endpoint_resource_manager = https://attacker.invalid/\n',clouds+'\n[PrivateCloud]\nsubscription = '+SUB+'\n',
+                      clouds.replace(SUB,'not-a-uuid'),clouds.replace(SUB,self.expected['tenantId'].upper()),
+                      clouds+'subscription = '+SUB+'\n',clouds+'\n[DEFAULT]\nprofile=latest\n']:
+            self.clouds.write_text(value)
+            with self.assertRaises((P.Error,configparser.Error)): self.check()
+        self.clouds.write_text(clouds); self.clouds.chmod(0o600)
+        self.assertEqual(set(P.profile_digest(self.profile)),{'config','clouds.config'})
+    def test_profile_file_and_directory_protection(self):
+        for path,mode in [(self.profile,0o755),(self.config,0o644),(self.clouds,0o666)]:
+            saved=path.stat().st_mode & 0o777;path.chmod(mode)
+            with self.subTest(path=path),self.assertRaises(P.Error):self.check()
+            path.chmod(saved)
+        saved=self.clouds.read_bytes();self.clouds.unlink();self.clouds.symlink_to(self.input)
+        with self.assertRaises(P.Error):self.check()
+        self.clouds.unlink();self.clouds.write_bytes(saved);self.clouds.chmod(0o644)
+        link=self.root/'profile-link';link.symlink_to(self.profile)
+        with self.assertRaises(P.Error):P.profile_digest(link)
+    def test_rejects_version_extensions_cached_and_live_identity(self):
+        mutations=[(0,'azure-cli','0'),(0,'azure-cli-core','0'),(0,'extensions',{'unexpected':'1'}),
+                   (2,'environmentName','PrivateCloud'),(2,'tenantId',SUB),(2,'state','Disabled'),(2,'id',self.expected['tenantId']),
+                   (3,'subscriptionId',self.expected['tenantId']),(3,'tenantId',SUB),(3,'state','Disabled'),
+                   (3,'subscriptionPolicies',{'quotaId':'PayAsYouGo','spendingLimit':'Off'})]
+        for index,key,value in mutations:
+            values=copy.deepcopy(self.values);values[index][key]=value
+            runner=mock.Mock(side_effect=values)
+            with self.subTest(index=index,key=key),self.assertRaises(P.Error):self.check(runner=runner)
+            self.assertEqual(runner.call_count,index+1)
+        for index in range(4):
+            values=copy.deepcopy(self.values);values[index]=None
+            with self.subTest(index=index),self.assertRaises(P.Error):self.check(runner=mock.Mock(side_effect=values))
+        values=copy.deepcopy(self.values);values[1]=[{'name':'alias'}]
+        with self.assertRaises(P.Error):self.check(runner=mock.Mock(side_effect=values))
+    def test_source_and_input_changes_abort_before_next_command(self):
+        original={p:p.read_bytes() for p in (self.cli,self.input,self.config,self.clouds)}
+        for path in original:
+            def changed(command,cwd,env,timeout):
+                path.write_bytes(original[path]+b'\n');return self.version
+            with self.subTest(path=path),self.assertRaises(P.Error):self.check(runner=changed)
+            path.write_bytes(original[path])
+        with mock.patch.object(P,'source_digest',side_effect=[self.source,'changed']),self.assertRaises(P.Error):self.check()
+    def test_actual_nonzero_malformed_stderr_and_timeout_have_no_result(self):
+        for body in ["print('PRIVATE_CANARY');raise SystemExit(9)","print('PRIVATE_CANARY')","import sys;print('{}');print('PRIVATE_CANARY',file=sys.stderr)","import time;time.sleep(3)"]:
+            self.write_cli(body)
+            with mock.patch.object(P,'CLI_SHA256',A.sha(self.cli.read_bytes())):
+                def bounded(command,cwd,env,timeout):return P.A.run_json(command,cwd,env,timeout=0.1)
+                with self.assertRaises(P.Error):self.check(runner=bounded)
+            self.assertFalse(self.result.exists())
+    def test_signal_handlers_restore_and_repeat_signals_are_ignored_during_cleanup(self):
+        before={s:signal.getsignal(s) for s in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+        with self.assertRaises(InterruptedError):
+            with P.signal_scope():
+                try:os.kill(os.getpid(),signal.SIGTERM)
+                finally:
+                    for number in before:self.assertEqual(signal.getsignal(number),signal.SIG_IGN)
+                    os.kill(os.getpid(),signal.SIGINT)
+        self.assertEqual({s:signal.getsignal(s) for s in before},before)
+    def test_actual_int_term_hup_settle_owned_cli(self):
+        for number in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):
+            ready=self.root/('ready-'+str(number)+'.json')
+            self.write_cli("import os,json,time\nopen("+repr(str(ready))+",'w').write(json.dumps({'pid':os.getpid(),'group':os.getpgrp()}))\ntime.sleep(30)\n")
+            probe="import importlib.util;from pathlib import Path;s=importlib.util.spec_from_file_location('probe',"+repr(str(HERE/'auth-preflight.py'))+");p=importlib.util.module_from_spec(s);s.loader.exec_module(p);p.CLI_SHA256="+repr(A.sha(self.cli.read_bytes()))+";raise SystemExit(p.main("+repr(self.args())+"))"
+            child=subprocess.Popen([sys.executable,'-B','-I','-c',probe],stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+            state=None
+            try:
+                deadline=time.monotonic()+5
+                while state is None and child.poll() is None and time.monotonic()<deadline:
+                    if ready.exists():
+                        try:state=json.loads(ready.read_text())
+                        except json.JSONDecodeError:pass
+                    if state is None:time.sleep(0.02)
+                self.assertIsNotNone(state,'owned CLI never completed signal fixture handshake')
+                self.assertEqual(set(state),{'pid','group'});self.assertEqual(type(state['pid']),int)
+                self.assertEqual(state['pid'],state['group']);self.assertGreater(state['pid'],1)
+                os.kill(child.pid,number);out,err=child.communicate(timeout=8)
+                self.assertEqual(child.returncode,1);self.assertEqual(err,b'');self.assertIn(b'preflight did not complete',out)
+                with self.assertRaises(ProcessLookupError):os.kill(state['pid'],0)
+                with self.assertRaises(ProcessLookupError):os.killpg(state['group'],0)
+                self.assertFalse(self.result.exists())
+            finally:
+                if child.poll() is None:os.killpg(child.pid,signal.SIGKILL)
+                child.communicate(timeout=5)
+                if state:
+                    try:
+                        if os.getpgid(state['pid'])==state['group']:os.killpg(state['group'],signal.SIGKILL)
+                    except ProcessLookupError:pass
+    def test_console_rejection_never_prints_private_exceptions(self):
+        for error in [P.Error('PRIVATE_CANARY'),OSError('PRIVATE_CANARY'),ValueError('PRIVATE_CANARY'),InterruptedError('PRIVATE_CANARY'),subprocess.SubprocessError('PRIVATE_CANARY')]:
+            captured=io.StringIO()
+            with mock.patch.object(P,'preflight',side_effect=error),contextlib.redirect_stdout(captured):self.assertEqual(P.main(self.args()),1)
+            self.assertNotIn('PRIVATE_CANARY',captured.getvalue());self.assertFalse(self.result.exists())
+    def test_interruption_after_publication_does_not_claim_no_output(self):
+        publish=P.A.publish_result;captured=io.StringIO()
+        def interrupted(path,result):
+            publish(path,result)
+            raise InterruptedError('PRIVATE_CANARY')
+        with mock.patch.object(P,'preflight',return_value={'scope':'synthetic'}),mock.patch.object(P.A,'publish_result',side_effect=interrupted),contextlib.redirect_stdout(captured):
+            self.assertEqual(P.main(self.args()),1)
+        self.assertEqual(json.loads(self.result.read_text()),{'scope':'synthetic'})
+        self.assertIn('inspect the requested result path',captured.getvalue())
+        self.assertNotIn('no new result',captured.getvalue());self.assertNotIn('PRIVATE_CANARY',captured.getvalue())
+    def test_publication_failures_distinguish_complete_output(self):
+        captured=io.StringIO()
+        with mock.patch.object(P,'preflight',return_value={'scope':'synthetic'}),mock.patch.object(P.A.os,'fsync',side_effect=OSError('PRIVATE_CANARY')),contextlib.redirect_stdout(captured):
+            self.assertEqual(P.main(self.args()),1)
+        self.assertFalse(self.result.exists());self.assertNotIn('PRIVATE_CANARY',captured.getvalue())
+        real_fsync=os.fsync;calls=0
+        def fail_directory(fd):
+            nonlocal calls
+            calls+=1
+            if calls==2:raise OSError('PRIVATE_CANARY')
+            return real_fsync(fd)
+        with mock.patch.object(P,'preflight',return_value={'scope':'synthetic'}),mock.patch.object(P.A.os,'fsync',side_effect=fail_directory),contextlib.redirect_stdout(captured):
+            self.assertEqual(P.main(self.args()),2)
+        self.assertEqual(json.loads(self.result.read_text()),{'scope':'synthetic'})
+        self.assertIn('Complete authentication result was published',captured.getvalue());self.assertNotIn('PRIVATE_CANARY',captured.getvalue())
 
 if __name__ == '__main__': unittest.main(verbosity=2)
