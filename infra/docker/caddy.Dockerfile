@@ -27,8 +27,8 @@ ADD --checksum=sha256:a593bd7077c76102ca76d19287a5e247d4e359dd67eddbc933f865afd3
 # conventional container contract without inheriting an OS package database.
 ADD --checksum=sha256:81a2c508dcdb3295196e6a8987274e3bc3487f99ad8d18e985f20bb2c336b5e6 \
     https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/ca-certificates-bundle-20260909-r0.apk /tmp/ca-certificates-bundle.apk
-ADD --checksum=sha256:677588e6b5d81ca4d697777609f38f969e743a812c68d196c7a0f0b1367aabc3 \
-    https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/tzdata-2026c-r0.apk /tmp/tzdata.apk
+ADD --checksum=sha256:361f751cc2100ff7c979372e9ac0a93bd932ac58580bb723df2ecbea36b96baf \
+    https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/tzdata-2026d-r0.apk /tmp/tzdata.apk
 
 RUN --mount=type=cache,id=nutrition-caddy-go-mod-v1,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,id=nutrition-caddy-go-build-v1,target=/root/.cache/go-build,sharing=locked \
