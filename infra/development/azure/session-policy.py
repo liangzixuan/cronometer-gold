@@ -264,6 +264,9 @@ def live_graph(doc,values):
     require(len(actual)==len(set(actual)) and set(actual)==expected, "foreign or missing group resource")
     require(doc['extensions'].get('value')==[] and doc['extensions'].get('nextLink') in (None,''), "unexpected VM extension")
     vm=doc['vm']['properties']; require(vm.get('hardwareProfile',{}).get('vmSize')==A.SKU, "VM size changed")
+    require(vm.get('platformFaultDomain') is None and vm.get('virtualMachineScaleSet') is None, "live VM fault domain or scale set differs")
+    budget=vm.get('extensionsTimeBudget')
+    require(budget is None or type(budget) is str and budget=='PT1H30M', "live VM extensions time budget differs")
     events=vm.get('scheduledEventsProfile')
     require(events is None or isinstance(events,dict) and set(events)<={'terminateNotificationProfile'}, "unreviewed scheduled events profile")
     termination=events.get('terminateNotificationProfile') if events is not None else None
@@ -292,6 +295,8 @@ def live_graph(doc,values):
         require(neutral(ip.get(key)), "foreign NIC relationship")
     require([x.get('id','').lower() for x in subnet.get('ipConfigurations',[])]==[configs[0]['id'].lower()], "foreign subnet attachment")
     arm_id(doc['pip']['properties'].get('ipConfiguration',{}).get('id'),configs[0]['id'])
+    idle=doc['pip']['properties'].get('idleTimeoutInMinutes')
+    require(type(idle) is int and idle==4, "live public IP idle timeout must be integer 4")
     require(doc['pip'].get('sku',{}).get('name')=='Standard' and doc['pip']['properties'].get('publicIPAllocationMethod')=='Static'
             and doc['pip']['properties'].get('publicIPAddressVersion')=='IPv4', "public IP differs")
     nsg=doc['nsg']['properties'];require(neutral(nsg.get('networkInterfaces')) and [x.get('id','').lower() for x in nsg.get('subnets',[])]==[owned['subnet'].lower()], "foreign NSG attachment")
@@ -327,6 +332,7 @@ def state_graph(document, values):
                 and item.get('type')==address.split('.')[0] and item.get('name')==address.split('.')[1], "state provider/address differs")
         actual=item.get('values');require(isinstance(actual,dict) and isinstance(actual.get('id'),str), "state values missing")
         if address in labels: arm_id(actual['id'],owned[labels[address]])
+        A.known_provider_defaults(address,actual)
         if address=='azurerm_linux_virtual_machine.development': A.termination_notification(actual.get('termination_notification'))
         if address=='azurerm_network_interface.development':
             configs=actual.get('ip_configuration')

@@ -332,9 +332,9 @@ def expected_values(v):
         "azurerm_subnet.development": {"name": prefix + "-subnet", "resource_group_name": prefix + "-rg", "virtual_network_name": prefix + "-vnet", "address_prefixes": ["10.43.1.0/24"], "default_outbound_access_enabled": False, "private_endpoint_network_policies": "Disabled", "private_link_service_network_policies_enabled": True},
         "azurerm_network_security_group.development": named("nsg", security_rule=rules),
         "azurerm_subnet_network_security_group_association.development": {"subnet_id": None, "network_security_group_id": None},
-        "azurerm_public_ip.development": named("pip", allocation_method="Static", ip_version="IPv4", sku="Standard", sku_tier="Regional", ddos_protection_mode="VirtualNetworkInherited"),
+        "azurerm_public_ip.development": named("pip", allocation_method="Static", ip_version="IPv4", sku="Standard", sku_tier="Regional", ddos_protection_mode="VirtualNetworkInherited", idle_timeout_in_minutes=4),
         "azurerm_network_interface.development": named("nic", accelerated_networking_enabled=False, ip_forwarding_enabled=False, ip_configuration=[{"name": "primary", "subnet_id": None, "private_ip_address_allocation": "Dynamic", "private_ip_address_version": "IPv4", "public_ip_address_id": None, "primary": True}]),
-        "azurerm_linux_virtual_machine.development": named("vm", computer_name="nutrition-development", size=SKU, admin_username="azureuser", admin_password=None, custom_data=None, user_data=None, disable_password_authentication=True, network_interface_ids=[None], provision_vm_agent=True, allow_extension_operations=False, secure_boot_enabled=False, vtpm_enabled=False, priority="Regular", max_bid_price=-1, termination_notification=[{"enabled": False, "timeout": "PT5M"}], admin_ssh_key=[{"username": "azureuser", "public_key": v["ssh_public_key"]}], os_disk=[{"name": prefix + "-os", "caching": "ReadWrite", "storage_account_type": "StandardSSD_LRS", "disk_size_gb": 64, "write_accelerator_enabled": False}], source_image_reference=[dict(zip(("publisher", "offer", "sku", "version"), IMAGE.split(":")))]),
+        "azurerm_linux_virtual_machine.development": named("vm", computer_name="nutrition-development", size=SKU, admin_username="azureuser", admin_password=None, custom_data=None, user_data=None, disable_password_authentication=True, network_interface_ids=[None], provision_vm_agent=True, allow_extension_operations=False, secure_boot_enabled=False, vtpm_enabled=False, priority="Regular", max_bid_price=-1, platform_fault_domain=-1, extensions_time_budget="PT1H30M", termination_notification=[{"enabled": False, "timeout": "PT5M"}], admin_ssh_key=[{"username": "azureuser", "public_key": v["ssh_public_key"]}], os_disk=[{"name": prefix + "-os", "caching": "ReadWrite", "storage_account_type": "StandardSSD_LRS", "disk_size_gb": 64, "write_accelerator_enabled": False}], source_image_reference=[dict(zip(("publisher", "offer", "sku", "version"), IMAGE.split(":")))]),
         "azurerm_managed_disk.data": named("data", storage_account_type="StandardSSD_LRS", create_option="Empty", disk_size_gb=64, network_access_policy="AllowAll", public_network_access_enabled=True, optimized_frequent_attach_enabled=False, performance_plus_enabled=False),
         "azurerm_virtual_machine_data_disk_attachment.data": {"managed_disk_id": None, "virtual_machine_id": None, "lun": 0, "caching": "None", "create_option": "Attach", "write_accelerator_enabled": False},
         "azurerm_dev_test_global_vm_shutdown_schedule.development": {"virtual_machine_id": None, "location": LOCATION, "enabled": True, "daily_recurrence_time": utc(v["shutdown_deadline_utc"], "deadline").strftime("%H%M"), "timezone": "UTC", "tags": TAGS, "notification_settings": [{"enabled": False, "time_in_minutes": 30}]},
@@ -356,6 +356,16 @@ def audit_prior_state(prior, values, expected):
         wrapper = H._exact_keys(state["outputs"][name], {"sensitive", "type", "value"}, "prior output")
         require(wrapper["sensitive"] is False and wrapper["type"] == "string"
                 and type(wrapper["value"]) is str and wrapper["value"] == value, "prior output differs")
+
+def known_provider_defaults(address, values):
+    if address == "azurerm_linux_virtual_machine.development":
+        require(isinstance(values, dict) and type(values.get("platform_fault_domain")) is int
+                and values["platform_fault_domain"] == -1, "VM platform fault domain must be integer -1")
+        require(type(values.get("extensions_time_budget")) is str
+                and values["extensions_time_budget"] == "PT1H30M", "VM extensions time budget differs")
+    elif address == "azurerm_public_ip.development":
+        require(isinstance(values, dict) and type(values.get("idle_timeout_in_minutes")) is int
+                and values["idle_timeout_in_minutes"] == 4, "public IP idle timeout must be integer 4")
 
 def termination_notification(value):
     require(isinstance(value, list) and len(value) == 1, "exact disabled termination block required")
@@ -513,6 +523,7 @@ def audit_plan(document, documents, hashes, now):
         required, allowed = UNKNOWN_RULES[address]
         after = change.get("after"); wanted = expected[address]
         require(isinstance(after, dict), "resource after must be an object")
+        known_provider_defaults(address, after)
         if address == "azurerm_linux_virtual_machine.development":
             termination_notification(after.get("termination_notification"))
             if ("network_interface_ids",) in paths:
@@ -539,6 +550,7 @@ def audit_plan(document, documents, hashes, now):
             require(item.get("mode") == "managed" and item.get("provider_name") == PROVIDER
                     and item.get("schema_version") == SCHEMAS[address], "planned resource identity differs")
             require(item.get("type") == address.split(".")[0] and item.get("name") == address.split(".")[1], "planned address metadata differs")
+            known_provider_defaults(address, item.get("values"))
             if address == "azurerm_linux_virtual_machine.development":
                 planned_vm = item.get("values")
                 require(isinstance(planned_vm, dict), "planned VM values missing")

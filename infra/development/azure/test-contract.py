@@ -72,6 +72,8 @@ def plan():
     vm=after(p,"azurerm_linux_virtual_machine.development")
     vm.update(computer_name="nutrition-development",size="Standard_B4ps_v2",secure_boot_enabled=False,vtpm_enabled=False)
     vm["termination_notification"]=[{"enabled":False,"timeout":"PT5M"}]
+    vm.update(platform_fault_domain=-1,extensions_time_budget="PT1H30M")
+    after(p,"azurerm_public_ip.development")["idle_timeout_in_minutes"]=4
     vm["source_image_reference"][0]["version"]="24.04.202609040"
     after(p,"azurerm_managed_disk.data")["tags"].pop("preservation")
     rules=after(p,"azurerm_network_security_group.development")["security_rule"]
@@ -991,7 +993,7 @@ def session_responses(document):
     live['vnet']['properties'].update(addressSpace={'addressPrefixes':['10.43.0.0/16']},subnets=[{'id':owned['subnet']}],virtualNetworkPeerings=[])
     live['nic']['properties'].update(virtualMachine={'id':owned['vm']},enableIPForwarding=False,enableAcceleratedNetworking=False,
         ipConfigurations=[{'name':'primary','id':configuration,'properties':{'subnet':{'id':owned['subnet']},'publicIPAddress':{'id':owned['pip']}}}])
-    live['pip'].update(sku={'name':'Standard'});live['pip']['properties'].update(publicIPAllocationMethod='Static',publicIPAddressVersion='IPv4',ipConfiguration={'id':configuration})
+    live['pip'].update(sku={'name':'Standard'});live['pip']['properties'].update(publicIPAllocationMethod='Static',publicIPAddressVersion='IPv4',idleTimeoutInMinutes=4,ipConfiguration={'id':configuration})
     fields={'priority':'priority','direction':'direction','access':'access','protocol':'protocol','source_port_range':'sourcePortRange',
         'destination_port_range':'destinationPortRange','source_address_prefix':'sourceAddressPrefix','destination_address_prefix':'destinationAddressPrefix'}
     live['nsg']['properties'].update(subnets=[{'id':owned['subnet']}],securityRules=[{'name':r['name'],'properties':{
@@ -1374,5 +1376,82 @@ class PlannedVmRepresentation(unittest.TestCase):
             for value in ([None,None],[None,None,None],[],False,0,0.0,"",{},[False],[0],[0.0],["/foreign"],[None,"/foreign"],[None,False]):
                 p,vm=self.represented(whole);vm["network_interface_ids"]=value
                 with self.subTest(whole=whole,invalid=value),self.assertRaises(A.Error):A.audit_plan(p,evidence(),HASHES,NOW)
+
+class KnownProviderDefaults(unittest.TestCase):
+    VM = "azurerm_linux_virtual_machine.development"
+    PIP = "azurerm_public_ip.development"
+    FIELDS = ((VM, "platform_fault_domain", -1), (VM, "extensions_time_budget", "PT1H30M"),
+              (PIP, "idle_timeout_in_minutes", 4))
+    fixtures = ProviderFields.fixtures
+    assert_ownership = ProviderFields.assert_ownership
+    mutate_state = ProviderFields.mutate_state
+    GATEWAY = ProviderFields.GATEWAY
+    def invalid(self, field):
+        return ("MISSING", None, False, True, 0, -1.0, 4.0, 1, 5, "-1", "4", "PT15M", "", [], {})
+    def mutate_plan(self, p, address, field, value, planned=False):
+        obj = next(r["values"] for r in p["planned_values"]["root_module"]["resources"] if r["address"] == address) if planned else after(p,address)
+        if value == "MISSING": obj.pop(field,None)
+        else: obj[field] = value
+    def test_observed_defaults_pass_all_local_representations(self):
+        for whole in (False, True):
+            p,_ = PlannedVmRepresentation().represented(whole)
+            self.assertEqual(after(p,self.VM)["platform_fault_domain"], -1)
+            self.assertEqual(after(p,self.VM)["extensions_time_budget"], "PT1H30M")
+            self.assertEqual(after(p,self.PIP)["idle_timeout_in_minutes"], 4)
+            self.assertEqual(A.audit_plan(p,evidence(),HASHES,NOW)["resource_count"], 11)
+        f,v = self.fixtures(); self.assert_ownership(f,v)
+    def test_after_defaults_reject_missing_changed_and_wrong_types(self):
+        A.audit_plan(plan(),evidence(),HASHES,NOW)
+        for address,field,_ in self.FIELDS:
+            for value in self.invalid(field):
+                p=plan();self.mutate_plan(p,address,field,value)
+                with self.subTest(field=field,value=value),self.assertRaises(A.Error): A.audit_plan(p,evidence(),HASHES,NOW)
+    def test_planned_defaults_reject_missing_changed_and_wrong_types(self):
+        for whole in (False,True):
+            p,_=PlannedVmRepresentation().represented(whole);A.audit_plan(p,evidence(),HASHES,NOW)
+            for address,field,_ in self.FIELDS:
+                for value in self.invalid(field):
+                    p,_=PlannedVmRepresentation().represented(whole);self.mutate_plan(p,address,field,value,True)
+                    with self.subTest(whole=whole,field=field,value=value),self.assertRaises(A.Error): A.audit_plan(p,evidence(),HASHES,NOW)
+    def test_known_defaults_cannot_be_marked_unknown(self):
+        A.audit_plan(plan(),evidence(),HASHES,NOW)
+        for address,field,value in self.FIELDS:
+            for representation in (value,None,"MISSING"):
+                p=plan();self.mutate_plan(p,address,field,representation);change(p,address)["after_unknown"][field]=True
+                with self.subTest(field=field,representation=representation),self.assertRaises(A.Error): A.audit_plan(p,evidence(),HASHES,NOW)
+    def test_raw_rendered_defaults_reject_altered_types(self):
+        f,v=self.fixtures();self.assert_ownership(f,v)
+        for target in ('raw','rendered','both'):
+            for address,field,_ in self.FIELDS:
+                for value in self.invalid(field):
+                    f,v=self.fixtures();self.mutate_state(f,address,field,value,target)
+                    with self.subTest(target=target,field=field,value=value): self.assert_ownership(f,v,True)
+    def test_live_defaults_allow_only_documented_omission(self):
+        for platform in ('MISSING',None):
+            for scale_set in ('MISSING',None):
+                for budget in ('MISSING',None,'PT1H30M'):
+                    f,v=self.fixtures();props=f['live']['vm']['properties']
+                    for key,value in [('platformFaultDomain',platform),('virtualMachineScaleSet',scale_set),('extensionsTimeBudget',budget)]:
+                        if value!='MISSING':props[key]=value
+                    with self.subTest(platform=platform,scale_set=scale_set,budget=budget):S.live_graph(f['live'],v)
+    def test_live_defaults_reject_changed_missing_or_wrong_types(self):
+        cases=[('vm','platformFaultDomain',(-1,-1.0,0,False,'',{},[])),
+               ('vm','extensionsTimeBudget',(False,0,1,'PT15M','',{},[])),
+               ('pip','idleTimeoutInMinutes',self.invalid('idle_timeout_in_minutes'))]
+        for resource,field,invalid in cases:
+            for value in invalid:
+                f,v=self.fixtures();props=f['live'][resource]['properties']
+                if value=='MISSING':props.pop(field,None)
+                else:props[field]=value
+                with self.subTest(resource=resource,field=field,value=value),self.assertRaises(S.A.Error):S.live_graph(f['live'],v)
+    def test_foreign_vm_scale_set_rejected_with_unassigned_fault_domain(self):
+        p=plan();after(p,self.VM)['virtual_machine_scale_set_id']='/foreign'
+        with self.assertRaises(A.Error):A.audit_plan(p,evidence(),HASHES,NOW)
+        for target in ('raw','rendered','both'):
+            f,v=self.fixtures();self.mutate_state(f,self.VM,'virtual_machine_scale_set_id','/foreign',target)
+            self.assert_ownership(f,v,True)
+        for value in (False,0,'',{},[],{'id':'/foreign'}):
+            f,v=self.fixtures();f['live']['vm']['properties']['virtualMachineScaleSet']=value
+            with self.subTest(value=value),self.assertRaises(S.A.Error):S.live_graph(f['live'],v)
 
 if __name__ == '__main__': unittest.main(verbosity=2)

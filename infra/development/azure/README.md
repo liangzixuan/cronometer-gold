@@ -248,6 +248,20 @@ profile or return it disabled, with an absent/null timeout or `PT5M`. Other
 profiles, enabled notifications and changed timeouts fail. The separate UTC
 shutdown schedule remains required.
 
+The pinned AzureRM 4.79.0 defaults are known values: VM
+`platform_fault_domain` is integer `-1`, `extensions_time_budget` is string
+`PT1H30M`, and public-IP `idle_timeout_in_minutes` is integer `4`. Plan changes,
+planned values and resolved raw/rendered state require these exact types and
+values before comparison or computed-field sanitation. Missing, null, changed or
+unknown values fail.
+
+Live VM responses must omit or return null for `platformFaultDomain` and
+`virtualMachineScaleSet`. The extension budget may be absent/null or `PT1H30M`,
+matching the provider's read fallback; the extension list must still be empty.
+Live public-IP `idleTimeoutInMinutes` must be integer `4`. The provider sends that
+value explicitly and has no absent-to-four read fallback. These checks do not
+enable VM scale-set membership, extensions or new unknown fields.
+
 The NIC gateway field stays unconfigured. Only its exact computed plan leaf may
 be unknown; a configured expression or known nonempty relationship fails. Raw
 and rendered state must agree on the provider's empty-string representation
