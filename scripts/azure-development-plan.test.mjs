@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import {
   chmod,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -28,13 +30,20 @@ import {
 import { runTool } from "./postgres-operator-process.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
-const nodePath = await realpath(process.execPath);
-const node = { path: nodePath, sha256: hash(await readFile(nodePath)) };
 const env = { PATH: "/usr/bin:/bin", LANG: "C.UTF-8" };
 async function fixture(t) {
   const directory = await mkdtemp(join(homedir(), "nourishing-plan-tool-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   return directory;
+}
+async function copyNodeTool(directory) {
+  const originalPath = await realpath(process.execPath);
+  const path = join(directory, "node");
+  await copyFile(originalPath, path, constants.COPYFILE_EXCL);
+  await chmod(path, 0o700);
+  const sha256 = hash(await readFile(originalPath));
+  assert.equal(hash(await readFile(path)), sha256, "fixture executable matches current Node");
+  return { path, sha256 };
 }
 const pause = () => new Promise((done) => setTimeout(done, 20));
 async function identity(pid) {
@@ -66,7 +75,7 @@ async function ready(path, timeout = 4000) {
   }
   throw new Error("synthetic child did not establish readiness");
 }
-const execute = (directory, body, options = {}) =>
+const execute = (node, directory, body, options = {}) =>
   limitedTool(node, ["-e", body], {
     signal: AbortSignal.timeout(7000),
     env,
@@ -106,7 +115,9 @@ test("actual limiter applies inherited file limit and a narrow child environment
   timeout: 10000,
 }, async (t) => {
   const directory = await fixture(t);
+  const node = await copyNodeTool(directory);
   const result = await execute(
+    node,
     directory,
     "const fs=require('node:fs');console.log(JSON.stringify({limits:fs.readFileSync('/proc/self/limits','utf8'),env:process.env}));",
   );
@@ -120,9 +131,11 @@ test("actual per-file growth cannot exceed the inherited fsize bound", {
   timeout: 10000,
 }, async (t) => {
   const directory = await fixture(t);
+  const node = await copyNodeTool(directory);
   const path = join(directory, "growth");
   await assert.rejects(
     execute(
+      node,
       directory,
       `const fs=require('node:fs');const fd=fs.openSync(${JSON.stringify(path)},'wx',0o600);fs.writeSync(fd,Buffer.from('x'),0,1,536870912);`,
     ),
@@ -136,15 +149,21 @@ for (const [name, body] of [
 ]) {
   test(`actual ${name} rejects without publishing a result`, { timeout: 10000 }, async (t) => {
     const directory = await fixture(t);
-    await assert.rejects(execute(directory, body));
+    const node = await copyNodeTool(directory);
+    const started = join(directory, "child-started");
+    const childBody = `require('node:fs').writeFileSync(${JSON.stringify(started)},${JSON.stringify(name)},{flag:'wx',mode:0o600});${body}`;
+    await assert.rejects(execute(node, directory, childBody));
+    assert.equal(await readFile(started, "utf8"), name);
     await assert.rejects(lstat(join(directory, "result.json")), { code: "ENOENT" });
   });
 }
 test("actual deadline rejects and settles a TERM-resistant tool", { timeout: 10000 }, async (t) => {
   const directory = await fixture(t);
+  const node = await copyNodeTool(directory);
   const path = join(directory, "timeout-ready.json");
   await assert.rejects(
     execute(
+      node,
       directory,
       `require('node:fs').writeFileSync(${JSON.stringify(path)},JSON.stringify({pid:process.pid}));process.on('SIGTERM',()=>{});setInterval(()=>{},1000)`,
       { signal: AbortSignal.timeout(500) },
@@ -158,6 +177,7 @@ for (const mode of ["normal", "abort"]) {
     timeout: 12000,
   }, async (t) => {
     const directory = await fixture(t);
+    const node = await copyNodeTool(directory);
     const path = join(directory, "ready.json");
     const controller = new AbortController();
     const grandchild =
@@ -166,7 +186,7 @@ for (const mode of ["normal", "abort"]) {
     let result, state, before, work;
     const watchdog = setTimeout(() => controller.abort(), 6000);
     try {
-      work = execute(directory, body, { signal: controller.signal }).then(
+      work = execute(node, directory, body, { signal: controller.signal }).then(
         (v) => {
           result = { value: v };
         },
@@ -205,6 +225,7 @@ test("parent loss closes supervisor IPC and settles its actual descendant group"
   timeout: 14000,
 }, async (t) => {
   const directory = await fixture(t);
+  const node = await copyNodeTool(directory);
   const path = join(directory, "ready.json");
   const childCode = `const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync(${JSON.stringify(path)},JSON.stringify({pid:process.pid}));setInterval(()=>{},1000);`;
   const driver = join(directory, "driver.mjs");
@@ -241,11 +262,13 @@ test("actual renderer opens retained plan descriptor and replacement cannot vali
   timeout: 10000,
 }, async (t) => {
   const directory = await fixture(t);
+  const node = await copyNodeTool(directory);
   const path = join(directory, "plan.tfplan");
   await writeFile(path, "original plan", { mode: 0o600 });
   const plan = await openPlan(path);
   try {
     const result = await execute(
+      node,
       directory,
       `console.log(require('node:fs').readFileSync(${JSON.stringify(plan.path)},'utf8'))`,
     );
