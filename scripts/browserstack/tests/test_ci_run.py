@@ -524,6 +524,60 @@ class DraftTests(unittest.TestCase):
         self.write('cleanup.json', {'failures': ['runtime-stop']})
         self.assertNotIn('substep', self.failed_summary()['failedBrowser'])
 
+    def test_failed_terminal_summary_projects_each_fixed_reason(self):
+        for reason in ('cancelled', 'duration-unavailable'):
+            with self.subTest(reason=reason):
+                self.full_receipts()
+                self.change_browser(status='failed', failedStage='terminal-verification',
+                                    terminalVerificationFailed=True, terminalFailureReason=reason,
+                                    unexpectedPrivate='SYNTHETIC-SECRET')
+                value = self.failed_summary()
+                self.assertEqual(value['failedBrowser']['stage'], 'terminal-verification')
+                self.assertEqual(value['failedBrowser']['terminalReason'], reason)
+
+    def test_failed_terminal_summary_discards_malformed_reasons(self):
+        for reason in (None, True, 1, [], {}, 'unknown', 'cancelled\nSYNTHETIC-SECRET',
+                       'x' * 10000, 'SYNTHETIC-SECRET'):
+            with self.subTest(kind=type(reason).__name__):
+                self.full_receipts()
+                self.change_browser(status='failed', failedStage='terminal-verification',
+                                    terminalVerificationFailed=True, terminalFailureReason=reason)
+                self.assertNotIn('terminalReason', self.failed_summary()['failedBrowser'])
+
+    def test_terminal_reason_requires_failed_terminal_stage_and_marker(self):
+        for changes in ({'failedStage': CHECKS[0]}, {'failedStage': CHECKS[1]},
+                        {'failedStage': 'connect'}, {'failedStage': 'unknown'},
+                        {'status': 'passed'}, {'terminalVerificationFailed': False},
+                        {'terminalVerificationFailed': 1}):
+            with self.subTest(changes=changes):
+                self.full_receipts()
+                self.change_browser(**{'status': 'failed', 'failedStage': 'terminal-verification',
+                                       'terminalVerificationFailed': True,
+                                       'terminalFailureReason': 'cancelled', **changes})
+                self.write('cleanup.json', {'failures': ['runtime-stop']})
+                self.assertNotIn('terminalReason', self.failed_summary()['failedBrowser'])
+
+    def test_terminal_reason_requires_current_source_and_session(self):
+        for changes in ({'sourceSha': 'f' * 40}, {'sessionId': None},
+                        {'sessionId': 'SYNTHETIC-SECRET\n'},
+                        {'terminal': {'sessionId': 'different-session'}}, {'terminal': None}):
+            with self.subTest(fields=tuple(changes)):
+                self.full_receipts()
+                self.change_browser(**{'status': 'failed', 'failedStage': 'terminal-verification',
+                                       'terminalVerificationFailed': True,
+                                       'terminalFailureReason': 'cancelled', **changes})
+                value = self.failed_summary()
+                self.assertNotIn('terminalReason', value.get('failedBrowser', {}))
+
+    def test_success_summary_omits_forged_terminal_failure_reason(self):
+        self.full_receipts()
+        self.change_browser(failedStage='terminal-verification', terminalVerificationFailed=True,
+                            terminalFailureReason='cancelled')
+        value = self.summary_result()
+        self.assertIs(value['accepted'], True)
+        self.assertNotIn('failedBrowser', value)
+        self.assertNotIn('terminalReason', json.dumps(value))
+
     def test_missing_receipt_never_accepts(self):
         self.full_receipts(); (self.private / 'browser-result.json').unlink()
         with self.assertRaises(RuntimeError): self.summary_result()

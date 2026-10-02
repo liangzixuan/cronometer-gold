@@ -729,9 +729,10 @@ describe("catalogue authority deployment policy", () => {
     },
   );
 
-  it("pins all authority constraints, frozen columns, and the activation batch index", () => {
-    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
-    for (const expectedConstraint of CATALOGUE_AUTHORITY_CONSTRAINT_POLICY) {
+  it.each(CATALOGUE_AUTHORITY_CONSTRAINT_POLICY)(
+    "pins authority constraint $tableName.$name",
+    (expectedConstraint) => {
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
       const base = validEvidence(policy);
       expect(() =>
         assertCatalogueAuthorityDeploymentEvidence(policy, {
@@ -743,9 +744,13 @@ describe("catalogue authority deployment policy", () => {
           ),
         }),
       ).toThrow(/constraint differs/u);
-    }
+    },
+  );
 
-    for (const expectedColumn of CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY) {
+  it.each(CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY)(
+    "pins frozen authority column $tableName.$columnName",
+    (expectedColumn) => {
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
       const base = validEvidence(policy);
       expect(() =>
         assertCatalogueAuthorityDeploymentEvidence(policy, {
@@ -758,8 +763,11 @@ describe("catalogue authority deployment policy", () => {
           ),
         }),
       ).toThrow(/frozen materialization column differs/u);
-    }
+    },
+  );
 
+  it("pins the activation batch index predicate, owner, and key shape", () => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     const base = validEvidence(policy);
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {

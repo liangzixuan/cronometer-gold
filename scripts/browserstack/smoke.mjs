@@ -127,6 +127,7 @@ async function terminalDetails() {
   let size = 0;
   for (let attempt = 0; attempt < 4; attempt++) {
     signal.throwIfAborted();
+    if (cancelled) receipt.terminalFailureReason = "cancelled";
     assert(!cancelled, "Session cancelled");
     receipt.terminalReadCount = attempt + 1;
     const response = await fetch(
@@ -199,10 +200,13 @@ async function terminalDetails() {
       projectName: details.project_name,
       name: details.name,
     };
+    if (cancelled) receipt.terminalFailureReason = "cancelled";
     assert(!cancelled, "Session cancelled");
     if (details.browserstack_status === "done") {
       if (receipt.status === "passed") {
         assert.equal(details.status, "passed");
+        if (!Number.isInteger(details.duration))
+          receipt.terminalFailureReason = "duration-unavailable";
         assert(Number.isInteger(details.duration));
       }
       return;

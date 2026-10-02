@@ -938,12 +938,39 @@ test("cancellation during metadata cannot accept a passed-done record", async ()
   assert.equal(result.receipt.terminalReadCount, 1);
   assert.equal(result.fetches.length, 1);
   assert.deepEqual(result.metadataDelays, []);
+  assert.equal(result.receipt.failedStage, "terminal-verification");
+  assert.equal(result.receipt.terminalFailureReason, "cancelled");
+  const summary = publicSummary(result.receipt);
+  assert.equal(summary.accepted, false);
+  assert.equal(summary.failedBrowser.terminalReason, "cancelled");
+  assert.equal(summary.failedBrowser.remoteStatus, "passed");
+  assert.equal(summary.failedBrowser.remoteExecutionStatus, "done");
 });
 
 test("passed-done requires an actual integer duration", async () => {
   const result = await exercise({ terminalSequence: [{ duration: null }] });
   assert.equal(result.receipt.status, "failed");
   assert.equal(result.fetches.length, 1);
+  assert.equal(result.receipt.failedStage, "terminal-verification");
+  assert.equal(result.receipt.terminalFailureReason, "duration-unavailable");
+  const summary = publicSummary(result.receipt);
+  assert.equal(summary.accepted, false);
+  assert.equal(summary.failedBrowser.terminalReason, "duration-unavailable");
+  assert.equal(summary.failedBrowser.remoteStatus, "passed");
+  assert.equal(summary.failedBrowser.remoteExecutionStatus, "done");
+});
+
+test("terminal reasons do not replace an earlier journey failure", async () => {
+  for (const phase of [{ cancel: true }, { duration: null }]) {
+    const result = await exercise({ loginFailure: true, terminalSequence: [phase] });
+    assert.equal(result.receipt.status, "failed");
+    assert.equal(result.receipt.failedStage, expectedChecks[0]);
+    const summary = publicSummary(result.receipt);
+    assert.equal(summary.accepted, false);
+    assert.equal(summary.failedBrowser.stage, expectedChecks[0]);
+    assert.equal(summary.failedBrowser.terminalReason, undefined);
+    assert(!result.raw.includes("SYNTHETIC-SECRET-SENTINEL"));
+  }
 });
 
 test("terminal verification reads the exact HTTPS session after close with no redirects", async () => {

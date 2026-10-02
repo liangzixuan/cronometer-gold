@@ -486,6 +486,11 @@ def summary():
                         failed['substep'] = substep
                 remote = browser.get('terminal')
                 if isinstance(remote, dict) and remote.get('sessionId') == session_id:
+                    if (browser.get('status') == 'failed' and browser.get('failedStage') == 'terminal-verification'
+                            and browser.get('terminalVerificationFailed') is True):
+                        reason = browser.get('terminalFailureReason')
+                        if type(reason) is str and reason in ('cancelled', 'duration-unavailable'):
+                            failed['terminalReason'] = reason
                     if remote.get('status') in ('passed', 'failed', 'done', 'running', 'error', 'timeout'):
                         failed['remoteStatus'] = remote['status']
                     if remote.get('browserstackStatus') in ('done', 'running', 'error', 'failed', 'timeout'):
