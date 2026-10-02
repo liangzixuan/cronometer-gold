@@ -71,6 +71,7 @@ def plan():
     p["checks"]=[B._check("azurerm_resource_group.development","unknown")]
     vm=after(p,"azurerm_linux_virtual_machine.development")
     vm.update(computer_name="nutrition-development",size="Standard_B4ps_v2",secure_boot_enabled=False,vtpm_enabled=False)
+    vm["termination_notification"]=[{"enabled":False,"timeout":"PT5M"}]
     vm["source_image_reference"][0]["version"]="24.04.202609040"
     after(p,"azurerm_managed_disk.data")["tags"].pop("preservation")
     rules=after(p,"azurerm_network_security_group.development")["security_rule"]
@@ -87,6 +88,96 @@ def selected(d,kind,label): return next(x for x in d[kind].get("commands",d[kind
 def setpath(obj,path,value):
     for key in path[:-1]: obj=obj[key]
     obj[path[-1]]=value
+
+
+class PlanRepresentation(unittest.TestCase):
+    def represented(self):
+        p = plan()
+        p["prior_state"] = {"format_version": "1.0", "terraform_version": "1.5.7", "values": {
+            "root_module": {}, "outputs": {
+                "resource_group_name": {"sensitive": False, "type": "string", "value": PREFIX + "-rg"},
+                "shutdown_deadline_utc": {"sensitive": False, "type": "string", "value": "2026-10-01T10:00:00Z"},
+                "runtime_deployment_status": {"sensitive": False, "type": "string", "value": "EMPTY_HOST_ONLY: actual ownership, shutdown readback, cleanup, Caddy access control and runtime admission remain separate"},
+            }}}
+        return p
+    def rejects(self, p):
+        with self.assertRaises(A.Error): A.audit_plan(p, evidence(), HASHES, NOW)
+    def test_outputs_only_prior_state_passes(self):
+        self.assertEqual(A.audit_plan(self.represented(), evidence(), HASHES, NOW)["resource_count"], 11)
+    def test_prior_state_exact_shape_and_versions(self):
+        mutations = [
+            lambda s: s.update(format_version="1.1"), lambda s: s.update(terraform_version="1.6.0"),
+            lambda s: s.update(extra=None), lambda s: s.pop("format_version"),
+            lambda s: s.update(values=[]), lambda s: s["values"].update(extra={}),
+            lambda s: s["values"].pop("root_module"), lambda s: s["values"].update(root_module=[]),
+            lambda s: s["values"].update(root_module={"resources": []}),
+            lambda s: s["values"].update(root_module={"resources": [{"mode": "data"}]}),
+            lambda s: s["values"].update(root_module={"resources": [{"deposed": "old"}]}),
+            lambda s: s["values"].update(root_module={"child_modules": []}),
+            lambda s: s["values"]["outputs"].pop("resource_group_name"),
+            lambda s: s["values"]["outputs"].update(other={}),
+        ]
+        for index, mutate in enumerate(mutations):
+            p = self.represented(); mutate(p["prior_state"])
+            with self.subTest(index=index): self.rejects(p)
+    def test_prior_output_exact_wrappers_and_derived_values(self):
+        for name in self.represented()["prior_state"]["values"]["outputs"]:
+            for key, value in [("sensitive", True), ("sensitive", 0), ("sensitive", 0.0), ("sensitive", None),
+                               ("type", ["string"]), ("type", "number"), ("value", "wrong"), ("value", 0), ("extra", None)]:
+                p = self.represented(); p["prior_state"]["values"]["outputs"][name][key] = value
+                with self.subTest(name=name, key=key, value=value): self.rejects(p)
+            for key in ("sensitive", "type", "value"):
+                p = self.represented(); del p["prior_state"]["values"]["outputs"][name][key]
+                with self.subTest(name=name, missing=key): self.rejects(p)
+        p = self.represented(); p["prior_state"]["values"]["outputs"]["resource_group_name"]["value"] = PREFIX
+        self.rejects(p)
+    def test_approved_unknown_reference_omissions_pass(self):
+        p = plan()
+        for address, paths in [
+            ("azurerm_dev_test_global_vm_shutdown_schedule.development", [("virtual_machine_id",)]),
+            ("azurerm_subnet_network_security_group_association.development", [("subnet_id",), ("network_security_group_id",)]),
+            ("azurerm_virtual_machine_data_disk_attachment.data", [("managed_disk_id",), ("virtual_machine_id",)]),
+            ("azurerm_network_interface.development", [("ip_configuration", 0, "subnet_id"), ("ip_configuration", 0, "public_ip_address_id")]),
+        ]:
+            for path in paths:
+                container = after(p, address)
+                for key in path[:-1]: container = container[key]
+                self.assertIsNone(container.pop(path[-1]))
+        self.assertEqual(A.audit_plan(p, evidence(), HASHES, NOW)["resource_count"], 11)
+    def test_omissions_need_exact_boolean_approved_mask(self):
+        address = "azurerm_dev_test_global_vm_shutdown_schedule.development"
+        for value in (False, None, 0, 1, "true", {}, []):
+            p = plan(); del after(p, address)["virtual_machine_id"]
+            change(p, address)["after_unknown"]["virtual_machine_id"] = value
+            with self.subTest(value=value): self.rejects(p)
+        p = plan(); del after(p, address)["virtual_machine_id"]; del change(p, address)["after_unknown"]["virtual_machine_id"]
+        self.rejects(p)
+        for value in (0, 1):
+            p = plan(); change(p, address)["after_unknown"]["unreviewed"] = value
+            with self.subTest(unreviewed=value): self.rejects(p)
+    def test_missing_known_values_and_unknown_contradictions_fail(self):
+        for address, path in [
+            ("azurerm_dev_test_global_vm_shutdown_schedule.development", ("enabled",)),
+            ("azurerm_network_interface.development", ("ip_configuration", 0, "primary")),
+            ("azurerm_linux_virtual_machine.development", ("admin_password",)),
+        ]:
+            p = plan(); container = after(p, address)
+            for key in path[:-1]: container = container[key]
+            del container[path[-1]]
+            with self.subTest(address=address, path=path): self.rejects(p)
+        p = plan(); after(p, "azurerm_dev_test_global_vm_shutdown_schedule.development")["virtual_machine_id"] = "foreign-id"
+        self.rejects(p)
+        p = plan(); change(p, "azurerm_dev_test_global_vm_shutdown_schedule.development")["after_unknown"]["enabled"] = True
+        self.rejects(p)
+    def test_unknown_omission_does_not_erase_collection_structure(self):
+        address = "azurerm_network_interface.development"
+        for value in ([], {}, None, [{}, {}]):
+            p = plan(); after(p, address)["ip_configuration"] = value
+            with self.subTest(value=value): self.rejects(p)
+        p = plan(); change(p, address)["after_unknown"]["ip_configuration"] = True; del after(p, address)["ip_configuration"]
+        self.rejects(p)
+        p = plan(); after(p, "azurerm_linux_virtual_machine.development")["network_interface_ids"] = []
+        self.rejects(p)
 
 class Contract(unittest.TestCase):
     def rejects(self,p=None,d=None,now=NOW):
@@ -876,6 +967,7 @@ def session_responses(document):
         expected=by[target.rsplit('.',1)[0]]['id']
         setpath(by[address],path,[expected] if path==('network_interface_ids',) else expected)
     by['azurerm_linux_virtual_machine.development']['os_disk'][0]['id']=owned['os']
+    by['azurerm_network_interface.development']['ip_configuration'][0]['gateway_load_balancer_frontend_ip_configuration_id']=''
     state={'format_version':'1.0','terraform_version':'1.5.7','values':{'root_module':{'resources':resources}}}
     raw={'version':4,'terraform_version':'1.5.7','serial':1,'lineage':'12345678-aaaa-bbbb-cccc-0123456789ab','outputs':{},
         'resources':[{'mode':'managed','type':r['type'],'name':r['name'],'provider':'provider["'+A.PROVIDER+'"]',
@@ -1125,5 +1217,162 @@ class SessionPolicy(unittest.TestCase):
                 next(r for r in raw['resources'] if r['type']==resource_type)['instances'][0]['attributes'][key]=value
                 state_path.write_text(json.dumps(state));raw_path.write_text(json.dumps(raw))
                 with self.subTest(resource=resource_type,value=value),self.assertRaises(S.A.Error):S.current_ownership(self.directory,'after',original)
+
+
+class ProviderFields(unittest.TestCase):
+    VM = "azurerm_linux_virtual_machine.development"
+    NIC = "azurerm_network_interface.development"
+    GATEWAY = "gateway_load_balancer_frontend_ip_configuration_id"
+    def fixtures(self):
+        p = plan(); return session_responses(p), {k:v["value"] for k,v in p["variables"].items()}
+    def rejects_plan(self, p):
+        with self.assertRaises(A.Error): A.audit_plan(p, evidence(), HASHES, NOW)
+    def test_whole_nic_unknown_and_indexed_representation_pass(self):
+        A.audit_plan(plan(), evidence(), HASHES, NOW)
+        for omitted in (False, True):
+            p = plan(); change(p, self.VM)["after_unknown"]["network_interface_ids"] = True
+            if omitted: del after(p, self.VM)["network_interface_ids"]
+            else: after(p, self.VM)["network_interface_ids"] = None
+            self.assertEqual(A.audit_plan(p, evidence(), HASHES, NOW)["resource_count"], 11)
+    def test_whole_nic_mask_does_not_allow_known_or_unreviewed_collections(self):
+        for value in ([], [None], [None, None], ["/foreign"], {}, False, 0):
+            p = plan(); change(p, self.VM)["after_unknown"]["network_interface_ids"] = True
+            after(p, self.VM)["network_interface_ids"] = value
+            with self.subTest(value=value): self.rejects_plan(p)
+        for mask in (False, 0, 1, "true", [True, True], {"0": True}):
+            p = plan(); del after(p, self.VM)["network_interface_ids"]
+            change(p, self.VM)["after_unknown"]["network_interface_ids"] = mask
+            with self.subTest(mask=mask): self.rejects_plan(p)
+        p = plan(); del after(p, self.VM)["network_interface_ids"]
+        change(p, self.VM)["after_unknown"].update(network_interface_ids=True, **{"network_interface_ids.0": True})
+        self.rejects_plan(p)
+        p = plan(); del after(p, self.VM)["os_disk"]; change(p, self.VM)["after_unknown"]["os_disk"] = True
+        self.rejects_plan(p)
+        p = plan(); change(p, self.VM)["after_unknown"]["network_interface_ids"] = True; del after(p, self.VM)["network_interface_ids"]
+        config = next(r for r in p["configuration"]["root_module"]["resources"] if r["address"] == self.VM)
+        config["expressions"]["network_interface_ids"]["references"] = ["azurerm_network_interface.foreign.id"]
+        self.rejects_plan(p)
+    def test_termination_plan_is_exact_known_disabled_singleton(self):
+        A.audit_plan(plan(), evidence(), HASHES, NOW)
+        for value in (None, [], {}, [{"enabled":True,"timeout":"PT5M"}], [{"enabled":0,"timeout":"PT5M"}],
+                      [{"enabled":False,"timeout":"PT6M"}], [{"enabled":False}],
+                      [{"enabled":False,"timeout":"PT5M","other":None}],
+                      [{"enabled":False,"timeout":"PT5M"}]*2):
+            p = plan(); after(p, self.VM)["termination_notification"] = value
+            with self.subTest(value=value): self.rejects_plan(p)
+        p = plan(); del after(p, self.VM)["termination_notification"]; self.rejects_plan(p)
+        p = plan(); change(p, self.VM)["after_unknown"]["termination_notification"] = True; self.rejects_plan(p)
+    def test_gateway_plan_unknown_only_and_no_configured_relationship(self):
+        for value in (None, ""):
+            p = plan(); after(p,self.NIC)["ip_configuration"][0][self.GATEWAY] = value
+            change(p,self.NIC)["after_unknown"]["ip_configuration"][0][self.GATEWAY] = True
+            A.audit_plan(p,evidence(),HASHES,NOW)
+        p = plan(); change(p,self.NIC)["after_unknown"]["ip_configuration"][0][self.GATEWAY] = True
+        A.audit_plan(p,evidence(),HASHES,NOW)
+        for value in ("/foreign", 0, False, [], {}):
+            p = plan(); after(p,self.NIC)["ip_configuration"][0][self.GATEWAY] = value
+            with self.subTest(value=value): self.rejects_plan(p)
+        for expression in (None, {"constant_value":""}, {"references":["azurerm_lb.foreign.id"]}):
+            p = plan(); config = next(r for r in p["configuration"]["root_module"]["resources"] if r["address"] == self.NIC)
+            config["expressions"]["ip_configuration"][0][self.GATEWAY] = expression
+            with self.subTest(expression=expression): self.rejects_plan(p)
+    def assert_ownership(self, fixtures, values, rejected=False):
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            directory=Path(temporary); (directory/'work').mkdir(mode=0o700)
+            Q.write_json(directory/'work/terraform.tfstate',fixtures['raw'])
+            Q.write_json(directory/'state.json',fixtures['state'])
+            for name,value in fixtures['live'].items(): Q.write_json(directory/('after-'+name+'.json'),value)
+            if rejected:
+                with self.assertRaises(S.A.Error): S.current_ownership(directory,'after',{'values':values})
+            else: S.current_ownership(directory,'after',{'values':values})
+    def mutate_state(self, fixtures, address, field, value, target):
+        # Detach JSON representations so a mutation of one cannot silently change both.
+        raw=json.loads(json.dumps(fixtures['raw'])); state=json.loads(json.dumps(fixtures['state']))
+        objects=[]
+        if target in ('raw','both'): objects.append(next(r for r in raw['resources'] if r['type']+'.'+r['name']==address)['instances'][0]['attributes'])
+        if target in ('rendered','both'): objects.append(next(r for r in state['values']['root_module']['resources'] if r['address']==address)['values'])
+        for obj in objects:
+            if field==self.GATEWAY: obj=obj['ip_configuration'][0]
+            if value=='MISSING': obj.pop(field,None)
+            else: obj[field]=value
+        fixtures['raw']=raw; fixtures['state']=state
+    def test_gateway_raw_rendered_must_be_empty_before_sanitation(self):
+        f,v=self.fixtures(); self.assert_ownership(f,v)
+        for target in ('raw','rendered','both'):
+            for value in ('MISSING', None, False, 0, '/foreign', {}, []):
+                f,v=self.fixtures(); self.mutate_state(f,self.NIC,self.GATEWAY,value,target)
+                with self.subTest(target=target,value=value): self.assert_ownership(f,v,True)
+    def test_termination_raw_rendered_must_stay_disabled(self):
+        for target in ('raw','rendered','both'):
+            for value in ('MISSING', [], [{"enabled":True,"timeout":"PT5M"}], [{"enabled":0,"timeout":"PT5M"}],
+                          [{"enabled":False,"timeout":"PT6M"}], [{"enabled":False,"timeout":"PT5M","extra":None}]):
+                f,v=self.fixtures(); self.mutate_state(f,self.VM,'termination_notification',value,target)
+                with self.subTest(target=target,value=value): self.assert_ownership(f,v,True)
+    def test_live_termination_profiles_are_absent_or_strictly_disabled(self):
+        for value in (None, {}, {'terminateNotificationProfile':None},
+                      {'terminateNotificationProfile':{'enable':False}},
+                      {'terminateNotificationProfile':{'enable':False,'notBeforeTimeout':None}},
+                      {'terminateNotificationProfile':{'enable':False,'notBeforeTimeout':'PT5M'}}):
+            f,v=self.fixtures(); f['live']['vm']['properties']['scheduledEventsProfile']=value
+            with self.subTest(value=value): S.live_graph(f['live'],v)
+        for value in (False, 0, [], {'other':None}, {'terminateNotificationProfile':{}},
+                      {'terminateNotificationProfile':False}, {'terminateNotificationProfile':{'enable':0}},
+                      {'terminateNotificationProfile':{'enable':True,'notBeforeTimeout':'PT5M'}},
+                      {'terminateNotificationProfile':{'enable':False,'notBeforeTimeout':'PT6M'}},
+                      {'terminateNotificationProfile':{'enable':False,'notBeforeTimeout':False}},
+                      {'terminateNotificationProfile':{'enable':False,'extra':None}}):
+            f,v=self.fixtures(); f['live']['vm']['properties']['scheduledEventsProfile']=value
+            with self.subTest(value=value), self.assertRaises(S.A.Error): S.live_graph(f['live'],v)
+    def test_live_gateway_relationship_must_be_absent_or_null(self):
+        f,v=self.fixtures(); S.live_graph(f['live'],v)
+        f['live']['nic']['properties']['ipConfigurations'][0]['properties']['gatewayLoadBalancer']=None
+        S.live_graph(f['live'],v)
+        for value in (False, 0, '', {}, [], {'id':'/foreign'}):
+            f,v=self.fixtures(); f['live']['nic']['properties']['ipConfigurations'][0]['properties']['gatewayLoadBalancer']=value
+            with self.subTest(value=value),self.assertRaises(S.A.Error): S.live_graph(f['live'],v)
+    def test_resolved_and_live_nic_relationship_remains_singleton(self):
+        for target in ('raw','rendered','both'):
+            for value in ([], ['/foreign'], ['/foreign','/foreign']):
+                f,v=self.fixtures(); self.mutate_state(f,self.VM,'network_interface_ids',value,target)
+                with self.subTest(target=target,value=value): self.assert_ownership(f,v,True)
+        for value in ([], [{'id':'/foreign'}], [{'id':'/foreign'},{'id':'/foreign'}]):
+            f,v=self.fixtures(); f['live']['vm']['properties']['networkProfile']['networkInterfaces']=value
+            with self.subTest(value=value),self.assertRaises(S.A.Error): S.live_graph(f['live'],v)
+
+
+class PlannedVmRepresentation(unittest.TestCase):
+    VM = "azurerm_linux_virtual_machine.development"
+    def represented(self, whole):
+        p=plan()
+        if whole:
+            change(p,self.VM)["after_unknown"]["network_interface_ids"]=True
+            del after(p,self.VM)["network_interface_ids"]
+        resources=[]
+        for entry in p["resource_changes"]:
+            resources.append({k:entry[k] for k in ("address","mode","type","name","provider_name")}|{
+                "schema_version":1 if entry["type"]=="azurerm_managed_disk" else 0,
+                "values":copy.deepcopy(entry["change"]["after"])})
+        p["planned_values"]={"root_module":{"resources":resources}}
+        vm=next(r["values"] for r in resources if r["address"]==self.VM)
+        return p,vm
+    def test_planned_termination_rejects_numeric_boolean_impostors(self):
+        for whole in (False,True):
+            p,_=self.represented(whole);A.audit_plan(p,evidence(),HASHES,NOW)
+            for value in (0,0.0,1,True,None,"false"):
+                p,vm=self.represented(whole);vm["termination_notification"][0]["enabled"]=value
+                with self.subTest(whole=whole,value=value),self.assertRaises(A.Error):A.audit_plan(p,evidence(),HASHES,NOW)
+            for value in ([],[{"enabled":False,"timeout":"PT6M"}],[{"enabled":False,"timeout":"PT5M","extra":None}]):
+                p,vm=self.represented(whole);vm["termination_notification"]=value
+                with self.subTest(whole=whole,block=value),self.assertRaises(A.Error):A.audit_plan(p,evidence(),HASHES,NOW)
+    def test_planned_nic_unknown_preserves_at_most_one_slot(self):
+        for whole in (False,True):
+            for value in ("OMITTED",None,[None]):
+                p,vm=self.represented(whole)
+                if value=="OMITTED":vm.pop("network_interface_ids",None)
+                else:vm["network_interface_ids"]=value
+                with self.subTest(whole=whole,valid=value):A.audit_plan(p,evidence(),HASHES,NOW)
+            for value in ([None,None],[None,None,None],[],False,0,0.0,"",{},[False],[0],[0.0],["/foreign"],[None,"/foreign"],[None,False]):
+                p,vm=self.represented(whole);vm["network_interface_ids"]=value
+                with self.subTest(whole=whole,invalid=value),self.assertRaises(A.Error):A.audit_plan(p,evidence(),HASHES,NOW)
 
 if __name__ == '__main__': unittest.main(verbosity=2)

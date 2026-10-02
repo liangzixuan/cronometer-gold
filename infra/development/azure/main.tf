@@ -168,6 +168,11 @@ resource "azurerm_linux_virtual_machine" "development" {
   vtpm_enabled                    = false
   tags                            = local.required_tags
 
+  termination_notification {
+    enabled = false
+    timeout = "PT5M"
+  }
+
   admin_ssh_key {
     username   = local.admin_username
     public_key = var.ssh_public_key

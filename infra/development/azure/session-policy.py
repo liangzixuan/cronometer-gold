@@ -264,6 +264,12 @@ def live_graph(doc,values):
     require(len(actual)==len(set(actual)) and set(actual)==expected, "foreign or missing group resource")
     require(doc['extensions'].get('value')==[] and doc['extensions'].get('nextLink') in (None,''), "unexpected VM extension")
     vm=doc['vm']['properties']; require(vm.get('hardwareProfile',{}).get('vmSize')==A.SKU, "VM size changed")
+    events=vm.get('scheduledEventsProfile')
+    require(events is None or isinstance(events,dict) and set(events)<={'terminateNotificationProfile'}, "unreviewed scheduled events profile")
+    termination=events.get('terminateNotificationProfile') if events is not None else None
+    require(termination is None or isinstance(termination,dict)
+            and set(termination)<={'enable','notBeforeTimeout'} and termination.get('enable') is False
+            and termination.get('notBeforeTimeout') in (None,'PT5M'), "live termination notification differs")
     nics=vm.get('networkProfile',{}).get('networkInterfaces'); require(isinstance(nics,list) and len(nics)==1, "exact VM NIC required");arm_id(nics[0].get('id'),owned['nic'])
     storage=vm.get('storageProfile',{}); os_disk=storage.get('osDisk',{});arm_id(os_disk.get('managedDisk',{}).get('id'),owned['os'])
     disks=storage.get('dataDisks');require(isinstance(disks,list) and len(disks)==1 and disks[0].get('lun')==0, "exact VM data disk required");arm_id(disks[0].get('managedDisk',{}).get('id'),owned['data'])
@@ -281,6 +287,7 @@ def live_graph(doc,values):
     require(nic.get('enableIPForwarding') is False and nic.get('enableAcceleratedNetworking') is False, "NIC policy differs")
     configs=nic.get('ipConfigurations'); require(isinstance(configs,list) and len(configs)==1 and configs[0].get('name')=='primary', "NIC configurations differ")
     ip=configs[0]['properties'];arm_id(ip.get('subnet',{}).get('id'),owned['subnet']);arm_id(ip.get('publicIPAddress',{}).get('id'),owned['pip'])
+    require(ip.get('gatewayLoadBalancer') is None, "live NIC gateway not admitted")
     for key in ('applicationGatewayBackendAddressPools','loadBalancerBackendAddressPools','loadBalancerInboundNatRules','applicationSecurityGroups'):
         require(neutral(ip.get(key)), "foreign NIC relationship")
     require([x.get('id','').lower() for x in subnet.get('ipConfigurations',[])]==[configs[0]['id'].lower()], "foreign subnet attachment")
@@ -320,6 +327,12 @@ def state_graph(document, values):
                 and item.get('type')==address.split('.')[0] and item.get('name')==address.split('.')[1], "state provider/address differs")
         actual=item.get('values');require(isinstance(actual,dict) and isinstance(actual.get('id'),str), "state values missing")
         if address in labels: arm_id(actual['id'],owned[labels[address]])
+        if address=='azurerm_linux_virtual_machine.development': A.termination_notification(actual.get('termination_notification'))
+        if address=='azurerm_network_interface.development':
+            configs=actual.get('ip_configuration')
+            require(isinstance(configs,list) and len(configs)==1 and isinstance(configs[0],dict)
+                    and type(configs[0].get('gateway_load_balancer_frontend_ip_configuration_id')) is str
+                    and configs[0]['gateway_load_balancer_frontend_ip_configuration_id']=='', "resolved NIC gateway must be empty")
         sanitized=json.loads(canonical(actual))
         for path in A.UNKNOWN_RULES[address][1]:
             configured=expected[address]

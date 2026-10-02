@@ -229,6 +229,37 @@ satisfied by these local lifecycle observations.
 
 ## Saved-plan audit boundary
 
+The pinned Terraform 1.5.7 renderer can include an outputs-only prior state. The
+auditor admits only format1.0, the pinned version, an exactly empty root module
+and the three derived nonsensitive string outputs. Existing resources, child
+modules and altered output values or types remain rejected. Approved unknown
+object fields may be omitted; known values and list positions remain mandatory.
+
+The VM NIC reference has one field-specific alternative: Terraform may mark the
+whole list unknown. This interpretation relies on the reviewed `main.tf` singleton
+containing the owned NIC reference and the maintained command's source binding.
+Standalone plan JSON reference metadata does not prove expression cardinality.
+Resolved state and live responses must still contain exactly that one owned NIC.
+
+The VM explicitly disables termination notifications with `enabled=false` and
+`timeout="PT5M"`. Plan and resolved state require the exact known singleton block;
+an unknown block is rejected. Live scheduled-event data may omit the termination
+profile or return it disabled, with an absent/null timeout or `PT5M`. Other
+profiles, enabled notifications and changed timeouts fail. The separate UTC
+shutdown schedule remains required.
+
+The NIC gateway field stays unconfigured. Only its exact computed plan leaf may
+be unknown; a configured expression or known nonempty relationship fails. Raw
+and rendered state must agree on the provider's empty-string representation
+before computed fields are sanitized, and the live gateway relationship must be
+absent or null. These checks preserve the foreign-attachment boundary.
+
+The first retained real plan failed audit and remains failed. Changing this
+policy or Terraform source invalidates the old native evidence provenance.
+Synthetic representation tests establish local policy behavior; a new real plan
+requires fresh source-bound evidence and a separately selected invocation.
+
+
 `audit-plan.py` accepts only a protected binary `.tfplan`, rendered internally through the qualified Linux AMD64 Terraform executable. It reuses the existing beta auditor's protected file and descriptor helpers without changing beta policy. Supply the independently reviewed source digest and binary-plan SHA256. The source digest covers the executable policy, Terraform files, provider lock and reused helper; printing a digest does not approve those bytes.
 
 ```sh

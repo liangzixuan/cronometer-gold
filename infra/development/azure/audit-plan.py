@@ -334,26 +334,62 @@ def expected_values(v):
         "azurerm_subnet_network_security_group_association.development": {"subnet_id": None, "network_security_group_id": None},
         "azurerm_public_ip.development": named("pip", allocation_method="Static", ip_version="IPv4", sku="Standard", sku_tier="Regional", ddos_protection_mode="VirtualNetworkInherited"),
         "azurerm_network_interface.development": named("nic", accelerated_networking_enabled=False, ip_forwarding_enabled=False, ip_configuration=[{"name": "primary", "subnet_id": None, "private_ip_address_allocation": "Dynamic", "private_ip_address_version": "IPv4", "public_ip_address_id": None, "primary": True}]),
-        "azurerm_linux_virtual_machine.development": named("vm", computer_name="nutrition-development", size=SKU, admin_username="azureuser", admin_password=None, custom_data=None, user_data=None, disable_password_authentication=True, network_interface_ids=[None], provision_vm_agent=True, allow_extension_operations=False, secure_boot_enabled=False, vtpm_enabled=False, priority="Regular", max_bid_price=-1, admin_ssh_key=[{"username": "azureuser", "public_key": v["ssh_public_key"]}], os_disk=[{"name": prefix + "-os", "caching": "ReadWrite", "storage_account_type": "StandardSSD_LRS", "disk_size_gb": 64, "write_accelerator_enabled": False}], source_image_reference=[dict(zip(("publisher", "offer", "sku", "version"), IMAGE.split(":")))]),
+        "azurerm_linux_virtual_machine.development": named("vm", computer_name="nutrition-development", size=SKU, admin_username="azureuser", admin_password=None, custom_data=None, user_data=None, disable_password_authentication=True, network_interface_ids=[None], provision_vm_agent=True, allow_extension_operations=False, secure_boot_enabled=False, vtpm_enabled=False, priority="Regular", max_bid_price=-1, termination_notification=[{"enabled": False, "timeout": "PT5M"}], admin_ssh_key=[{"username": "azureuser", "public_key": v["ssh_public_key"]}], os_disk=[{"name": prefix + "-os", "caching": "ReadWrite", "storage_account_type": "StandardSSD_LRS", "disk_size_gb": 64, "write_accelerator_enabled": False}], source_image_reference=[dict(zip(("publisher", "offer", "sku", "version"), IMAGE.split(":")))]),
         "azurerm_managed_disk.data": named("data", storage_account_type="StandardSSD_LRS", create_option="Empty", disk_size_gb=64, network_access_policy="AllowAll", public_network_access_enabled=True, optimized_frequent_attach_enabled=False, performance_plus_enabled=False),
         "azurerm_virtual_machine_data_disk_attachment.data": {"managed_disk_id": None, "virtual_machine_id": None, "lun": 0, "caching": "None", "create_option": "Attach", "write_accelerator_enabled": False},
         "azurerm_dev_test_global_vm_shutdown_schedule.development": {"virtual_machine_id": None, "location": LOCATION, "enabled": True, "daily_recurrence_time": utc(v["shutdown_deadline_utc"], "deadline").strftime("%H%M"), "timezone": "UTC", "tags": TAGS, "notification_settings": [{"enabled": False, "time_in_minutes": 30}]},
     }
 
-def match(actual, expected, label):
+def audit_prior_state(prior, values, expected):
+    if prior is None or prior == {}: return
+    H._exact_keys(prior, {"format_version", "terraform_version", "values"}, "prior state")
+    require(prior["format_version"] == "1.0" and prior["terraform_version"] == "1.5.7", "unreviewed prior state version")
+    state = H._exact_keys(prior["values"], {"root_module", "outputs"}, "prior state values")
+    require(type(state["root_module"]) is dict and state["root_module"] == {}, "prior resources or child modules not admitted")
+    outputs = {
+        "resource_group_name": expected["azurerm_resource_group.development"]["name"],
+        "shutdown_deadline_utc": values["shutdown_deadline_utc"],
+        "runtime_deployment_status": "EMPTY_HOST_ONLY: actual ownership, shutdown readback, cleanup, Caddy access control and runtime admission remain separate",
+    }
+    H._exact_keys(state["outputs"], set(outputs), "prior outputs")
+    for name, value in outputs.items():
+        wrapper = H._exact_keys(state["outputs"][name], {"sensitive", "type", "value"}, "prior output")
+        require(wrapper["sensitive"] is False and wrapper["type"] == "string"
+                and type(wrapper["value"]) is str and wrapper["value"] == value, "prior output differs")
+
+def termination_notification(value):
+    require(isinstance(value, list) and len(value) == 1, "exact disabled termination block required")
+    block = H._exact_keys(value[0], {"enabled", "timeout"}, "termination notification")
+    require(block["enabled"] is False and block["timeout"] == "PT5M", "termination notification differs")
+
+def unknown_paths(mask):
+    # Python treats 0 as False; Terraform JSON masks require actual booleans.
+    def check(value):
+        if isinstance(value, dict):
+            for child in value.values(): check(child)
+        elif isinstance(value, list):
+            for child in value: check(child)
+        else: require(value is None or type(value) is bool, "unknown mask must contain booleans")
+    check(mask)
+    return H._flatten_mask(mask, "unknown fields")
+
+def match(actual, expected, label, unknown=frozenset(), path=()):
     if label.endswith(".tags"):
         require(actual == expected, label + " exact tags required")
     if isinstance(expected, dict):
         require(isinstance(actual, dict), label + " must be an object")
         for key, value in expected.items():
-            require(key in actual, label + " missing " + key); match(actual[key], value, label + "." + key)
+            child_path = path + (key,)
+            if key not in actual and value is None and child_path in unknown: continue
+            require(key in actual, label + " missing " + key)
+            match(actual[key], value, label + "." + key, unknown, child_path)
         for key in set(actual) - set(expected):
             require(H._neutral(actual[key]), label + " unreviewed field " + key)
     elif isinstance(expected, list):
         require(isinstance(actual, list) and len(actual) == len(expected), label + " array mismatch")
         if label.endswith("security_rule"):
             actual = sorted(actual, key=lambda x: x.get("name", "")); expected = sorted(expected, key=lambda x: x["name"])
-        for a, e in zip(actual, expected): match(a, e, label + "[]")
+        for index, (a, e) in enumerate(zip(actual, expected)): match(a, e, label + "[]", unknown, path + (index,))
     else:
         require(actual == expected and (type(actual) is bool) == (type(expected) is bool), label + " value mismatch")
 
@@ -394,6 +430,7 @@ UNKNOWN_RULES = {'azurerm_dev_test_global_vm_shutdown_schedule.development': ({(
                                            {('applied_dns_servers',),
                                             ('id',),
                                             ('internal_domain_name_suffix',),
+                                            ('ip_configuration', 0, 'gateway_load_balancer_frontend_ip_configuration_id'),
                                             ('ip_configuration', 0, 'private_ip_address'),
                                             ('ip_configuration', 0, 'private_ip_address_version'),
                                             ('ip_configuration', 0, 'public_ip_address_id'),
@@ -440,9 +477,9 @@ def audit_plan(document, documents, hashes, now):
     require(document.get("format_version") == "1.2" and document.get("terraform_version") == "1.5.7", "unreviewed Terraform JSON version")
     require(not set(document).intersection({"applyable", "complete", "errored"}), "unsupported Terraform metadata")
     require(document.get("resource_drift") in (None, []) and document.get("deferred_changes") in (None, []), "drift or deferred changes not admitted")
-    require(document.get("prior_state") in (None, {}), "prior state not admitted")
     values = inputs(document, documents, hashes, now)
     expected = expected_values(values)
+    audit_prior_state(document.get("prior_state"), values, expected)
     configuration = document.get("configuration", {})
     H._audit_provider_configuration(configuration)
     root = configuration.get("root_module", {})
@@ -455,6 +492,10 @@ def audit_plan(document, documents, hashes, now):
                 and item.get("provider_config_key") == "azurerm" and item.get("schema_version") == SCHEMAS[address], "configured resource identity mismatch")
         require(not any(item.get(k) for k in ("count_expression", "for_each_expression", "provisioners", "connection")), "dynamic or executable configuration not admitted")
         require(isinstance(item.get("expressions"), dict), "missing expressions")
+    nic_expressions = configured["azurerm_network_interface.development"]["expressions"].get("ip_configuration")
+    require(isinstance(nic_expressions, list) and len(nic_expressions) == 1
+            and isinstance(nic_expressions[0], dict)
+            and "gateway_load_balancer_frontend_ip_configuration_id" not in nic_expressions[0], "configured NIC gateway not admitted")
     for address, path, leaf in REFERENCES:
         H._require_reference(configured, address, path, leaf)
     changes = unique(document.get("resource_changes"), "address", "resource changes")
@@ -468,10 +509,23 @@ def audit_plan(document, documents, hashes, now):
         require(set(change) <= {"actions", "before", "after", "after_unknown", "before_sensitive", "after_sensitive", "replace_paths", "importing"}, "unreviewed change metadata")
         require(change.get("actions") == ["create"] and change.get("before") is None
                 and change.get("replace_paths") in (None, []) and change.get("importing") is None, "only new create actions admitted")
-        match(change.get("after"), expected[address], address)
-        paths = H._flatten_mask(change.get("after_unknown"), "unknown fields")
+        paths = unknown_paths(change.get("after_unknown"))
         required, allowed = UNKNOWN_RULES[address]
+        after = change.get("after"); wanted = expected[address]
+        require(isinstance(after, dict), "resource after must be an object")
+        if address == "azurerm_linux_virtual_machine.development":
+            termination_notification(after.get("termination_notification"))
+            if ("network_interface_ids",) in paths:
+                # Only this maintained singleton reference has a whole-list producer form.
+                required = required - {("network_interface_ids", 0)} | {("network_interface_ids",)}
+                allowed = allowed - {("network_interface_ids", 0)} | {("network_interface_ids",)}
+                require(after.get("network_interface_ids") is None, "whole unknown NIC list contradicts known values")
+                wanted = {**wanted, "network_interface_ids": None}
         require(required <= paths and all(any(H._path_matches(p, a) for a in allowed) for p in paths), "unknown field mask differs")
+        match(after, wanted, address, paths)
+        if address == "azurerm_network_interface.development":
+            gateway = after["ip_configuration"][0].get("gateway_load_balancer_frontend_ip_configuration_id")
+            require(gateway is None or type(gateway) is str and gateway == "", "known NIC gateway not admitted")
         require(not H._flatten_mask(change.get("before_sensitive"), "prior sensitivity"), "prior sensitive value")
         sensitive = {("admin_password",), ("custom_data",), ("admin_ssh_key", 0, "public_key")} if resource_type == "azurerm_linux_virtual_machine" else set()
         require(H._flatten_mask(change.get("after_sensitive"), "sensitivity") == sensitive, "sensitivity mask differs")
@@ -485,6 +539,14 @@ def audit_plan(document, documents, hashes, now):
             require(item.get("mode") == "managed" and item.get("provider_name") == PROVIDER
                     and item.get("schema_version") == SCHEMAS[address], "planned resource identity differs")
             require(item.get("type") == address.split(".")[0] and item.get("name") == address.split(".")[1], "planned address metadata differs")
+            if address == "azurerm_linux_virtual_machine.development":
+                planned_vm = item.get("values")
+                require(isinstance(planned_vm, dict), "planned VM values missing")
+                termination_notification(planned_vm.get("termination_notification"))
+                planned_nics = planned_vm.get("network_interface_ids")
+                require(planned_nics is None or isinstance(planned_nics, list)
+                        and len(planned_nics) == 1 and planned_nics[0] is None,
+                        "planned unknown NIC list differs")
             # Terraform omits unknown values or represents them as null. All known fields remain equal.
             absent = object()
             def known(value):
