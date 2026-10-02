@@ -842,4 +842,288 @@ class EvidencePreparation(unittest.TestCase):
             if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):self.assertNotIn(node.func.attr,{'Popen','system','run_json','preflight','audit_binary_plan'})
 
 
+
+
+S = load("development_session", HERE / "session-policy.py")
+
+
+def session_responses(document):
+    """Hand-built ARM/state fixtures, never requests or Terraform execution."""
+    values={k:v['value'] for k,v in document['variables'].items()}
+    base='/subscriptions/'+SUB+'/resourceGroups/'+PREFIX+'-rg'
+    owned={'group':base,'vnet':base+'/providers/Microsoft.Network/virtualNetworks/'+PREFIX+'-vnet',
+        'subnet':base+'/providers/Microsoft.Network/virtualNetworks/'+PREFIX+'-vnet/subnets/'+PREFIX+'-subnet',
+        'nsg':base+'/providers/Microsoft.Network/networkSecurityGroups/'+PREFIX+'-nsg',
+        'pip':base+'/providers/Microsoft.Network/publicIPAddresses/'+PREFIX+'-pip',
+        'nic':base+'/providers/Microsoft.Network/networkInterfaces/'+PREFIX+'-nic',
+        'vm':base+'/providers/Microsoft.Compute/virtualMachines/'+PREFIX+'-vm',
+        'os':base+'/providers/Microsoft.Compute/disks/'+PREFIX+'-os',
+        'data':base+'/providers/Microsoft.Compute/disks/'+PREFIX+'-data',
+        'schedule':base+'/providers/Microsoft.DevTestLab/schedules/shutdown-computevm-'+PREFIX+'-vm'}
+    mapping={'azurerm_resource_group.development':'group','azurerm_virtual_network.development':'vnet',
+        'azurerm_subnet.development':'subnet','azurerm_network_security_group.development':'nsg',
+        'azurerm_public_ip.development':'pip','azurerm_network_interface.development':'nic',
+        'azurerm_linux_virtual_machine.development':'vm','azurerm_managed_disk.data':'data',
+        'azurerm_dev_test_global_vm_shutdown_schedule.development':'schedule'}
+    resources=[]
+    for entry in document['resource_changes']:
+        address=entry['address'];v=copy.deepcopy(entry['change']['after'])
+        v['id']=owned[mapping[address]] if address in mapping else owned['subnet'] if 'association' in address else owned['vm']+'/dataDisks/'+PREFIX+'-data'
+        resources.append({'address':address,'mode':'managed','type':entry['type'],'name':entry['name'],
+            'provider_name':A.PROVIDER,'schema_version':A.SCHEMAS[address],'values':v})
+    by={r['address']:r['values'] for r in resources}
+    for address,path,target in A.REFERENCES:
+        expected=by[target.rsplit('.',1)[0]]['id']
+        setpath(by[address],path,[expected] if path==('network_interface_ids',) else expected)
+    by['azurerm_linux_virtual_machine.development']['os_disk'][0]['id']=owned['os']
+    state={'format_version':'1.0','terraform_version':'1.5.7','values':{'root_module':{'resources':resources}}}
+    raw={'version':4,'terraform_version':'1.5.7','serial':1,'lineage':'12345678-aaaa-bbbb-cccc-0123456789ab','outputs':{},
+        'resources':[{'mode':'managed','type':r['type'],'name':r['name'],'provider':'provider["'+A.PROVIDER+'"]',
+            'instances':[{'schema_version':r['schema_version'],'attributes':r['values']}]} for r in resources]}
+    live={}
+    for index,(key,resource_id) in enumerate(owned.items()):
+        props={'provisioningState':'Succeeded'}
+        field='vmId' if key=='vm' else 'uniqueId' if key in ('os','data') else 'uniqueIdentifier' if key=='schedule' else 'resourceGuid'
+        if key not in ('group','subnet'):props[field]='11111111-aaaa-bbbb-cccc-'+str(index).zfill(12)
+        live[key]={'id':resource_id,'location':'centralus','properties':props}
+    by['azurerm_linux_virtual_machine.development']['virtual_machine_id']=live['vm']['properties']['vmId']
+    by['azurerm_virtual_network.development']['guid']=live['vnet']['properties']['resourceGuid']
+    live['members']={'value':[{'id':v} for k,v in owned.items() if k not in ('group','subnet')]}
+    live['extensions']={'value':[]}
+    live['vm']['properties'].update(hardwareProfile={'vmSize':'Standard_B4ps_v2'},networkProfile={'networkInterfaces':[{'id':owned['nic']}]},
+        storageProfile={'osDisk':{'managedDisk':{'id':owned['os']}},'dataDisks':[{'lun':0,'managedDisk':{'id':owned['data']}}]})
+    for key in ('os','data'):
+        live[key].update(managedBy=owned['vm'],sku={'name':'StandardSSD_LRS'});live[key]['properties']['diskSizeGB']=64
+    configuration=owned['nic']+'/ipConfigurations/primary'
+    live['subnet']['properties'].update(networkSecurityGroup={'id':owned['nsg']},addressPrefix='10.43.1.0/24',ipConfigurations=[{'id':configuration}])
+    live['vnet']['properties'].update(addressSpace={'addressPrefixes':['10.43.0.0/16']},subnets=[{'id':owned['subnet']}],virtualNetworkPeerings=[])
+    live['nic']['properties'].update(virtualMachine={'id':owned['vm']},enableIPForwarding=False,enableAcceleratedNetworking=False,
+        ipConfigurations=[{'name':'primary','id':configuration,'properties':{'subnet':{'id':owned['subnet']},'publicIPAddress':{'id':owned['pip']}}}])
+    live['pip'].update(sku={'name':'Standard'});live['pip']['properties'].update(publicIPAllocationMethod='Static',publicIPAddressVersion='IPv4',ipConfiguration={'id':configuration})
+    fields={'priority':'priority','direction':'direction','access':'access','protocol':'protocol','source_port_range':'sourcePortRange',
+        'destination_port_range':'destinationPortRange','source_address_prefix':'sourceAddressPrefix','destination_address_prefix':'destinationAddressPrefix'}
+    live['nsg']['properties'].update(subnets=[{'id':owned['subnet']}],securityRules=[{'name':r['name'],'properties':{
+        'provisioningState':'Succeeded',**{arm:r[key] for key,arm in fields.items()}}} for r in after(document,'azurerm_network_security_group.development')['security_rule']])
+    live['schedule']['properties'].update(status='Enabled',taskType='ComputeVmShutdownTask',targetResourceId=owned['vm'],timeZoneId='UTC',
+        dailyRecurrence={'time':'1000'},notificationSettings={'status':'Disabled'})
+    destroy={'format_version':'1.2','terraform_version':'1.5.7','timestamp':NOW.isoformat().replace('+00:00','Z'),
+        'configuration':document['configuration'],'prior_state':state,'planned_values':{'root_module':{}},
+        'resource_changes':[{k:r[k] for k in ('address','mode','type','name','provider_name')}|{
+            'change':{'actions':['delete'],'before':r['values'],'after':None,'after_unknown':False}} for r in resources]}
+    return {'create':document,'state':state,'raw':raw,'live':live,'destroy':destroy}
+
+
+class SessionPolicy(unittest.TestCase):
+    def setUp(self):
+        PlanPreparation.setUp(self)
+        for owner,name,value in [(S.A,'TF_SHA256',A.sha(self.tf.read_bytes())),(S.A,'PROVIDER_FILES',Q.A.PROVIDER_FILES)]:
+            patch=mock.patch.object(owner,name,value);patch.start();self.addCleanup(patch.stop)
+        patch=mock.patch.object(S.P,'tool_digest',return_value=(P.CLI_SHA256,100));patch.start();self.addCleanup(patch.stop)
+        PlanPreparation.prepare(self);PlanPreparation.complete_files(self)
+        phases=json.loads((self.directory/'phases.json').read_text())
+        for phase in phases:phase.update(startedAt=NOW.isoformat(),endedAt=NOW.isoformat())
+        (self.directory/'phases.json').write_text(json.dumps(phases)+'\n')
+        self.responses=session_responses(json.loads((self.directory/'rendered.json').read_text()))
+        self.rendered_raw=(self.directory/'rendered.json').read_bytes()
+        Q.finish(*self.args)
+        self.plan_input=self.input;self.plan_directory=self.directory
+        self.request={'schema_version':1,'source_sha256':S.source_digest(),'operation_name':'nourishing-session-0123456789ab',
+            'not_after_utc':'2026-10-01T08:18:00Z','plan_request':str(self.plan_input),'plan_result':str(self.plan_directory/'result.json'),
+            'plan_result_sha256':A.sha((self.plan_directory/'result.json').read_bytes())}
+        self.input=self.root/'session-request.json';Q.write_json(self.input,self.request)
+    def prepare(self,mode='execute'):
+        self.description=S.prepare(mode,self.input,NOW);self.directory=Path(self.description['directory'])
+        self.args=(mode,self.input,self.directory,self.description['state_sha256'],NOW)
+        Q.write_json(self.directory/'version.json',{'terraform_version':'1.5.7','platform':'linux_amd64'})
+    def auth(self):
+        values=[{'azure-cli':P.CLI_VERSION,'azure-cli-core':P.CLI_VERSION,'azure-cli-telemetry':'1','extensions':{}},[],
+            {'id':SUB,'tenantId':self.expected['tenantId'],'state':'Enabled','environmentName':'AzureCloud'},
+            {**self.expected,'state':'Enabled','subscriptionPolicies':{'quotaId':'AzureForStudents_2018-01-01','spendingLimit':'On'}}]
+        for (label,_),value in zip(P.commands(self.expected),values):Q.write_json(self.directory/('auth-'+label+'.json'),value)
+    def material(self,prefix='after'):
+        file=self.directory/'work/terraform.tfstate'
+        if file.exists():file.write_text(json.dumps(self.responses['raw'],sort_keys=True)+'\n')
+        else:Q.write_json(file,self.responses['raw'])
+        Q.write_json(self.directory/'state.json',self.responses['state'])
+        for name,value in self.responses['live'].items():Q.write_json(self.directory/(prefix+'-'+name+'.json'),value)
+    def fresh(self):
+        name='nourishing-evidence-'+self.request['operation_name'].rsplit('-',1)[1]
+        directory=self.directory/name;directory.mkdir(mode=0o700)
+        documents=native_fixture();hashes={}
+        for kind,value in documents.items():Q.write_json(directory/(kind+'.json'),value);hashes[kind]=A.sha((directory/(kind+'.json')).read_bytes())
+        Q.write_json(directory/'index.json',{'completed':True,'source_sha256':A.native_source_digest(),'evidence_sha256':hashes})
+    def phase_receipt(self,mode=None):
+        """Synthetic successful observations; mutation tests corrupt these retained records."""
+        mode=mode or self.args[0];directory=self.directory;descriptor='/proc/123/fd/4'
+        tool=A.sha(self.tf.read_bytes());rows=[]
+        if mode!='execute':rows += [('auth-'+n,P.CLI_SHA256,[*args,'--only-show-errors','--output','json'],'auth-'+n+'.json') for n,args in P.commands(self.expected)]
+        rows += [('version',tool,['version','-json'],'version.json'),('init',tool,['init','-backend=false','-lockfile=readonly','-input=false','-no-color'],'init.stdout')]
+        if mode!='execute':
+            rows.append(('state',tool,['show','-json',str(directory/'work/terraform.tfstate')],'state.json'))
+            rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in S.read_commands({k:x['value'] for k,x in self.responses['create']['variables'].items()},'resources')]
+        if mode=='prepare-dispose':
+            rows += [('prepare-dispose',tool,['plan','-destroy','-input=false','-no-color','-lock-timeout=0s','-parallelism=1','-var-file=inputs.tfvars.json','-out='+str(directory/'destroy.tfplan')],'prepare-dispose.stdout'),('show-dispose',tool,['show','-json',descriptor],'rendered.json')]
+            binary=directory/'destroy.tfplan'
+        else:
+            rows.append(('show',tool,['show','-json',descriptor],'rendered.json'))
+            if mode=='execute':rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in S.read_commands({k:x['value'] for k,x in self.responses['create']['variables'].items()},'groups')]
+            rows += [('apply',tool,['apply','-input=false','-no-color','-lock-timeout=0s','-parallelism=1',descriptor],'apply.stdout'),('state-after',tool,['show','-json',str(directory/'work/terraform.tfstate')],'state.json' if mode=='execute' else 'final-state.json')]
+            rows += [('after-'+r['label'],P.CLI_SHA256,r['arguments'],'after-'+r['label']+'.json') for r in S.read_commands({k:x['value'] for k,x in self.responses['create']['variables'].items()},'resources' if mode=='execute' else 'groups')]
+            binary=self.plan_directory/'plan.tfplan' if mode=='execute' else Path(json.loads(self.disposal.read_text())['binary_plan_path'])
+        phases=[]
+        for label,executable,args,output in rows:
+            path=directory/output
+            if output.endswith('.stdout') and not path.exists():path.write_bytes(b'synthetic process output');path.chmod(0o600)
+            raw=path.read_bytes()
+            phase={'phase':label,'completed':True,'exitCode':0,'startedAt':NOW.isoformat(),'endedAt':NOW.isoformat(),
+                'executableSha256':executable,'arguments':args,'argumentsSha256':A.sha(json.dumps(args,separators=(',',':')).encode()),
+                'stdoutBytes':len(raw),'stdoutSha256':A.sha(raw)}
+            if label in ('show','show-dispose','apply'):phase['binaryPlanSha256']=A.sha(binary.read_bytes())
+            phases.append(phase)
+        target=directory/'phases.json'
+        if target.exists():target.write_text(json.dumps(phases)+'\n')
+        else:Q.write_json(target,phases)
+        return phases
+
+    def execute_complete(self):
+        self.prepare();self.fresh();(self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        Q.write_json(self.directory/'before-groups.json',{'value':[]});S.intent(*self.args)
+        self.material();self.phase_receipt()
+        result=S.finish(*self.args);self.ownership=self.directory/'result.json';return result
+    def deletion_request(self,mode,reference_path):
+        key='ownership' if mode=='prepare-dispose' else 'disposal'
+        self.request={'schema_version':1,'source_sha256':S.source_digest(),'operation_name':'nourishing-session-'+('a'*12 if mode=='prepare-dispose' else 'b'*12),
+            'not_after_utc':'2026-10-01T08:18:00Z',key+'_result':str(reference_path),key+'_result_sha256':A.sha(reference_path.read_bytes())}
+        self.input=self.root/(mode+'-request.json');Q.write_json(self.input,self.request);self.prepare(mode);self.auth();self.material('before')
+    def prepare_deletion(self):
+        self.execute_complete();self.deletion_request('prepare-dispose',self.ownership)
+        S.audit(*self.args);Q.write_json(self.directory/'rendered.json',self.responses['destroy'])
+        (self.directory/'destroy.tfplan').write_bytes(b'synthetic destruction plan');(self.directory/'destroy.tfplan').chmod(0o600)
+        self.phase_receipt();S.finish(*self.args)
+        self.disposal=self.directory/'result.json'
+    def test_source_digest_and_successful_owned_execute_keep_private_state(self):
+        result=self.execute_complete();self.assertTrue(result['completed'])
+        receipt,_=S.private(self.ownership);self.assertEqual(receipt['generations']['vm'],self.responses['live']['vm']['properties']['vmId'])
+        self.assertEqual(len(receipt['ids']),10);self.assertEqual(receipt['serial'],1)
+        self.assertTrue((self.directory/'mutation-intent.json').exists());self.assertTrue((self.directory/'work/terraform.tfstate').exists())
+    def test_saved_deletion_requires_separate_review_and_dispose_verifies_absence(self):
+        self.prepare_deletion();self.assertFalse((self.directory/'mutation-intent.json').exists())
+        self.deletion_request('dispose',self.disposal)
+        Q.write_json(self.directory/'rendered.json',self.responses['destroy']);S.intent(*self.args)
+        final={**self.responses['raw'],'serial':2,'resources':[]};(self.directory/'work/terraform.tfstate').write_text(json.dumps(final)+'\n')
+        Q.write_json(self.directory/'final-state.json',{'format_version':'1.0','terraform_version':'1.5.7'})
+        Q.write_json(self.directory/'after-groups.json',{'value':[]});self.phase_receipt()
+        self.assertTrue(S.finish(*self.args)['completed']);self.assertTrue(S.private(self.directory/'result.json')[0]['disposed'])
+        self.assertTrue(self.ownership.exists());self.assertTrue(self.disposal.exists())
+    def test_rejects_altered_source_plan_provider_and_expired_request_before_session(self):
+        for file in [self.plan_directory/'plan.tfplan',self.provider/'LICENSE.txt',self.identity,self.tf]:
+            original=file.read_bytes();file.write_bytes(original+b'\n')
+            with self.subTest(path=file.name),self.assertRaises((S.A.Error,ValueError)):S.prepare('execute',self.input,NOW)
+            file.write_bytes(original)
+        with mock.patch.object(S,'source_digest',return_value='0'*64),self.assertRaises(S.A.Error):S.prepare('execute',self.input,NOW)
+        with self.assertRaises(S.A.Error):S.prepare('execute',self.input,NOW+timedelta(hours=1))
+        self.assertFalse((self.root/self.request['operation_name']).exists())
+    def test_foreign_missing_replaced_pending_and_wrong_shutdown_are_rejected(self):
+        original=self.responses['live'];v={k:x['value'] for k,x in self.responses['create']['variables'].items()}
+        mutations=[lambda d:d['members']['value'].append({'id':'/foreign'}),lambda d:d['members'].update(nextLink='https://other'),
+            lambda d:d['vm']['properties'].update(vmId=None),lambda d:d['os']['properties'].update(provisioningState='Updating'),
+            lambda d:d['schedule']['properties'].update(targetResourceId='/foreign'),lambda d:d['schedule']['properties'].update(status='Disabled'),
+            lambda d:d['schedule']['properties']['notificationSettings'].update(webhookUrl='https://foreign'),
+            lambda d:d['vnet']['properties']['subnets'].append({'id':'/foreign'}),lambda d:d['nic']['properties']['ipConfigurations'].append({}),
+            lambda d:d['nsg']['properties']['securityRules'][0]['properties'].update(sourceAddressPrefix='*')]
+        for change_live in mutations:
+            value=copy.deepcopy(original);change_live(value)
+            with self.subTest(change=change_live),self.assertRaises(S.A.Error):S.live_graph(value,v)
+        first=S.live_graph(original,v);changed=copy.deepcopy(first);changed['generations']['vm']='f'*32
+        state={'lineage':'x','serial':1,'state_sha256':'a'}
+        with self.assertRaises(S.A.Error):S.same_owned(first|state,changed|state)
+    def test_partial_or_ambiguous_state_and_changed_deletion_plan_reject(self):
+        self.prepare_deletion();saved=self.directory/'work/terraform.tfstate';raw=saved.read_bytes();saved.write_text('{}')
+        with self.assertRaises(S.A.Error):S.load_request('dispose',self._dispose_input(),NOW)
+        saved.write_bytes(raw)
+        state=self.responses['state'];original={'values':{k:x['value'] for k,x in self.responses['create']['variables'].items()}}
+        mutations=[lambda d:d['resource_changes'].pop(),lambda d:d['resource_changes'][0]['change'].update(actions=['create']),
+            lambda d:d['resource_changes'][0]['change']['before'].update(id='/foreign'),lambda d:d.update(timestamp='2026-10-01T07:00:00Z')]
+        for mutate in mutations:
+            value=copy.deepcopy(self.responses['destroy']);mutate(value)
+            with self.subTest(change=mutate),self.assertRaises(S.A.Error):S.audit_destroy(value,state,original,NOW)
+    def _dispose_input(self):
+        path=self.root/'dispose-check.json';value={'schema_version':1,'source_sha256':S.source_digest(),'operation_name':'nourishing-session-'+'f'*12,
+            'not_after_utc':'2026-10-01T08:18:00Z','disposal_result':str(self.disposal),'disposal_result_sha256':A.sha(self.disposal.read_bytes())}
+        Q.write_json(path,value);return path
+    def test_mutation_failure_and_publication_uncertainty_preserve_recovery_material(self):
+        self.prepare();self.fresh();(self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        Q.write_json(self.directory/'before-groups.json',{'value':[]});S.intent(*self.args)
+        self.assertEqual(S.private(self.directory/'mutation-intent.json')[0]['outcome'],'unknown-until-reconciled')
+        Q.write_json(self.directory/'phases.json',[{'completed':False,'exitCode':1}])
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists());self.assertTrue((self.plan_directory/'plan.tfplan').exists())
+        (self.directory/'phases.json').write_text(json.dumps([{'completed':True,'exitCode':0}]))
+        self.material();self.phase_receipt();real=S.A.publish_result
+        def reject(path,value):real(path,value);raise S.A.PublishedResultError('PRIVATE_CANARY')
+        with mock.patch.object(S.A,'publish_result',side_effect=reject),self.assertRaises(S.A.PublishedResultError):S.finish(*self.args)
+        self.assertTrue(S.private(self.directory/'result.json')[0]['completed']);self.assertTrue((self.directory/'work/terraform.tfstate').exists())
+    def test_unsafe_state_links_extra_files_and_post_command_aggregate_reject(self):
+        self.prepare();file=self.directory/'work/terraform.tfstate';file.symlink_to(self.identity)
+        with self.assertRaises(S.A.Error):S.verify(*self.args)
+        file.unlink();Q.write_json(self.directory/'unexpected.json',{})
+        with self.assertRaises(S.A.Error):S.verify(*self.args)
+        (self.directory/'unexpected.json').unlink()
+        with mock.patch.object(S.Q,'MAX_AGGREGATE',1),self.assertRaises(S.A.Error):S.verify(*self.args)
+    def test_sanitized_rejection_does_not_print_private_values(self):
+        output=io.StringIO()
+        with mock.patch.object(S,'prepare',side_effect=OSError('PRIVATE_CANARY')),contextlib.redirect_stderr(output):
+            self.assertEqual(S.main(['prepare','execute',str(self.input)]),1)
+        self.assertNotIn('PRIVATE_CANARY',output.getvalue());self.assertIn('remote outcome',output.getvalue())
+
+
+    def test_review_rejects_empty_intent_and_unrelated_completion_phase(self):
+        self.prepare();self.fresh();(self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        Q.write_json(self.directory/'before-groups.json',{'value':[]});S.intent(*self.args);self.material()
+        (self.directory/'mutation-intent.json').write_text('{}')
+        Q.write_json(self.directory/'phases.json',[{'phase':'unrelated','completed':True,'exitCode':0}])
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists())
+    def test_review_rejects_conflicting_state_and_live_generations(self):
+        self.prepare();self.fresh();(self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        Q.write_json(self.directory/'before-groups.json',{'value':[]});S.intent(*self.args)
+        resources={r['address']:r['values'] for r in self.responses['state']['values']['root_module']['resources']}
+        resources['azurerm_linux_virtual_machine.development']['virtual_machine_id']='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        resources['azurerm_virtual_network.development']['guid']='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+        self.material();self.phase_receipt()
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists())
+
+    def test_completion_rejects_each_missing_changed_or_unbound_observation(self):
+        self.prepare();self.fresh();(self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        Q.write_json(self.directory/'before-groups.json',{'value':[]});S.intent(*self.args);self.material();phases=self.phase_receipt()
+        target=self.directory/'phases.json';intent=self.directory/'mutation-intent.json';intent_raw=intent.read_bytes()
+        mutations=[lambda p:p.pop(),lambda p:p.reverse(),lambda p:p.append(copy.deepcopy(p[-1])),
+            lambda p:p[0].update(executableSha256='0'*64),lambda p:p[0].update(arguments=['unreviewed']),
+            lambda p:p[0].update(argumentsSha256='0'*64),lambda p:p[0].update(stdoutSha256='0'*64),
+            lambda p:p[0].update(stdoutBytes=True),lambda p:p[0].update(exitCode=False),
+            lambda p:p[0].update(endedAt='2026-10-01T09:00:00Z'),
+            lambda p:next(v for v in p if v['phase']=='apply').update(binaryPlanSha256='0'*64)]
+        for change in mutations:
+            bad=copy.deepcopy(phases);change(bad);target.write_text(json.dumps(bad))
+            with self.subTest(phaseMutation=change),self.assertRaises(S.A.Error):S.finish(*self.args)
+        target.write_text(json.dumps(phases));original=json.loads(intent_raw)
+        for key,value in [('mode','dispose'),('source_sha256','0'*64),('request_sha256','0'*64),('binary_plan_sha256','0'*64),('owned_state_sha256','0'*64),('outcome','completed'),('createdAt','2026-10-01T09:00:00Z'),('limits','changed')]:
+            intent.write_text(json.dumps(original|{key:value}))
+            with self.subTest(intentKey=key),self.assertRaises(S.A.Error):S.finish(*self.args)
+        intent.write_bytes(intent_raw)
+        output=self.directory/'after-vm.json';raw=output.read_bytes();output.write_bytes(raw+b' ')
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+        output.write_bytes(raw);self.assertTrue(S.finish(*self.args)['completed'])
+    def test_state_generation_must_be_present_typed_and_match_for_each_available_field(self):
+        self.prepare();self.material();original=S.verify(*self.args)[2]
+        state_path=self.directory/'state.json';raw_path=self.directory/'work/terraform.tfstate'
+        for resource_type,key in [('azurerm_linux_virtual_machine','virtual_machine_id'),('azurerm_virtual_network','guid')]:
+            for value in [None,False,1,'','ffffffff-ffff-ffff-ffff-ffffffffffff']:
+                state=copy.deepcopy(self.responses['state']);raw=copy.deepcopy(self.responses['raw'])
+                next(r for r in state['values']['root_module']['resources'] if r['type']==resource_type)['values'][key]=value
+                next(r for r in raw['resources'] if r['type']==resource_type)['instances'][0]['attributes'][key]=value
+                state_path.write_text(json.dumps(state));raw_path.write_text(json.dumps(raw))
+                with self.subTest(resource=resource_type,value=value),self.assertRaises(S.A.Error):S.current_ownership(self.directory,'after',original)
+
 if __name__ == '__main__': unittest.main(verbosity=2)

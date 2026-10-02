@@ -136,6 +136,97 @@ They establish local source behavior only. Actual native collection, a saved Azu
 plan, resource ownership, shutdown/disposal and hosted runtime remain separately
 qualified invocations.
 
+## Execute and dispose of an owned empty-host session
+
+The native Linux session command has three fixed modes. Select any real mutation
+separately after reviewing the exact plan and current resource budget. The local
+tests use synthetic Azure/Terraform responses and do not qualify a real allocation,
+shutdown or deletion.
+
+```sh
+node scripts/azure-development-session.mjs --source-digest
+node scripts/azure-development-session.mjs execute --input /absolute/private/execute.json
+node scripts/azure-development-session.mjs prepare-dispose --input /absolute/private/prepare-dispose.json
+node scripts/azure-development-session.mjs dispose --input /absolute/private/dispose.json
+```
+
+Each request is mode0600 inside an owned mode0700 directory. Common fields are
+`schema_version: 1`, independently reviewed `source_sha256`, a new `operation_name`
+(`nourishing-session-` plus twelve lowercase hexadecimal digits), and
+`not_after_utc`. The horizon must leave fifteen minutes for work and thirty seconds
+for cleanup, and must be no more than twenty minutes away. The caller must keep
+the entire bound inside the authorized work window. Mode-specific fields are:
+
+- `execute`: `plan_request`, `plan_result`, `plan_result_sha256`, referring to the
+  retained successful development plan and its original protected request.
+- `prepare-dispose`: `ownership_result`, `ownership_result_sha256`, referring to
+  the completed execution result and its retained exact local state.
+- `dispose`: `disposal_result`, `disposal_result_sha256`, referring to a separately
+  reviewed successful preparation result. Its deletion plan is valid for at most
+  fifteen minutes and must retain the same original ownership/state bindings.
+
+The source digest binds both maintained plan/evidence policies and this session
+policy. Original tool, provider, source, input and binary-plan bytes are rechecked.
+Execution recollects all six evidence families, rerenders the held original plan,
+revalidates both saved and fresh account facts, and requires the target resource
+group to be absent. It publishes a durable unknown-outcome intent before applying
+that exact descriptor once. A filesystem-only pinned provider mirror and explicit
+private Terraform data directory have no provider download fallback.
+
+After apply, the command retains and checks the Terraform state, fixed ARM
+readbacks and exact resource relationships. It includes the VM-created OS disk,
+requires terminal successful provisioning, rejects foreign members/extensions or
+pagination, and verifies the enabled VM shutdown target, UTC time and disabled
+notifications. VM, disk, network and schedule generation identifiers are bound
+where their APIs provide them. A matching name or tag alone does not establish
+ownership. The VM `virtual_machine_id` and VNet `guid` retained in Terraform
+state must match their live generation fields before initial ownership or cleanup
+can be accepted; missing or conflicting values reject the operation.
+
+Completion requires the fixed ordered child sequence, exact tool/argument and
+binary bindings, and hashes/sizes matching every retained stdout response. The
+mutation intent must match the mode, source, request, plan and prior state, and
+precede apply. These records remain unsigned local observations, not attestations.
+
+`prepare-dispose` authenticates the current native profile and rereads the owned
+graph before producing a saved delete-only plan for exactly the retained eleven
+Terraform addresses. It performs no apply. `dispose` authenticates again, requires
+unchanged state lineage/serial, binary and live ownership, then applies the exact
+reviewed deletion plan once. Success requires empty retained state and a complete
+resource-group inventory proving the owned group absent. Deallocation alone does
+not satisfy disposal because disks and IP addresses may remain billable. Old
+create-time credit evidence remains historical custody evidence during disposal;
+it is not misrepresented as a fresh spending assessment.
+
+These checks require exclusive use of the resource group and local state. Azure
+readbacks do not make Terraform deletes conditional on generation or etag. The
+resource group and subnet have no guaranteed immutable generation marker in the
+selected contracts. A concurrent replacement between inspection and deletion
+therefore remains outside this protection. Observed replacement, incomplete
+membership, pending provisioning or missing state rejects the operation.
+
+Node owns each child through the unchanged Linux limiter/supervisor; Python only
+validates files and responses. Ordinary phases have a sixty-second bound, init
+ninety seconds, deletion planning three minutes and apply five minutes, within
+the shared fifteen-minute work budget. INT, TERM and HUP request owned cleanup.
+The inherited per-file limit is 512 MiB; captured session output is at most 20 MiB
+and stderr is limited to 64 KiB. The narrow operation inventory and aggregate
+1,132-MiB bound are checked after children, not continuously enforced disk quotas.
+If the OS refuses final group termination, success is suppressed and finite
+recovery is not established.
+
+The command retains its private operation directory: plan, original bindings,
+state/backups, any `errored.tfstate`, bounded stdout, mutation intent and available
+readbacks. It does not automatically retry, destroy, remove or reconcile an
+uncertain operation. The unchanged supervisor discards raw stderr, so complete
+emergency diagnostic or state recovery is not established. A failed process may
+have started a remote operation; local settlement is not Azure cancellation.
+Publication failure may leave a complete result with durability or verification
+unconfirmed. Keep all artifacts for manual review, and never infer success from
+file presence. No runtime bootstrap, application exposure or release gate is
+satisfied by these local lifecycle observations.
+
+
 ## Saved-plan audit boundary
 
 `audit-plan.py` accepts only a protected binary `.tfplan`, rendered internally through the qualified Linux AMD64 Terraform executable. It reuses the existing beta auditor's protected file and descriptor helpers without changing beta policy. Supply the independently reviewed source digest and binary-plan SHA256. The source digest covers the executable policy, Terraform files, provider lock and reused helper; printing a digest does not approve those bytes.
@@ -162,7 +253,7 @@ The result must be new and private. It is fully written and file-synced before a
 
 Historical six-family inputs retain their original Azure collector formats: host assessment `records` for credit lots/balance; development provider `commands` for subscription/billing/Network/DevTestLab; Compute registration `commands`; exact quota and B4ps SKU `commands`; exact image `commands`. The auditor binds command identity, completion, timestamps and original receipt bytes. It consumes the selected Azure response fields and retained stdout/stderr digests; receipts that omit raw stdout do not acquire raw-byte verification through this check. Inputs are locally collected and unsigned.
 
-`live_preflight` is the exact derived subset: earliest selected read start, subscription, both spending limits, USD balance/expiry, regional/family remaining cores and all six original report hashes. Every selected read must be at most four hours old. The plan must be at most fifteen minutes old. The command recomputes these facts from original receipts and rejects mismatches. The same-day shutdown deadline must align to a UTC minute and remain one to four hours away, both when planned and when audited. Terraform preconditions recheck time and credit inputs at apply, but cannot recollect account facts; a future session executor must do that separately.
+`live_preflight` is the exact derived subset: earliest selected read start, subscription, both spending limits, USD balance/expiry, regional/family remaining cores and all six original report hashes. Every selected read must be at most four hours old. The plan must be at most fifteen minutes old. The command recomputes these facts from original receipts and rejects mismatches. The same-day shutdown deadline must align to a UTC minute and remain one to four hours away, both when planned and when audited. Terraform preconditions recheck time and credit inputs at apply. The maintained session executor separately recollects account facts before consumption; a local audit alone does not do so.
 
 At least USD20 credit and thirty-one days of credit validity beyond shutdown are required. The earlier USD15.0268 four-hour-plus-retention estimate is dated planning evidence. The reserve is not a charge cap: disks, IP retention, I/O and transfer can continue costing money after deallocation. Spending protection must remain On at both subscription and billing-profile levels.
 
