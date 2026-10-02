@@ -539,7 +539,11 @@ def audit_plan(document, documents, hashes, now):
             require(gateway is None or type(gateway) is str and gateway == "", "known NIC gateway not admitted")
         require(not H._flatten_mask(change.get("before_sensitive"), "prior sensitivity"), "prior sensitive value")
         sensitive = {("admin_password",), ("custom_data",), ("admin_ssh_key", 0, "public_key")} if resource_type == "azurerm_linux_virtual_machine" else set()
-        require(H._flatten_mask(change.get("after_sensitive"), "sensitivity") == sensitive, "sensitivity mask differs")
+        permitted_sensitive = [sensitive]
+        if resource_type == "azurerm_linux_virtual_machine":
+            # Terraform may mark the whole SSH set after its exact contents pass above.
+            permitted_sensitive.append({("admin_password",), ("custom_data",), ("admin_ssh_key",)})
+        require(H._flatten_mask(change.get("after_sensitive"), "sensitivity") in permitted_sensitive, "sensitivity mask differs")
     # If Terraform supplies planned_values, it must describe the same create graph.
     if "planned_values" in document:
         planned = document["planned_values"].get("root_module", {})

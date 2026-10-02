@@ -235,6 +235,14 @@ and the three derived nonsensitive string outputs. Existing resources, child
 modules and altered output values or types remain rejected. Approved unknown
 object fields may be omitted; known values and list positions remain mandatory.
 
+For the VM, `after_sensitive` must mark `admin_password` and `custom_data`, plus
+either the singleton `admin_ssh_key[0].public_key` leaf or the whole
+`admin_ssh_key` collection. Terraform 1.5.7 can represent a sensitive collection
+with a whole-value mark. The known singleton username and public key must still
+match the protected inputs before either mask is accepted. Unrelated sensitive
+paths remain rejected; other resource masks must contain no sensitive leaves.
+This does not add a `planned_values.sensitive_values` metadata requirement.
+
 The VM NIC reference has one field-specific alternative: Terraform may mark the
 whole list unknown. This interpretation relies on the reviewed `main.tf` singleton
 containing the owned NIC reference and the maintained command's source binding.

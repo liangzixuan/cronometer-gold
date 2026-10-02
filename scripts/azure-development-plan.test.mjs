@@ -245,7 +245,11 @@ test("parent loss closes supervisor IPC and settles its actual descendant group"
     child.kill("SIGKILL");
     await closed;
     const end = performance.now() + 5000;
-    while (running(await identity(state.pid)) && performance.now() < end) await pause();
+    while (
+      (running(await identity(state.pid)) || running(await identity(before.group))) &&
+      performance.now() < end
+    )
+      await pause();
     assert.equal(Boolean(running(await identity(state.pid))), false);
     assert.equal(Boolean(running(await identity(before.group))), false);
   } finally {

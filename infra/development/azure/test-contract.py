@@ -1454,4 +1454,79 @@ class KnownProviderDefaults(unittest.TestCase):
             f,v=self.fixtures();f['live']['vm']['properties']['virtualMachineScaleSet']=value
             with self.subTest(value=value),self.assertRaises(S.A.Error):S.live_graph(f['live'],v)
 
+
+class SshSensitivityRepresentation(unittest.TestCase):
+    VM = "azurerm_linux_virtual_machine.development"
+
+    def represented(self, whole):
+        p = plan()
+        change(p, self.VM)["after_sensitive"] = {
+            "admin_password": True, "custom_data": True,
+            "admin_ssh_key": True if whole else [{"public_key": True}],
+        }
+        return p
+
+    def test_leaf_and_whole_marks_preserve_exact_known_ssh_contents(self):
+        for whole in (False, True):
+            for whole_nic in (False, True):
+                p, _ = PlannedVmRepresentation().represented(whole_nic)
+                change(p, self.VM)["after_sensitive"] = change(self.represented(whole), self.VM)["after_sensitive"]
+                with self.subTest(whole=whole, whole_nic=whole_nic):
+                    self.assertEqual(A.audit_plan(p, evidence(), HASHES, NOW)["resource_count"], 11)
+
+    def test_missing_false_numeric_and_malformed_ssh_marks_reject(self):
+        for value in ("MISSING", None, False, 0, 0.0, 1, 1.0, "true", [], {}, [True],
+                      {"public_key": True}, {"0": {"public_key": True}},
+                      [{"public_key": 1}], [{"public_key": 0}],
+                      [{"public_key": True}, {"public_key": True}]):
+            p = self.represented(False); mask = change(p, self.VM)["after_sensitive"]
+            if value == "MISSING": mask.pop("admin_ssh_key")
+            else: mask["admin_ssh_key"] = value
+            with self.subTest(value=value), self.assertRaises(A.Error):
+                A.audit_plan(p, evidence(), HASHES, NOW)
+
+    def test_mixed_or_unrelated_sensitive_paths_reject(self):
+        for whole in (False, True):
+            for field in ("admin_username", "os_disk", "source_image_reference", "unreviewed", "admin_ssh_key[0].public_key"):
+                p = self.represented(whole); change(p, self.VM)["after_sensitive"][field] = True
+                with self.subTest(whole=whole, field=field), self.assertRaises(A.Error):
+                    A.audit_plan(p, evidence(), HASHES, NOW)
+        p = self.represented(False)
+        change(p, self.VM)["after_sensitive"]["admin_ssh_key"][0]["username"] = True
+        with self.assertRaises(A.Error): A.audit_plan(p, evidence(), HASHES, NOW)
+
+    def test_required_password_and_custom_data_marks_stay_exact(self):
+        for whole in (False, True):
+            for field in ("admin_password", "custom_data"):
+                for value in ("MISSING", None, False, 0, 0.0, 1, 1.0, "true", {}, [], {"nested": True}):
+                    p = self.represented(whole); mask = change(p, self.VM)["after_sensitive"]
+                    if value == "MISSING": mask.pop(field)
+                    else: mask[field] = value
+                    with self.subTest(whole=whole, field=field, value=value), self.assertRaises(A.Error):
+                        A.audit_plan(p, evidence(), HASHES, NOW)
+
+    def test_wrong_key_count_and_contents_reject_both_mask_forms(self):
+        for whole in (False, True):
+            original = after(self.represented(whole), self.VM)["admin_ssh_key"]
+            variants = [[], original + copy.deepcopy(original), None, True,
+                        [{**original[0], "username": "foreign"}],
+                        [{**original[0], "public_key": original[0]["public_key"] + " altered"}]]
+            for index, keys in enumerate(variants):
+                p = self.represented(whole); after(p, self.VM)["admin_ssh_key"] = keys
+                with self.subTest(whole=whole, variant=index), self.assertRaises(A.Error):
+                    A.audit_plan(p, evidence(), HASHES, NOW)
+
+    def test_whole_collection_permission_is_vm_ssh_only(self):
+        for whole in (False, True):
+            for address in A.EXPECTED - {self.VM}:
+                p = self.represented(whole); change(p, address)["after_sensitive"] = {"admin_ssh_key": True}
+                with self.subTest(whole=whole, address=address), self.assertRaises(A.Error):
+                    A.audit_plan(p, evidence(), HASHES, NOW)
+
+    def test_prior_sensitivity_remains_rejected(self):
+        for whole in (False, True):
+            p = self.represented(whole); change(p, self.VM)["before_sensitive"] = {"admin_ssh_key": True}
+            with self.subTest(whole=whole), self.assertRaises(A.Error):
+                A.audit_plan(p, evidence(), HASHES, NOW)
+
 if __name__ == '__main__': unittest.main(verbosity=2)
