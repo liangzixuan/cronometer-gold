@@ -3305,3 +3305,325 @@ it("rejects a retained day-only Retry after unmount without requests or state pu
   expect(fetch.mock.calls).toHaveLength(count);
   expect(hooks.afterClose()).toBe(0);
 });
+
+type RecoveryOverviewProps = Parameters<typeof CalmOverview>[0] & { onReloadDay: () => void };
+function recoveryOverviewProps(): RecoveryOverviewProps {
+  const summary = elements().find((node) => node.type === CalmOverview);
+  expect(summary).toBeDefined();
+  expect(summary?.props.onReloadDay).toBeTypeOf("function");
+  return summary?.props as unknown as RecoveryOverviewProps;
+}
+function recoveryProgress(revision = "9") {
+  return {
+    data: {
+      localDate: "2026-08-15",
+      timeZone: "America/Chicago",
+      diaryRevision: revision,
+      goal: null,
+      energy: null,
+      nutrients: [],
+      notice: "General wellness estimate; not medical advice.",
+    },
+  };
+}
+
+describe("Dashboard saved-target day recovery", () => {
+  it("offers Reload day on the actual revision error while Retry targets remains isolated", async () => {
+    const onReloadDay = vi.fn();
+    const fetch = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? Response.json(session()) : Response.json(recoveryProgress()),
+    );
+    vi.stubGlobal("fetch", fetch);
+    let props: RecoveryOverviewProps = {
+      day: parseDiaryPage(page()).data,
+      totalEntries: 2,
+      completeDayLoaded: true,
+      session: parseSession(session()),
+      isCurrent: () => true,
+      onUnauthorized: vi.fn(),
+      onReloadDay,
+    };
+    hooks.mount(() => CalmOverview(props));
+    await hooks.settle();
+    expect(text()).toContain("Your diary changed. Reload this day to see matching targets.");
+    expect(button("Reload day")).toBeDefined();
+    await click("Retry targets");
+    expect(onReloadDay).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/goals/progress?"))).toHaveLength(
+      2,
+    );
+    expect(
+      fetch.mock.calls.every(
+        ([url]) => url === "/api/auth/me" || url.startsWith("/api/goals/progress?"),
+      ),
+    ).toBe(true);
+    await click("Reload day");
+    expect(onReloadDay).toHaveBeenCalledTimes(1);
+    props = { ...props, day: parseDiaryPage(page(undefined, null, 2, "2026-08-15", "9")).data };
+    hooks.render();
+    await hooks.settle();
+    expect(text()).not.toContain("Your diary changed.");
+    expect(text()).toContain("No saved goal for this day.");
+    expect(elements().some((node) => node.type === "button" && text(node) === "Reload day")).toBe(
+      false,
+    );
+  });
+
+  it("reloads only the applied day once before paint and installs its new revision", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    let reads = 0;
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.startsWith("/api/diary?") && ++reads > 1 ? pending.promise : base(url, init),
+    );
+    await mount(fetch, "overview");
+    const props = recoveryOverviewProps();
+    const note = elements().find((node) => node.type === DiaryDayNote);
+    const otherCalls = fetch.mock.calls.filter(([url]) => !url.startsWith("/api/diary?")).length;
+    props.onReloadDay();
+    props.onReloadDay();
+    expect(reads).toBe(2);
+    await hooks.settle();
+    expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+    expect(elements().find((node) => node.type === DiaryDayNote)?.props.localDate).toBe(
+      note?.props.localDate,
+    );
+    pending.resolve(Response.json(page(undefined, null, 2, "2026-08-15", "9")));
+    await hooks.settle();
+    expect(recoveryOverviewProps().day.revision).toBe("9");
+    expect(recoveryOverviewProps().day.localDate).toBe("2026-08-15");
+    expect(fetch.mock.calls.filter(([url]) => !url.startsWith("/api/diary?"))).toHaveLength(
+      otherCalls,
+    );
+    expect(router.replace).not.toHaveBeenCalled();
+    const count = fetch.mock.calls.length;
+    props.onReloadDay();
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+  });
+
+  it.each([
+    "hidden",
+    "pagehide",
+    "unmount",
+    "date",
+    "route",
+    "profile",
+    "owner",
+    "unauthorized",
+  ] as const)("rejects a retained day reload after %s retirement", async (reason) => {
+    const fetch = await mount(fetcher(), "overview");
+    const props = recoveryOverviewProps();
+    if (reason === "hidden") {
+      detailLifecycle.visibility = "hidden";
+      detailLifecycle.documentListeners.get("visibilitychange")?.();
+    } else if (reason === "pagehide") {
+      detailLifecycle.windowListeners.get("pagehide")?.();
+    } else if (reason === "unmount") {
+      hooks.unmount();
+    } else if (reason === "date") {
+      invoke(button("Next day"));
+    } else if (reason === "route") {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+    } else if (reason === "profile" || reason === "owner") {
+      hooks.replaceVerifiedSessionBeforeEffects(
+        parseSession(session(reason === "owner" ? anotherOwner : owner, defaultDiaryGroups, "2")),
+      );
+    } else {
+      props.onUnauthorized();
+    }
+    const count = fetch.mock.calls.length;
+    props.onReloadDay();
+    expect(fetch.mock.calls).toHaveLength(count);
+    if (reason === "unmount") expect(hooks.afterClose()).toBe(0);
+  });
+
+  it("does not cancel pending logout and retires its callback even after ambiguous settlement", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/auth/logout" ? pending.promise : base(url, init),
+    );
+    await mount(fetch, "overview");
+    const props = recoveryOverviewProps();
+    invoke(button("Sign out"));
+    const count = fetch.mock.calls.length;
+    const signal = fetch.mock.calls.find(([url]) => url === "/api/auth/logout")?.[1]?.signal;
+    props.onReloadDay();
+    expect(fetch.mock.calls).toHaveLength(count);
+    expect(signal?.aborted).not.toBe(true);
+    pending.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    props.onReloadDay();
+    expect(fetch.mock.calls).toHaveLength(count);
+    recoveryOverviewProps().onReloadDay();
+    await hooks.settle();
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(2);
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/logout")).toHaveLength(1);
+  });
+});
+
+describe("Dashboard saved-target day recovery controls", () => {
+  it("keeps healthy water/activity cards and the selected note mounted through day recovery", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    let reads = 0;
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/diary?") && ++reads > 1) return pending.promise;
+      const common = {
+        localDate: "2026-08-15",
+        timeZone: "America/Chicago",
+        revision: "2",
+        entries: [],
+        updatedAt: "2026-08-15T13:05:02.000Z",
+      };
+      if (url.startsWith("/api/hydration?"))
+        return Response.json({ data: { ...common, totalMilliliters: 0 } });
+      if (url.startsWith("/api/activities?"))
+        return Response.json({ data: { ...common, totalDurationMinutes: 0 } });
+      return base(url, init);
+    });
+    await mount(fetch, "overview");
+    const cards = () =>
+      elements().find((node) => "hydration" in node.props && "activity" in node.props);
+    expect(cards()?.props.hydration).toEqual({ status: "empty", count: 0, total: 0 });
+    expect(cards()?.props.activity).toEqual({ status: "empty", count: 0, total: 0 });
+    const cardProps = cards()?.props;
+    const noteKey = elements().find((node) => node.type === DiaryDayNote)?.props.localDate;
+    recoveryOverviewProps().onReloadDay();
+    await hooks.settle();
+    expect(cards()?.props.hydration).toEqual(cardProps?.hydration);
+    expect(cards()?.props.activity).toEqual(cardProps?.activity);
+    expect(elements().find((node) => node.type === DiaryDayNote)?.props.localDate).toBe(noteKey);
+    pending.resolve(Response.json(page(undefined, null, 2, "2026-08-15", "9")));
+    await hooks.settle();
+    expect(cards()?.props.hydration).toEqual(cardProps?.hydration);
+    expect(cards()?.props.activity).toEqual(cardProps?.activity);
+    expect(
+      fetch.mock.calls.filter(
+        ([url]) => url.startsWith("/api/hydration?") || url.startsWith("/api/activities?"),
+      ),
+    ).toHaveLength(2);
+  });
+
+  it.each(["503", "401"] as const)(
+    "keeps the maintained current %s day-load outcome",
+    async (status) => {
+      const base = fetcher();
+      let reads = 0;
+      const fetch = vi.fn(async (url: string, init?: RequestInit) =>
+        url.startsWith("/api/diary?") && ++reads > 1
+          ? Response.json({ error: "Reload unavailable." }, { status: Number(status) })
+          : base(url, init),
+      );
+      await mount(fetch, "overview");
+      recoveryOverviewProps().onReloadDay();
+      await hooks.settle();
+      expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+      if (status === "401") expect(router.replace).toHaveBeenCalledWith("/login");
+      else {
+        expect(text()).toContain("Reload unavailable.");
+        expect(button("Retry")).toBeDefined();
+        expect(router.replace).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("retires an old callback through hidden then visible without waiting for paint", async () => {
+    const fetch = await mount(fetcher(), "overview");
+    const props = recoveryOverviewProps();
+    detailLifecycle.visibility = "hidden";
+    detailLifecycle.documentListeners.get("visibilitychange")?.();
+    detailLifecycle.visibility = "visible";
+    detailLifecycle.documentListeners.get("visibilitychange")?.();
+    const count = fetch.mock.calls.length;
+    props.onReloadDay();
+    expect(fetch.mock.calls).toHaveLength(count);
+    await hooks.settle();
+    recoveryOverviewProps().onReloadDay();
+    await hooks.settle();
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(2);
+  });
+
+  it("rejects a retained overview callback after the view route changes before effects", async () => {
+    const fetch = fetcher();
+    let view: "overview" | "diary" = "overview";
+    vi.stubGlobal("fetch", fetch);
+    hooks.mount(() => DiaryClient({ view }));
+    await hooks.settle();
+    const props = recoveryOverviewProps();
+    view = "diary";
+    hooks.renderWithoutEffects();
+    const count = fetch.mock.calls.length;
+    props.onReloadDay();
+    expect(fetch.mock.calls).toHaveLength(count);
+  });
+
+  it("does not interrupt a profile write initiated by a retained diary form", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/profile" ? pending.promise : base(url, init),
+    );
+    let view: "overview" | "diary" = "diary";
+    vi.stubGlobal("fetch", fetch);
+    hooks.mount(() => DiaryClient({ view }));
+    await hooks.settle();
+    await click("Customize diary groups");
+    await change("Group 1 label", "Morning meal");
+    const form = elements().find(
+      (node) => node.type === "form" && text(node).includes("Save groups"),
+    );
+    if (!form) throw new Error("Missing profile form");
+    view = "overview";
+    hooks.render();
+    await hooks.settle();
+    const props = recoveryOverviewProps();
+    invoke(form, "onSubmit", { preventDefault() {} });
+    const count = fetch.mock.calls.length;
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/profile")).toHaveLength(1);
+    props.onReloadDay();
+    expect(fetch.mock.calls).toHaveLength(count);
+    expect(fetch.mock.calls.find(([url]) => url === "/api/profile")?.[1]?.signal?.aborted).toBe(
+      false,
+    );
+    pending.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    recoveryOverviewProps().onReloadDay();
+    await hooks.settle();
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(2);
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/profile")).toHaveLength(1);
+  });
+
+  it("keeps target-service retry local and still rejects a changed profile", async () => {
+    let healthy = false;
+    const onReloadDay = vi.fn();
+    const fetch = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return Response.json(session(owner, defaultDiaryGroups, "2"));
+      return healthy ? Response.json(recoveryProgress("8")) : Response.json({}, { status: 503 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const props: RecoveryOverviewProps = {
+      day: parseDiaryPage(page()).data,
+      totalEntries: 2,
+      completeDayLoaded: true,
+      session: parseSession(session()),
+      isCurrent: () => true,
+      onUnauthorized: vi.fn(),
+      onReloadDay,
+    };
+    hooks.mount(() => CalmOverview(props));
+    await hooks.settle();
+    expect(text()).toContain("Saved targets could not be loaded.");
+    healthy = true;
+    await click("Retry targets");
+    expect(text()).toContain("Your profile changed. Reload this day to see saved targets.");
+    expect(onReloadDay).not.toHaveBeenCalled();
+    expect(
+      fetch.mock.calls.every(
+        ([url]) => url === "/api/auth/me" || url.startsWith("/api/goals/progress?"),
+      ),
+    ).toBe(true);
+  });
+});

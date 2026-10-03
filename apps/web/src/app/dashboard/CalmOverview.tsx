@@ -41,6 +41,7 @@ interface CalmOverviewProps {
   readonly session: SessionSummary;
   readonly isCurrent: () => boolean;
   readonly onUnauthorized: () => void;
+  readonly onReloadDay: () => void;
 }
 
 function displayNutrient(nutrient: DiaryNutrient | undefined) {
@@ -108,6 +109,7 @@ export function CalmOverview({
   session,
   isCurrent,
   onUnauthorized,
+  onReloadDay,
 }: CalmOverviewProps) {
   const [goals, setGoals] = useState<{
     readonly scope: string;
@@ -257,6 +259,9 @@ export function CalmOverview({
                 onClick={() => setRetry((value) => value + 1)}
               >
                 Retry targets
+              </button>{" "}
+              <button className="buttonQuiet" type="button" onClick={onReloadDay}>
+                Reload day
               </button>
             </p>
           ) : !currentGoals ? (

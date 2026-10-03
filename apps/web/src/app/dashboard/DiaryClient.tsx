@@ -2073,6 +2073,21 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
             session={session}
             isCurrent={isOverviewCurrent}
             onUnauthorized={signInAgain}
+            onReloadDay={() => {
+              if (
+                !isOverviewCurrent() ||
+                !sessionActive.current ||
+                !entryNutrientActive.current ||
+                entryNutrientEpoch.current !== renderedNutrientEpoch ||
+                sessionRouteRef.current !== sessionRoute ||
+                sessionRequestGeneration.current !== renderedSessionRequestGeneration ||
+                !canUseEntryEditorControls() ||
+                editorRef.current !== null ||
+                timeZoneRefreshController.current !== null
+              )
+                return;
+              void loadDiary(date);
+            }}
           />
         ) : null}
         {view === "overview" ? (

@@ -252,6 +252,7 @@ describe("Calm overview nutrition semantics", () => {
         session={session}
         isCurrent={() => true}
         onUnauthorized={vi.fn()}
+        onReloadDay={() => {}}
       />,
     );
     expect(markup).toContain("Totals cover all 45 diary entries");
@@ -287,6 +288,7 @@ describe("Calm overview nutrition semantics", () => {
         session={customSession}
         isCurrent={() => true}
         onUnauthorized={vi.fn()}
+        onReloadDay={() => {}}
       />,
     );
     expect(markup).toContain("Early meal");
