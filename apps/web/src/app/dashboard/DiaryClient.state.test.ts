@@ -3627,3 +3627,191 @@ describe("Dashboard saved-target day recovery controls", () => {
     ).toBe(true);
   });
 });
+
+describe("Diary cross-entry editor protection", () => {
+  function successfulActions() {
+    let entries = [entry(0), entry(1, "lunch")];
+    let reads = 0;
+    const writes: Array<{
+      url: string;
+      method: string;
+      body: string | null;
+      headers: Record<string, string>;
+    }> = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/diary?")) {
+        reads += 1;
+        return Response.json(page(entries, null, entries.length, "2026-08-15", String(7 + reads)));
+      }
+      if (init?.method) {
+        writes.push({
+          url,
+          method: init.method,
+          body: typeof init.body === "string" ? init.body : null,
+          headers: Object.fromEntries(new Headers(init.headers)),
+        });
+        if (init.method === "POST") {
+          const receipt = repeatReceipt(captureRepeat(url, init));
+          entries = [...entries, receipt.data.entry];
+          return Response.json(receipt);
+        }
+        if (init.method === "PATCH") {
+          const receipt = editorSaveReceipt(captureEditorSave(url, init));
+          entries = entries.map((value) =>
+            value.id === receipt.data.entry.id ? receipt.data.entry : value,
+          );
+          return Response.json(receipt);
+        }
+        if (init.method === "DELETE") {
+          const original = entry(1, "lunch");
+          const affectedDays = [{ localDate: "2026-08-15", revision: "9" }];
+          const receipt = {
+            data: {
+              replayed: false,
+              entry: null,
+              affectedDays,
+              receipt: {
+                protocol: "v1",
+                operationId: new Headers(init.headers).get("idempotency-key"),
+                kind: "delete",
+                expectedSubjects: [{ entryId: original.id, revision: "3" }],
+                resultSubjects: [{ entryId: original.id, revision: "4", state: "deleted" }],
+                affectedDays,
+              },
+            },
+          };
+          expect(() => parseDiaryCorrectionMutation(receipt)).not.toThrow();
+          entries = entries.filter((value) => value.id !== original.id);
+          return Response.json(receipt);
+        }
+        throw new Error(`Unexpected mutation: ${init.method}`);
+      }
+      return base(url, init);
+    });
+    return { fetch, writes, reads: () => reads };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T18:00:00.000Z"));
+  });
+
+  it.each(["Repeat Apple 1 today", "Delete Apple 1"])(
+    "protects the raw draft from the ordinary other-entry %s control",
+    async (action) => {
+      const fixture = successfulActions();
+      await mount(fixture.fetch);
+      await prepareSaveLockDraft();
+      await changeEditorField("Local date", "2026-08-16");
+      const raw = editorValues();
+      const requests = fixture.fetch.mock.calls.length;
+      const control = button(action);
+      // Follow the rendered control: an enabled action reaches a real accepted
+      // receipt and readback on the original source, which discards the draft.
+      if (control.props.disabled !== true) invoke(control);
+      await hooks.settle();
+      expect({
+        mutationCount: fixture.writes.length,
+        diaryReads: fixture.reads(),
+        editorPresent: elements().some((node) => node.props.className === "entryEditor"),
+      }).toEqual({ mutationCount: 0, diaryReads: 1, editorPresent: true });
+      expect(editorValues()).toEqual(raw);
+      expect(fixture.fetch.mock.calls).toHaveLength(requests);
+      expect(button(action).props.disabled).toBe(true);
+      expect(window.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["Repeat Apple 1 today", "Delete Apple 1"])(
+    "rejects the retained %s callback immediately when an editor opens",
+    async (action) => {
+      const fixture = successfulActions();
+      await mount(fixture.fetch);
+      const retained = button(action);
+      const requests = fixture.fetch.mock.calls.length;
+      invoke(button("Edit Apple 0"));
+      invoke(retained);
+      await hooks.settle();
+      expect(fixture.writes).toHaveLength(0);
+      expect(fixture.fetch.mock.calls).toHaveLength(requests);
+      expect(editorField("Quantity").props.value).toBe("1.250000");
+      expect(window.confirm).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["Cancel", "Repeat Apple 1 today"],
+    ["Cancel", "Delete Apple 1"],
+    ["Save", "Repeat Apple 1 today"],
+    ["Save", "Delete Apple 1"],
+  ])("allows %s followed by the normal %s action", async (close, action) => {
+    const fixture = successfulActions();
+    await mount(fixture.fetch);
+    await prepareSaveLockDraft();
+    await click(close === "Cancel" ? "Cancel editing Apple 0" : "Save changes to Apple 0");
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    const writes = fixture.writes.length;
+    const reads = fixture.reads();
+    await click(action);
+    expect(fixture.writes).toHaveLength(writes + 1);
+    expect(fixture.reads()).toBe(reads + 1);
+    expect(text()).toContain(
+      action.startsWith("Repeat")
+        ? "Pinned entry version repeated in Lunch with fresh authoritative totals."
+        : "Apple 1 deleted from Lunch and totals refreshed.",
+    );
+    if (close === "Save") {
+      expect(text(group("dinner"))).toContain("2.125000 × medium apple");
+      expect(text(group("dinner"))).toContain("Keep this exact draft");
+    }
+  });
+
+  it.each(["today", "custom destination"] as const)(
+    "preserves the uncertain %s repeat envelope through an intervening editor",
+    async (destination) => {
+      const writes: CapturedRepeat[] = [];
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          const request = captureRepeat(url, init);
+          writes.push(request);
+          return writes.length === 1
+            ? Response.json({ error: "The response may have been lost." }, { status: 503 })
+            : Response.json(repeatReceipt(request));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      if (destination === "custom destination") {
+        await click("Repeat Apple 1 to another day or meal");
+        await change("Repeat date", "2026-08-20");
+        await change("Repeat meal", "dinner");
+        await click("Confirm repeat destination");
+      } else {
+        await click("Repeat Apple 1 today");
+      }
+      expect(writes).toHaveLength(1);
+      const label = destination === "today" ? "Repeat Apple 1 today" : "Retry repeat for Apple 1";
+      const retained = button(label);
+      await prepareSaveLockDraft();
+      const raw = editorValues();
+      const requests = fetch.mock.calls.length;
+      expect(button(label).props.disabled).toBe(true);
+      invoke(retained);
+      invoke(button(label));
+      await hooks.settle();
+      expect(writes).toHaveLength(1);
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(editorValues()).toEqual(raw);
+      await click("Cancel editing Apple 0");
+      vi.setSystemTime(new Date("2026-08-16T19:20:00.000Z"));
+      await click(label);
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(writes[1]?.headers["if-match"]).toBe('"3"');
+      expect(writes[1]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+      expect(text()).toContain("Pinned entry version repeated");
+    },
+  );
+});

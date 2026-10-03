@@ -1241,6 +1241,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   async function deleteEntry(entry: DiaryEntry) {
     if (
+      editorRef.current !== null ||
       !diary ||
       !window.confirm(
         `Delete ${entryName(entry)} from ${diaryGroupLabel(diaryGroups, entry.mealSlot)}?`,
@@ -1315,6 +1316,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   function canRepeatEntry(entry: DiaryEntry) {
     return !(
+      editorRef.current !== null ||
       !session ||
       !diary ||
       privateUiClosed.current ||
@@ -2391,7 +2393,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                                     ? `Retry repeat for ${entryName(entry)}`
                                                     : `Repeat ${entryName(entry)} today`
                                                 }
-                                                disabled={mutationBusy !== null}
+                                                disabled={mutationBusy !== null || editor !== null}
                                                 onClick={() =>
                                                   void repeatEntry(
                                                     entry,
@@ -2425,7 +2427,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                                 aria-label={`Delete ${entryName(entry)}`}
                                                 className="dangerAction"
                                                 disabled={
-                                                  mutationBusy !== null || diary.status === "locked"
+                                                  mutationBusy !== null ||
+                                                  editor !== null ||
+                                                  diary.status === "locked"
                                                 }
                                                 onClick={() => void deleteEntry(entry)}
                                                 type="button"
