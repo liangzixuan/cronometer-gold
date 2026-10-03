@@ -478,6 +478,8 @@ export function FoodSearchScreen({
 
   const runSearch = useCallback(
     async (requestedQuery: string, cursor?: string) => {
+      searchController.current?.abort();
+      searchController.current = null;
       const normalized = normalizeSearchText(requestedQuery);
       if (!normalized) {
         setResults([]);
@@ -496,7 +498,6 @@ export function FoodSearchScreen({
         return;
       }
 
-      searchController.current?.abort();
       if (cursor === undefined) {
         setResults([]);
         setNextCursor(null);
@@ -504,6 +505,8 @@ export function FoodSearchScreen({
       }
       const controller = new AbortController();
       searchController.current = controller;
+      const requestIsCurrent = () =>
+        searchController.current === controller && !controller.signal.aborted;
       setSearchState("loading");
       setSearchMessage(cursor ? "Loading more foods…" : `Searching for “${normalized}”…`);
 
@@ -513,6 +516,7 @@ export function FoodSearchScreen({
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
+        if (!requestIsCurrent()) return;
         if (isInvalidContinuationResponse(response.status, cursor)) {
           setNextCursor(null);
           setSearchState("error");
@@ -523,7 +527,7 @@ export function FoodSearchScreen({
         }
         if (!response.ok) throw new Error("search-unavailable");
         const page = parseSearchPage(await jsonBody(response));
-        if (controller.signal.aborted) return;
+        if (!requestIsCurrent()) return;
         const merged = mergeSearchResults(results, page.data, cursor !== undefined);
         setResults(merged);
         setNextCursor(page.page.nextCursor);
@@ -535,7 +539,7 @@ export function FoodSearchScreen({
             : `${merged.length} ${merged.length === 1 ? "result" : "results"} shown for “${normalized}”.`,
         );
       } catch {
-        if (!controller.signal.aborted) {
+        if (requestIsCurrent()) {
           setSearchState("error");
           setSearchMessage("Food search is unavailable right now. Your query was not saved.");
         }

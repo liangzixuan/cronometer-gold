@@ -761,3 +761,186 @@ describe("native public-food log date shortcuts", () => {
 vi.mock("../src/api/mobile-fetch", () => ({
   mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
 }));
+
+describe("mobile search request retirement", () => {
+  function button(tree, label) {
+    const found = nodes(tree, (n) => n.type === "Pressable" && text(n).trim() === label);
+    expect(found).toHaveLength(1);
+    return found[0];
+  }
+  function page(rows = [hit], nextCursor = null) {
+    return response({ data: rows, page: { nextCursor } });
+  }
+  function installSearch(responder) {
+    const requests = [];
+    globalThis.fetch.mockImplementation((input, options) => {
+      const url = new URL(input);
+      if (url.pathname.endsWith("/autocomplete")) return Promise.resolve(response({ data: [] }));
+      expect(url.pathname).toBe("/v1/foods/search");
+      const request = { url, signal: options.signal };
+      requests.push(request);
+      return Promise.resolve().then(() => responder(request));
+    });
+    return requests;
+  }
+  async function submit(c, query) {
+    await c.edit("Food or brand", query);
+    byLabel(c.tree, "Food or brand").props.onSubmitEditing();
+    return c.settle();
+  }
+  function expectEmpty(c) {
+    expect(text(c.tree)).toContain("Enter a food or brand name before searching.");
+    expect(
+      nodes(c.tree, (n) => /^Add .+ of Apple$/u.test(n.props.accessibilityLabel ?? "")),
+    ).toHaveLength(0);
+    expect(
+      nodes(c.tree, (n) => n.type === "Pressable" && text(n).trim() === "Load more results"),
+    ).toHaveLength(0);
+    expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(c.controller.requestDrain).not.toHaveBeenCalled();
+  }
+
+  for (const blank of ["", " \t\n "]) {
+    for (const phase of ["response", "body"]) {
+      it(`keeps ${blank === "" ? "empty" : "whitespace"} keyboard submission empty after a retired ${phase}`, async () => {
+        const c = await setup();
+        const held = deferred();
+        const requests = installSearch(() =>
+          phase === "response" ? held.promise : { ok: true, status: 200, json: () => held.promise },
+        );
+        try {
+          await submit(c, "retired apples");
+          expect(requests).toHaveLength(1);
+          await submit(c, blank);
+          expectEmpty(c);
+          const emptyView = text(c.tree);
+          held.resolve(
+            phase === "response"
+              ? page([hit], "s1.next")
+              : { data: [hit], page: { nextCursor: "s1.next" } },
+          );
+          await c.settle();
+          expectEmpty(c);
+          expect(text(c.tree)).toBe(emptyView);
+          expect(requests[0].signal.aborted).toBe(true);
+          expect(requests).toHaveLength(1);
+          installSearch(() => page());
+          await submit(c, "fresh apples");
+          expect(add(c.tree)).toBeDefined();
+          expect(text(c.tree)).toContain("1 result shown for “fresh apples”.");
+          expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+        } finally {
+          held.resolve(page());
+          await c.settle();
+        }
+      });
+    }
+  }
+
+  for (const outcome of ["network", "http", "malformed"]) {
+    it(`ignores a retired ${outcome} failure after blank validation`, async () => {
+      const c = await setup();
+      const held = deferred();
+      const requests = installSearch(() =>
+        held.promise.then(() => {
+          if (outcome === "network") throw new Error("synthetic unavailable");
+          if (outcome === "http") return { ok: false, status: 503, json: async () => ({}) };
+          return response({ data: "malformed" });
+        }),
+      );
+      try {
+        await submit(c, "retired apples");
+        await submit(c, "");
+        const emptyView = text(c.tree);
+        held.resolve();
+        await c.settle();
+        expectEmpty(c);
+        expect(text(c.tree)).toBe(emptyView);
+        expect(requests[0].signal.aborted).toBe(true);
+      } finally {
+        held.resolve();
+        await c.settle();
+      }
+    });
+  }
+
+  for (const destination of ["blank", "fresh search"]) {
+    it(`ignores a retired invalid continuation after ${destination}`, async () => {
+      const c = await setup();
+      const held = deferred();
+      const requests = installSearch(({ url }) =>
+        url.searchParams.has("cursor") ? held.promise : page([hit], "s1.next"),
+      );
+      try {
+        await submit(c, "paged apples");
+        button(c.tree, "Load more results").props.onPress();
+        await c.settle();
+        expect(requests).toHaveLength(2);
+        await submit(c, destination === "blank" ? "" : "fresh apples");
+        const currentView = text(c.tree);
+        held.resolve({ ok: false, status: 400, json: async () => ({}) });
+        await c.settle();
+        expect(text(c.tree)).toBe(currentView);
+        expect(requests[1].signal.aborted).toBe(true);
+        expect(text(c.tree)).not.toContain("These results changed while you were browsing");
+        if (destination === "blank") expectEmpty(c);
+        else expect(text(c.tree)).toContain("1 result shown for “fresh apples”.");
+        expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+        expect(c.controller.requestDrain).not.toHaveBeenCalled();
+      } finally {
+        held.resolve({ ok: false, status: 400 });
+        await c.settle();
+      }
+    });
+  }
+
+  it("retains valid pagination merging and current continuation-expiry recovery", async () => {
+    const c = await setup();
+    const second = { ...hit, foodId: "102", foodVersionId: "203", name: "Pear" };
+    const requests = installSearch(({ url }) => {
+      const cursor = url.searchParams.get("cursor");
+      if (cursor === "s1.first") return page([hit, second], "s1.expired");
+      if (cursor === "s1.expired") return { ok: false, status: 400 };
+      return page([hit], "s1.first");
+    });
+    await submit(c, "fruit");
+    button(c.tree, "Load more results").props.onPress();
+    await c.settle();
+    expect(text(c.tree)).toContain("2 results shown for “fruit”.");
+    expect(add(c.tree)).toBeDefined();
+    expect(
+      nodes(c.tree, (n) => /^Add .+ of Pear$/u.test(n.props.accessibilityLabel ?? "")),
+    ).toHaveLength(1);
+    expect(requests[1].url.searchParams.get("cursor")).toBe("s1.first");
+    button(c.tree, "Load more results").props.onPress();
+    await c.settle();
+    expect(text(c.tree)).toContain(
+      "These results changed while you were browsing. Search again for a fresh result set.",
+    );
+    expect(
+      nodes(c.tree, (n) => n.type === "Pressable" && text(n).trim() === "Load more results"),
+    ).toHaveLength(0);
+    await submit(c, "fresh fruit");
+    expect(text(c.tree)).toContain("1 result shown for “fresh fruit”.");
+    expect(requests).toHaveLength(4);
+    expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(c.controller.requestDrain).not.toHaveBeenCalled();
+  });
+
+  it("does not write a late continuation error after unmount", async () => {
+    const c = await setup();
+    const held = deferred();
+    const requests = installSearch(({ url }) =>
+      url.searchParams.has("cursor") ? held.promise : page([hit], "s1.next"),
+    );
+    await submit(c, "paged apples");
+    button(c.tree, "Load more results").props.onPress();
+    await c.settle();
+    c.h.unmount();
+    held.resolve({ ok: false, status: 400 });
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    expect(requests[1].signal.aborted).toBe(true);
+    expect(c.h.writesAfterUnmount).toBe(0);
+    expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+});
