@@ -138,7 +138,7 @@ qualified invocations.
 
 ## Execute and dispose of an owned empty-host session
 
-The native Linux session command has six fixed modes. Select any real mutation
+The native Linux session command has seven fixed modes. Select any real mutation
 separately after reviewing the exact plan and current resource budget. The local
 tests use synthetic Azure/Terraform responses and do not qualify a real allocation,
 shutdown or deletion.
@@ -149,6 +149,7 @@ node scripts/azure-development-session.mjs execute --input /absolute/private/exe
 node scripts/azure-development-session.mjs reconcile --input /absolute/private/reconcile.json
 node scripts/azure-development-session.mjs reconcile-partial --input /absolute/private/reconcile-partial.json
 node scripts/azure-development-session.mjs reconcile-dispose --input /absolute/private/reconcile-dispose.json
+node scripts/azure-development-session.mjs observe-shutdown --input /absolute/private/observe-shutdown.json
 node scripts/azure-development-session.mjs prepare-dispose --input /absolute/private/prepare-dispose.json
 node scripts/azure-development-session.mjs dispose --input /absolute/private/dispose.json
 ```
@@ -168,6 +169,9 @@ the entire bound inside the authorized work window. Mode-specific fields are:
 - `reconcile-dispose`: `dispose_request`, `dispose_directory`, `dispose_session_sha256`
   and `dispose_intent_sha256`, binding the separate original disposal request,
   private directory, session snapshot and durable unknown-outcome intent.
+- `observe-shutdown`: `ownership_result`, `ownership_result_sha256`, referring to
+  a completed `execute` or complete `reconcile` result. Partial ownership, disposal
+  and previous observation results are rejected.
 - `prepare-dispose`: `ownership_result`, `ownership_result_sha256`, referring to
   the completed execution or separate reconciliation result and its retained
   exact local state.
@@ -272,6 +276,25 @@ settlement, remote quiescence and exclusive use remain prerequisites. Current
 absence is not remote operation completion or scheduled-shutdown evidence.
 Reduced or lost state requires separate recovery; this result cannot authorize
 another deletion. Tests use synthetic responses and establish no real Azure cleanup.
+
+`observe-shutdown` makes one read-only observation after the original shutdown
+deadline has passed. It preserves the original private ownership directory and
+checks its exact state, lineage, serial, resource IDs and generation identifiers.
+Fresh authentication, complete state rendering and the full resource graph remain
+required. The fixed VM GET uses `api-version=2026-03-01&$expand=instanceView`, so
+the runtime status and VM generation arrive in the same response. Only one
+unambiguous `PowerState/deallocated` is accepted; stopped, running, transitional,
+missing and malformed states fail. Display text and optional status timestamps
+do not establish the power state or when it changed.
+
+The separate private result binds the original ownership receipt and the fresh
+response/phase hashes. Original allocation facts are checked only at their recorded
+admission time; the new deadline does not renew them. This is Azure's reported
+last-known state, without proof of schedule causation, transition time, permanent
+shutdown, remote-operation completion or external quiescence. It is not disposal:
+disks and IP addresses may still incur charges. Observation results cannot become
+ownership or deletion-preparation inputs. There is no stop/deallocate call,
+polling or retry, and local synthetic tests do not qualify real Azure shutdown.
 
 These checks require exclusive use of the resource group and local state. Azure
 readbacks do not make Terraform deletes conditional on generation or etag. The

@@ -2026,4 +2026,166 @@ class DisposalReconciliation(unittest.TestCase):
         with self.assertRaises(FileExistsError):S.finish(*self.args)
         self.assertEqual((self.directory/'result.json').read_bytes(),result);self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
 
+
+
+class ShutdownObservation(unittest.TestCase):
+    setUp = SessionPolicy.setUp
+    prepare = SessionPolicy.prepare
+    auth = SessionPolicy.auth
+    material = SessionPolicy.material
+    fresh = SessionPolicy.fresh
+    execute_complete = SessionPolicy.execute_complete
+    phase_receipt = SessionPolicy.phase_receipt
+
+    def request_observation(self, instant=None):
+        self.instant=instant or NOW+timedelta(hours=2,minutes=1)
+        self.request={'schema_version':1,'source_sha256':S.source_digest(),'operation_name':'nourishing-session-'+'d'*12,
+            'not_after_utc':(self.instant+timedelta(minutes=18)).isoformat().replace('+00:00','Z'),
+            'ownership_result':str(self.ownership),'ownership_result_sha256':A.sha(self.ownership.read_bytes())}
+        self.input=self.root/'observe-request.json';Q.write_json(self.input,self.request)
+
+    def ready(self):
+        self.description=S.prepare('observe-shutdown',self.input,self.instant);self.directory=Path(self.description['directory'])
+        self.args=('observe-shutdown',self.input,self.directory,self.description['state_sha256'],self.instant)
+        Q.write_json(self.directory/'version.json',{'terraform_version':'1.5.7','platform':'linux_amd64'})
+        self.auth();Q.write_json(self.directory/'state.json',self.responses['state'])
+        for name,value in self.responses['live'].items():
+            value=copy.deepcopy(value)
+            if name=='vm':
+                value['etag']='fresh response, not generation identity'
+                value['properties']['instanceView']={'statuses':[
+                    {'code':'ProvisioningState/succeeded','level':'Info','displayStatus':'Provisioning succeeded'},
+                    {'code':'PowerState/deallocated','level':'Info','displayStatus':'VM deallocated'}]}
+            Q.write_json(self.directory/('before-'+name+'.json'),value)
+        (self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        self.observation_phases()
+
+    def observation_phases(self):
+        phases=SessionPolicy.phase_receipt(self,'reconcile')
+        vm=next(p for p in phases if p['phase']=='before-vm')
+        vm['arguments'][4]+='&$expand=instanceView'
+        vm['argumentsSha256']=A.sha(json.dumps(vm['arguments'],separators=(',',':')).encode())
+        (self.directory/'phases.json').write_text(json.dumps(phases)+'\n')
+        return phases
+
+    def complete_origin(self):
+        self.execute_complete();self.original=self.directory;self.original_tree=Q.tree(self.original)
+        self.request_observation();self.ready()
+
+    def test_deallocated_after_original_deadline_is_distinct_readonly_observation(self):
+        self.complete_origin();S.finish(*self.args);r=S.private(self.directory/'result.json')[0]
+        self.assertEqual(r['mode'],'observe-shutdown');self.assertTrue(r['deallocation_observed'])
+        self.assertEqual(r['power_state'],'PowerState/deallocated')
+        self.assertEqual(r['ownership_result_sha256'],A.sha(self.ownership.read_bytes()))
+        for key in ('schedule_causation_verified','transition_time_verified','permanent_shutdown_verified',
+                    'remote_operation_completion_verified','external_quiescence_verified','zero_remaining_cost_verified'):
+            self.assertIs(r[key],False)
+        self.assertNotIn('disposed',r);self.assertNotIn('reconciled',r)
+        self.assertNotEqual(r['readback_sha256'],S.private(self.ownership)[0]['readback_sha256'])
+        self.assertFalse((self.directory/'mutation-intent.json').exists())
+        self.assertEqual(Q.tree(self.original),self.original_tree)
+
+    def test_deadline_must_have_passed_and_original_fact_time_is_not_renewed(self):
+        self.execute_complete()
+        self.request_observation(NOW+timedelta(hours=2))
+        with self.assertRaises(S.A.Error):S.prepare('observe-shutdown',self.input,self.instant)
+        with self.assertRaises(S.A.Error):S.prepare('observe-shutdown',self.input,NOW+timedelta(hours=1,minutes=59))
+        self.assertFalse((self.root/self.request['operation_name']).exists())
+
+    def test_only_complete_ownership_and_exact_request_are_admitted(self):
+        self.execute_complete();self.request_observation();saved=self.ownership.read_bytes();request=copy.deepcopy(self.request)
+        for mode in ('reconcile-partial','prepare-dispose','dispose','reconcile-dispose','observe-shutdown'):
+            value=json.loads(saved);value['mode']=mode
+            self.ownership.write_text(json.dumps(value));self.request['ownership_result_sha256']=A.sha(self.ownership.read_bytes())
+            self.input.write_text(json.dumps(self.request))
+            with self.subTest(mode=mode),self.assertRaises(S.A.Error):S.prepare('observe-shutdown',self.input,self.instant)
+        self.ownership.write_bytes(saved)
+        for change in ({'source_sha256':'0'*64},{'ownership_result_sha256':'0'*64},{'unexpected':True},{'not_after_utc':'bad'}):
+            self.input.write_text(json.dumps(request|change))
+            with self.subTest(change=change),self.assertRaises((S.A.Error,ValueError)):S.prepare('observe-shutdown',self.input,self.instant)
+
+    def test_power_status_must_be_unique_typed_and_deallocated(self):
+        self.complete_origin();path=self.directory/'before-vm.json';original=json.loads(path.read_text())
+        good=original['properties']['instanceView']['statuses']
+        cases=[None,{},[],[None],
+            [{'code':'PowerState/deallocated','level':True}],
+            [{'code':'PowerState/deallocated','level':'Info','displayStatus':False}],
+            [{'code':'PowerState/deallocated','level':'Info','time':'invalid'}],
+            good+[good[-1]],good+[{'code':'PowerState/running','level':'Info'}],
+            [{'code':False,'level':'Info'}]]
+        cases += [[{'code':'PowerState/'+state,'level':'Info','displayStatus':'VM deallocated'}]
+                  for state in ('running','stopped','starting','stopping','deallocating','unknown')]
+        for statuses in cases:
+            value=copy.deepcopy(original);value['properties']['instanceView']['statuses']=statuses
+            path.write_text(json.dumps(value));self.observation_phases()
+            with self.subTest(statuses=statuses),self.assertRaises((S.A.Error,ValueError)):S.finish(*self.args)
+            self.assertFalse((self.directory/'result.json').exists())
+        value=copy.deepcopy(original);del value['properties']['instanceView'];path.write_text(json.dumps(value));self.observation_phases()
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+
+    def test_state_generation_and_foreign_graph_changes_reject(self):
+        self.complete_origin()
+        for file,change in [
+            ('before-vm.json',lambda d:d['properties'].update(vmId='99999999-9999-9999-9999-999999999999')),
+            ('before-vm.json',lambda d:d.update(id='/foreign')),
+            ('before-vm.json',lambda d:d['properties'].update(provisioningState='Updating')),
+            ('before-members.json',lambda d:d['value'].append({'id':'/foreign'})),
+            ('before-schedule.json',lambda d:d['properties'].update(status='Disabled')),
+            ('state.json',lambda d:d['values']['root_module']['resources'].pop()),
+            ('work/terraform.tfstate',lambda d:d.update(serial=2))]:
+            path=self.directory/file;raw=path.read_bytes();value=json.loads(raw);change(value);path.write_text(json.dumps(value))
+            self.observation_phases()
+            with self.subTest(file=file),self.assertRaises((S.A.Error,ValueError)):S.finish(*self.args)
+            path.write_bytes(raw)
+        original=self.ownership.read_bytes();self.ownership.write_bytes(original+b' ')
+        with self.assertRaises(S.A.Error):S.verify(*self.args)
+        self.ownership.write_bytes(original)
+
+    def test_completion_requires_exact_fresh_readonly_phase_and_output_bindings(self):
+        self.complete_origin();path=self.directory/'phases.json';saved=path.read_bytes()
+        for mutate in [lambda p:p.pop(),lambda p:p.append(copy.deepcopy(p[-1])),lambda p:p.reverse(),
+            lambda p:p[0].update(exitCode=False),lambda p:p[0].update(executableSha256='0'*64),
+            lambda p:next(x for x in p if x['phase']=='before-vm')['arguments'].__setitem__(4,'https://foreign'),
+            lambda p:next(x for x in p if x['phase']=='before-vm').update(stdoutSha256='0'*64),
+            lambda p:next(x for x in p if x['phase']=='before-vm').update(startedAt=NOW.isoformat())]:
+            phases=json.loads(saved);mutate(phases);path.write_text(json.dumps(phases))
+            with self.subTest(mutate=mutate),self.assertRaises(S.A.Error):S.finish(*self.args)
+        path.write_bytes(saved)
+        Q.write_json(self.directory/'mutation-intent.json',{})
+        with self.assertRaises(S.A.Error):S.finish(*self.args)
+
+    def test_publication_failure_and_existing_output_preserve_original(self):
+        self.complete_origin()
+        with mock.patch.object(S.A,'publish_result',side_effect=OSError('PRIVATE_CANARY')),self.assertRaises(OSError):S.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists());self.assertEqual(Q.tree(self.original),self.original_tree)
+        real=S.A.publish_result
+        def uncertain(path,value):real(path,value);raise S.A.PublishedResultError('PRIVATE_CANARY')
+        with mock.patch.object(S.A,'publish_result',side_effect=uncertain),self.assertRaises(S.A.PublishedResultError):S.finish(*self.args)
+        saved=(self.directory/'result.json').read_bytes()
+        with self.assertRaises(FileExistsError):S.finish(*self.args)
+        self.assertEqual((self.directory/'result.json').read_bytes(),saved);self.assertEqual(Q.tree(self.original),self.original_tree)
+
+    def test_observation_result_cannot_feed_disposal_or_another_observation(self):
+        self.complete_origin();S.finish(*self.args);result=self.directory/'result.json'
+        for mode in ('prepare-dispose','observe-shutdown'):
+            request={**self.request,'operation_name':'nourishing-session-'+'e'*12,
+                     'ownership_result':str(result),'ownership_result_sha256':A.sha(result.read_bytes())}
+            path=self.root/(mode+'-launder.json');Q.write_json(path,request)
+            with self.subTest(mode=mode),self.assertRaises(S.A.Error):S.prepare(mode,path,self.instant)
+
+
+    def test_optional_display_and_time_are_not_state_or_transition_evidence(self):
+        self.complete_origin();path=self.directory/'before-vm.json';value=json.loads(path.read_text())
+        for status in ({'code':'PowerState/deallocated'},
+                       {'code':'PowerState/deallocated','displayStatus':'Localized display','time':'2000-01-01T00:00:00Z'}):
+            value['properties']['instanceView']['statuses']=[status];path.write_text(json.dumps(value))
+            self.observation_phases();S.audit(*self.args)
+
+    def test_complete_reconciled_ownership_can_be_observed_without_relabeling_execution(self):
+        Reconciliation.failed_execute(self);Reconciliation.request_reconciliation(self);Reconciliation.ready(self)
+        S.finish(*self.args);self.ownership=self.directory/'result.json';original=self.ownership.read_bytes()
+        self.request_observation();self.ready();S.finish(*self.args)
+        self.assertEqual(self.ownership.read_bytes(),original)
+        self.assertEqual(S.private(self.ownership)[0]['original_execution_outcome'],'unconfirmed')
+
 if __name__ == '__main__': unittest.main(verbosity=2)

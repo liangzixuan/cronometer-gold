@@ -55,7 +55,7 @@ async function fixture(t, subset) {
     if (tool.path === "/usr/bin/python3.12") {
       const helper = argv[2];
       const args = argv.slice(3);
-      const program = `import importlib.util,json\nfrom pathlib import Path\nfrom datetime import datetime\ns=importlib.util.spec_from_file_location('policy',${JSON.stringify(helper)});q=importlib.util.module_from_spec(s);s.loader.exec_module(q)\np=json.loads(Path(${JSON.stringify(join(f.root, "fixture-pins.json"))}).read_text());q.A.TF_SHA256=p['terraform'];q.A.PROVIDER_FILES={k:tuple(v) for k,v in p['provider'].items()};q.P.tool_digest=lambda path:(q.P.CLI_SHA256,100);q.datetime=type('FixtureClock',(),{'now':staticmethod(lambda tz:datetime.fromisoformat('2026-10-01T08:00:00+00:00'))});raise SystemExit(q.main(${JSON.stringify(args)}))`;
+      const program = `import importlib.util,json\nfrom pathlib import Path\nfrom datetime import datetime\ns=importlib.util.spec_from_file_location('policy',${JSON.stringify(helper)});q=importlib.util.module_from_spec(s);s.loader.exec_module(q)\np=json.loads(Path(${JSON.stringify(join(f.root, "fixture-pins.json"))}).read_text());q.A.TF_SHA256=p['terraform'];q.A.PROVIDER_FILES={k:tuple(v) for k,v in p['provider'].items()};q.P.tool_digest=lambda path:(q.P.CLI_SHA256,100);q.datetime=type('FixtureClock',(),{'now':staticmethod(lambda tz:datetime.fromisoformat(${JSON.stringify(state.instant ?? "2026-10-01T08:00:00+00:00")}))});raise SystemExit(q.main(${JSON.stringify(args)}))`;
       const result = await runTool(python, ["-I", "-B", "-c", program], options);
       if (
         args[0] === "finish" &&
@@ -176,11 +176,14 @@ async function fixture(t, subset) {
           assert.match(argv[2], /^\/proc\/[0-9]+\/fd\/[0-9]+$/u);
           assert.equal(
             await readFile(argv[2], "utf8"),
-            ["execute", "reconcile", "reconcile-partial"].includes(state.mode)
+            ["execute", "reconcile", "reconcile-partial", "observe-shutdown"].includes(state.mode)
               ? "private synthetic binary plan"
               : "synthetic destruction plan",
           );
-          if (["execute", "reconcile", "reconcile-partial"].includes(state.mode)) text = f.rendered;
+          if (
+            ["execute", "reconcile", "reconcile-partial", "observe-shutdown"].includes(state.mode)
+          )
+            text = f.rendered;
           else value = f.responses.destroy;
         }
       }
@@ -870,3 +873,173 @@ for (const [failure, partial] of [
     );
   });
 }
+
+async function shutdownFixture(t) {
+  const f = await fixture(t);
+  const execution = await f.execute();
+  const ownership = join(execution.directory, "result.json");
+  const original = await snapshot(execution.directory);
+  const instant = "2026-10-01T10:01:00.000Z";
+  t.mock.timers.setTime(new Date(instant).getTime());
+  f.state.instant = instant;
+  f.state.mode = "observe-shutdown";
+  f.responses.live.vm.etag = "new response bytes, unchanged generation";
+  f.responses.live.vm.properties.instanceView = {
+    statuses: [{ code: "PowerState/deallocated" }],
+  };
+  const request = {
+    schema_version: 1,
+    source_sha256: await sourceDigest(),
+    operation_name: "nourishing-session-" + "d".repeat(12),
+    not_after_utc: "2026-10-01T10:19:00Z",
+    ownership_result: ownership,
+    ownership_result_sha256: hash(await readFile(ownership)),
+  };
+  return { ...f, execution, ownership, original, request };
+}
+
+test("shutdown observation uses one identity-bound expanded VM GET without mutation", {
+  timeout: 120000,
+}, async (t) => {
+  const f = await shutdownFixture(t);
+  const input = join(f.root, "observe.json");
+  await json(input, f.request);
+  const start = f.state.calls.length;
+  const observed = await runDevelopmentSession(
+    "observe-shutdown",
+    input,
+    { environment: {} },
+    f.run,
+  );
+  const calls = f.state.calls.slice(start);
+  const vm = calls.filter((c) => c.output === "before-vm.json");
+  assert.equal(vm.length, 1);
+  assert.deepEqual(vm[0].argv, [
+    "rest",
+    "--method",
+    "get",
+    "--url",
+    "https://management.azure.com" +
+      f.responses.live.vm.id +
+      "?api-version=2026-03-01&$expand=instanceView",
+    "--subscription",
+    f.expected.subscriptionId,
+    "--only-show-errors",
+    "--output",
+    "json",
+  ]);
+  assert.ok(
+    calls.every(
+      (c) => !["apply", "plan", "refresh", "import", "deallocate", "stop"].includes(c.argv[0]),
+    ),
+  );
+  assert.ok(calls.filter((c) => c.argv[0] === "rest").every((c) => c.argv[2] === "get"));
+  const result = JSON.parse(await readFile(join(observed.directory, "result.json")));
+  assert.equal(result.deallocation_observed, true);
+  assert.equal(result.power_state, "PowerState/deallocated");
+  assert.equal(result.ownership_result_sha256, hash(await readFile(f.ownership)));
+  assert.equal(
+    result.vm_response_sha256,
+    hash(await readFile(join(observed.directory, "before-vm.json"))),
+  );
+  const phases = JSON.parse(await readFile(join(observed.directory, "phases.json")));
+  assert.deepEqual(phases.find((p) => p.phase === "before-vm").arguments, vm[0].argv);
+  assert.equal(result.schedule_causation_verified, false);
+  assert.equal(result.transition_time_verified, false);
+  assert.equal(result.permanent_shutdown_verified, false);
+  assert.equal(result.remote_operation_completion_verified, false);
+  assert.equal(result.zero_remaining_cost_verified, false);
+  await absent(join(observed.directory, "mutation-intent.json"));
+  assert.deepEqual(await snapshot(f.execution.directory), f.original);
+});
+
+test("shutdown observation child failure, interruption and publication uncertainty retain custody", {
+  timeout: 180000,
+}, async (t) => {
+  const f = await shutdownFixture(t);
+  for (const [kind, suffix] of [
+    ["child", "e"],
+    ["abort", "f"],
+    ["publication", "1"],
+  ]) {
+    const request = { ...f.request, operation_name: "nourishing-session-" + suffix.repeat(12) };
+    const input = join(f.root, "observe-" + kind + ".json");
+    await json(input, request);
+    const directory = join(f.root, request.operation_name);
+    const controller = new AbortController();
+    const start = f.state.calls.length;
+    f.state.fail = kind === "publication" ? "publication" : undefined;
+    const injected = async (tool, argv, options) => {
+      if (basename(options.outputPath ?? "") === "before-vm.json" && kind !== "publication") {
+        if (kind === "abort") {
+          controller.abort(new Error("synthetic shutdown observation interrupted"));
+          options.signal.throwIfAborted();
+        }
+        const python = { path: await realpath("/usr/bin/python3") };
+        python.sha256 = hash(await readFile(python.path));
+        return runTool(
+          python,
+          [
+            "-I",
+            "-B",
+            "-c",
+            "from pathlib import Path;Path(" +
+              JSON.stringify(join(f.root, "shutdown-child-started")) +
+              ").write_text('started');raise SystemExit(7)",
+          ],
+          { ...options, outputPath: undefined },
+        );
+      }
+      return f.run(tool, argv, options);
+    };
+    await assert.rejects(
+      runDevelopmentSession(
+        "observe-shutdown",
+        input,
+        { environment: {}, signal: controller.signal },
+        injected,
+      ),
+    );
+    if (kind === "child")
+      assert.equal(await readFile(join(f.root, "shutdown-child-started"), "utf8"), "started");
+    if (kind === "publication")
+      assert.equal(
+        JSON.parse(await readFile(join(directory, "result.json"))).deallocation_observed,
+        true,
+      );
+    else await absent(join(directory, "result.json"));
+    await absent(join(directory, "mutation-intent.json"));
+    assert.ok(
+      f.state.calls
+        .slice(start)
+        .every(
+          (c) => !["apply", "plan", "refresh", "import", "deallocate", "stop"].includes(c.argv[0]),
+        ),
+    );
+    assert.deepEqual(await snapshot(f.execution.directory), f.original);
+  }
+});
+
+test("shutdown observation rejects an allocated stopped VM without publishing success", {
+  timeout: 120000,
+}, async (t) => {
+  const f = await shutdownFixture(t);
+  f.responses.live.vm.properties.instanceView.statuses = [
+    { code: "PowerState/stopped", displayStatus: "VM deallocated" },
+  ];
+  const input = join(f.root, "observe-stopped.json");
+  await json(input, f.request);
+  const start = f.state.calls.length;
+  await assert.rejects(
+    runDevelopmentSession("observe-shutdown", input, { environment: {} }, f.run),
+  );
+  await absent(join(f.root, f.request.operation_name, "result.json"));
+  assert.ok(
+    f.state.calls
+      .slice(start)
+      .every(
+        (c) => !["apply", "plan", "refresh", "import", "deallocate", "stop"].includes(c.argv[0]),
+      ),
+  );
+  assert.deepEqual(await snapshot(f.execution.directory), f.original);
+});

@@ -65,6 +65,7 @@ export async function runDevelopmentSession(
       "reconcile",
       "reconcile-partial",
       "reconcile-dispose",
+      "observe-shutdown",
       "prepare-dispose",
       "dispose",
     ].includes(mode),
@@ -250,7 +251,9 @@ export async function runDevelopmentSession(
       await held.verify();
       phases.at(-1).binaryPlanSha256 = held.sha256;
       if (mode === "execute") await reads("groups", "before");
-      if (!["reconcile", "reconcile-partial", "reconcile-dispose"].includes(mode)) {
+      if (
+        !["reconcile", "reconcile-partial", "reconcile-dispose", "observe-shutdown"].includes(mode)
+      ) {
         // Publish unknown outcome durably before the only mutating command.
         await pure("intent", extra);
         await held.verify();
@@ -266,7 +269,9 @@ export async function runDevelopmentSession(
     } finally {
       await held.close();
     }
-    if (!["reconcile", "reconcile-partial", "reconcile-dispose"].includes(mode)) {
+    if (
+      !["reconcile", "reconcile-partial", "reconcile-dispose", "observe-shutdown"].includes(mode)
+    ) {
       await tool(
         "state-after",
         ["show", "-json", resolve(directory, "terraform.tfstate")],
@@ -315,11 +320,13 @@ async function main() {
     console.log(
       args[0] === "prepare-dispose"
         ? "Private deletion plan prepared for separate review; no deletion attempted."
-        : args[0] === "reconcile-dispose"
-          ? "Private current disposal observation recorded; original disposal outcome remains unconfirmed."
-          : ["reconcile", "reconcile-partial"].includes(args[0])
-            ? "Private current ownership recorded; original execution outcome remains unconfirmed."
-            : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
+        : args[0] === "observe-shutdown"
+          ? "Private last-known deallocated state observed; schedule causation and remaining costs are not established."
+          : args[0] === "reconcile-dispose"
+            ? "Private current disposal observation recorded; original disposal outcome remains unconfirmed."
+            : ["reconcile", "reconcile-partial"].includes(args[0])
+              ? "Private current ownership recorded; original execution outcome remains unconfirmed."
+              : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
     );
   } finally {
     for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(name, stop);
