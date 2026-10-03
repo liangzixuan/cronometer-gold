@@ -417,6 +417,9 @@ export function RecipesClient() {
   const pendingLogs = useRef(new Map<string, StableMutation<RecipeLogBody>>());
   const privateReadControllers = useRef(new Set<AbortController>());
   const profileRefreshController = useRef<AbortController | null>(null);
+  const sessionController = useRef<AbortController | null>(null);
+  const sessionGeneration = useRef(0);
+  const [sessionVerifying, setSessionVerifying] = useState(true);
   const ownerUserId = useRef<string | null>(null);
   const privateUiClosed = useRef(false);
 
@@ -713,6 +716,7 @@ export function RecipesClient() {
   const signInAgain = useCallback(() => {
     if (!mounted.current) return;
     privateUiClosed.current = true;
+    sessionController.current?.abort();
     resetSavedFilter();
     reviewGeneration.current += 1;
     builderRequest.current = null;
@@ -877,6 +881,104 @@ export function RecipesClient() {
     }
   }
 
+  const loadRecipeSession = useCallback(() => {
+    if (!mounted.current || privateUiClosed.current) return;
+    sessionController.current?.abort();
+    const controller = new AbortController();
+    sessionController.current = controller;
+    const generation = sessionGeneration.current + 1;
+    sessionGeneration.current = generation;
+    const requestScope = filterScopeRef.current;
+    const isCurrent = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      !controller.signal.aborted &&
+      sessionController.current === controller &&
+      sessionGeneration.current === generation &&
+      filterScopeRef.current === requestScope;
+    setState("loading");
+    setSessionVerifying(true);
+    setMessage("Verifying your private recipe session…");
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/me", {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!isCurrent()) return;
+        if (response.status === 401) return signInAgain();
+        if (!response.ok) throw new Error("Session verification failed.");
+        const body = await responseJson(response);
+        if (!isCurrent()) return;
+        const session = parseSession(body);
+        if (ownerUserId.current !== null && ownerUserId.current !== session.user.id) {
+          signInAgain();
+          return;
+        }
+        const now = new Date();
+        const requested = requestedDate;
+        const localDate =
+          requested && isLocalDate(requested)
+            ? requested
+            : localDateInTimeZone(now, session.profile.timeZone);
+        ownerUserId.current = session.user.id;
+        if (!initialMealDefaultSet.current) {
+          initialMealDefaultSet.current = true;
+          setMealSlot(
+            defaultMealForHour(
+              Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
+            ),
+          );
+        }
+        setSessionVerifying(false);
+        setFilterVerifiedScope(requestScope);
+        setDiaryGroups(session.profile.diaryGroups);
+        setDate(localDate);
+        setTimeZone(session.profile.timeZone);
+        void loadRecipes();
+      } catch {
+        if (isCurrent()) {
+          setState("error");
+          setMessage("Your private recipe session could not be verified.");
+        }
+      } finally {
+        if (sessionController.current === controller) sessionController.current = null;
+      }
+    })();
+  }, [loadRecipes, requestedDate, setState, signInAgain]);
+
+  const sessionContext = sessionGeneration.current;
+  const sessionOwner = ownerUserId.current;
+  function canRetryCurrentError() {
+    return (
+      mounted.current &&
+      !privateUiClosed.current &&
+      state === "error" &&
+      stateRef.current === "error" &&
+      sessionController.current === null &&
+      sessionGeneration.current === sessionContext &&
+      filterScopeRef.current === filterScope &&
+      ownerUserId.current === sessionOwner
+    );
+  }
+
+  function retrySession() {
+    if (!sessionVerifying || !canRetryCurrentError()) return;
+    loadRecipeSession();
+  }
+
+  function retryRecipes() {
+    if (
+      sessionVerifying ||
+      sessionOwner === null ||
+      filterVerifiedScope !== filterScope ||
+      !canRetryCurrentError()
+    )
+      return;
+    void loadRecipes();
+  }
+
   useEffect(() => {
     mounted.current = true;
     resetFoodSearch();
@@ -887,61 +989,7 @@ export function RecipesClient() {
       setBusy(null);
     }
     resetSavedFilter();
-    const requestScope = filterScopeRef.current;
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const response = await fetch("/api/auth/me", {
-          headers: { accept: "application/json" },
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (
-          controller.signal.aborted ||
-          !mounted.current ||
-          privateUiClosed.current ||
-          filterScopeRef.current !== requestScope
-        )
-          return;
-        if (response.status === 401) return signInAgain();
-        if (!response.ok) throw new Error("Session verification failed.");
-        const session = parseSession(await responseJson(response));
-        const now = new Date();
-        const localDate =
-          requestedDate && isLocalDate(requestedDate)
-            ? requestedDate
-            : localDateInTimeZone(now, session.profile.timeZone);
-        if (
-          !controller.signal.aborted &&
-          !privateUiClosed.current &&
-          filterScopeRef.current === requestScope
-        ) {
-          if (ownerUserId.current !== null && ownerUserId.current !== session.user.id) {
-            signInAgain();
-            return;
-          }
-          ownerUserId.current = session.user.id;
-          if (!initialMealDefaultSet.current) {
-            initialMealDefaultSet.current = true;
-            setMealSlot(
-              defaultMealForHour(
-                Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
-              ),
-            );
-          }
-          setFilterVerifiedScope(requestScope);
-          setDiaryGroups(session.profile.diaryGroups);
-          setDate(localDate);
-          setTimeZone(session.profile.timeZone);
-          void loadRecipes();
-        }
-      } catch {
-        if (!controller.signal.aborted && filterScopeRef.current === requestScope) {
-          setState("error");
-          setMessage("Your private recipe session could not be verified.");
-        }
-      }
-    })();
+    loadRecipeSession();
     return () => {
       mounted.current = false;
       filterScopeRef.current = { requestedDate: filterScopeRef.current.requestedDate };
@@ -952,20 +1000,12 @@ export function RecipesClient() {
       builderRequest.current = null;
       foodSearchRequest.current?.abort();
       foodSearchRequest.current = null;
-      controller.abort();
+      sessionController.current?.abort();
       for (const privateController of privateReadControllers.current) privateController.abort();
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [
-    loadRecipes,
-    requestedDate,
-    resetSavedFilter,
-    resetFoodSearch,
-    signInAgain,
-    setBusy,
-    setState,
-  ]);
+  }, [loadRecipeSession, resetSavedFilter, resetFoodSearch, setBusy]);
 
   async function openRecipe(recipeId: string) {
     const initiatingOwnerUserId = ownerUserId.current;
@@ -1759,9 +1799,15 @@ export function RecipesClient() {
               {message}
             </p>
             {state === "error" ? (
-              <button className="buttonSecondary" onClick={() => void loadRecipes()} type="button">
-                Retry recipes
-              </button>
+              sessionVerifying ? (
+                <button className="buttonSecondary" onClick={retrySession} type="button">
+                  Retry session
+                </button>
+              ) : (
+                <button className="buttonSecondary" onClick={retryRecipes} type="button">
+                  Retry recipes
+                </button>
+              )
             ) : null}
             <label className="formField" htmlFor="saved-recipe-filter">
               <span>Filter loaded saved recipes by name</span>

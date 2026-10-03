@@ -110,6 +110,13 @@ saves and logs cannot be interrupted by New or Open, and an old choice cannot
 replace newer edits. These protections cover the current recipe page; they do
 not add persistent autosave or protection from every navigation or browser close.
 
+If the initial session check fails, Recipes offers Retry session. It verifies the
+current owner before loading the saved list. A list failure after verification
+keeps Retry recipes. Session retry preserves the builder and pending save/log
+operations; only an explicit save or log action can retry a write. Sign-out or an
+owner change closes the private workspace. Old retry callbacks and late responses
+cannot restore it after a route change or unmount.
+
 ## Personal recipe ingredients
 
 The recipe builder offers My foods alongside public catalogue search. Load the

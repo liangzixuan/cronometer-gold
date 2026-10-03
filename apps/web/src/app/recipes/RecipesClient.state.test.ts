@@ -2083,7 +2083,7 @@ describe("actual loaded saved-recipe name filtering", () => {
       await hooks.settle();
       expect(savedFilterStatus()).toBe("Saved recipes have not been loaded yet.");
       expect(hasButton("Load more recipes")).toBe(false);
-      expect(hasButton("Retry recipes")).toBe(true);
+      expect(hasButton(failure === "session" ? "Retry session" : "Retry recipes")).toBe(true);
     },
   );
 
@@ -2601,7 +2601,7 @@ describe("actual loaded nested-recipe filtering", () => {
       await hooks.settle();
       expect(nestedRecipeNames()).toEqual([]);
       expect(nestedStatus()).not.toContain("All saved recipes");
-      expect(hasButton("Retry recipes")).toBe(true);
+      expect(hasButton(failure === "session" ? "Retry session" : "Retry recipes")).toBe(true);
     },
   );
 
@@ -5114,4 +5114,306 @@ describe("passive recipe serving and yield amounts", () => {
     expect(field("Final yield grams").props.value).toBe(raw);
     expect(field("Rolled oats quantity in scoop").props.value).toBe("2.500000");
   });
+});
+
+describe("actual recipe session recovery", () => {
+  it.each(["server", "network", "malformed"] as const)(
+    "rechecks a failed %s session before requesting recipes",
+    async (failure) => {
+      const pending = deferred<Response>();
+      const fetcher = readyFetcher();
+      const original = required(fetcher.getMockImplementation());
+      let auth = 0;
+      fetcher.mockImplementation(async (url, init) => {
+        if (url === "/api/auth/me") {
+          auth += 1;
+          if (auth === 1) {
+            if (failure === "network") throw new TypeError("Synthetic offline session");
+            return failure === "server"
+              ? new Response(null, { status: 503 })
+              : Response.json({ data: { user: { id: owner } } });
+          }
+          if (auth === 2) return pending.promise;
+        }
+        return original(url, init);
+      });
+      hooks.mount(RecipesClient);
+      await hooks.settle();
+      expect(text()).toContain("Your private recipe session could not be verified.");
+      // Exercise the displayed recovery action on both the old and corrected UI.
+      const retry = required(
+        elements().find(
+          (node) => node.type === "button" && /^Retry (session|recipes)$/u.test(text(node)),
+        ),
+      );
+      invoke(retry, "onClick");
+      await hooks.settle();
+      expect(auth).toBe(2);
+      expect(fetcher.mock.calls.filter(([url]) => url.startsWith("/api/recipes?"))).toHaveLength(0);
+      pending.resolve(session());
+      await hooks.settle();
+      expect(review().ownerUserId).toBe(owner);
+      expect(savedRecipeNames()).toEqual(["Saved recipe"]);
+      openSaved();
+      await hooks.settle();
+      expect(field("Local diary date").props.value).toBe("2026-09-09");
+      expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses the verified profile date and meal when the initial route has no date", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-28T01:00:00.000Z"));
+    navigation.query = "";
+    const fetcher = readyFetcher();
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    hooks.mount(RecipesClient);
+    await hooks.settle();
+    await click("Retry session");
+    openSaved();
+    await hooks.settle();
+    expect(field("Local diary date").props.value).toBe("2026-09-27");
+    expect(field("Meal").props.value).toBe("dinner");
+  });
+
+  it("ignores duplicate and retained retry callbacks without resetting newer edits", async () => {
+    const pending = deferred<Response>();
+    const fetcher = readyFetcher();
+    fetcher
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockReturnValueOnce(pending.promise);
+    hooks.mount(RecipesClient);
+    await hooks.settle();
+    const retry = button("Retry session");
+    invoke(retry, "onClick");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    invoke(retry, "onClick");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    pending.resolve(session());
+    await hooks.settle();
+    await change("Name", "Newer private draft");
+    const count = fetcher.mock.calls.length;
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(field("Name").props.value).toBe("Newer private draft");
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  it("rejects an old retry before route effects and after returning to the same date", async () => {
+    const fetcher = readyFetcher();
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    hooks.mount(RecipesClient);
+    await hooks.settle();
+    const retry = button("Retry session");
+    navigation.query = "date=2026-09-10";
+    hooks.renderWithoutEffects();
+    invoke(retry, "onClick");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    hooks.render();
+    await hooks.settle();
+    openSaved();
+    await hooks.settle();
+    expect(field("Local diary date").props.value).toBe("2026-09-10");
+    navigation.query = "date=2026-09-09";
+    hooks.render();
+    await hooks.settle();
+    await change("Name", "Current route draft");
+    const count = fetcher.mock.calls.length;
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(field("Name").props.value).toBe("Current route draft");
+  });
+
+  it.each(["route", "effect replay", "unmount", "closed"] as const)(
+    "cannot install a delayed retry JSON after %s",
+    async (transition) => {
+      const pending = deferred<unknown>();
+      const response = session("c95d87b0-0975-4bdb-87aa-eef8b614b186");
+      response.json = () => pending.promise;
+      const fetcher = readyFetcher();
+      await mountReady();
+      const close = review().onSessionClosed;
+      fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+      navigation.query = "date=2026-09-10";
+      hooks.render();
+      await hooks.settle();
+      fetcher.mockResolvedValueOnce(response);
+      const retry = button("Retry session");
+      const retryIndex = fetcher.mock.calls.length;
+      invoke(retry, "onClick");
+      await hooks.settle();
+      const signal = required(fetcher.mock.calls[retryIndex]?.[1]?.signal ?? undefined);
+      if (transition === "route") {
+        navigation.query = "date=2026-09-11";
+        hooks.render();
+      } else if (transition === "effect replay") hooks.replayEffects();
+      else if (transition === "closed") close();
+      else hooks.unmount();
+      await hooks.settle();
+      const count = fetcher.mock.calls.length;
+      const afterClose = hooks.afterClose();
+      pending.resolve(await session("c95d87b0-0975-4bdb-87aa-eef8b614b186").json());
+      await hooks.settle();
+      invoke(retry, "onClick");
+      await hooks.settle();
+      expect(signal.aborted).toBe(true);
+      expect(fetcher).toHaveBeenCalledTimes(count);
+      expect(hooks.afterClose()).toBe(afterClose);
+      if (transition === "route" || transition === "effect replay") {
+        expect(review().ownerUserId).toBe(owner);
+        expect(router.replace).not.toHaveBeenCalled();
+      } else if (transition === "closed") expect(router.replace).toHaveBeenCalledWith("/login");
+    },
+  );
+
+  it("closes on a retry 401 and leaves the retained retry inert", async () => {
+    const fetcher = readyFetcher();
+    fetcher
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(null, { status: 401 }));
+    hooks.mount(RecipesClient);
+    await hooks.settle();
+    const retry = button("Retry session");
+    await click("Retry session");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(reviewPresent()).toBe(false);
+  });
+
+  it("closes rather than adopting a replacement owner during route-session recovery", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    await change("Name", "Original owner draft");
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    navigation.query = "date=2026-09-10";
+    hooks.render();
+    await hooks.settle();
+    fetcher.mockResolvedValueOnce(session("c95d87b0-0975-4bdb-87aa-eef8b614b186"));
+    const count = fetcher.mock.calls.length;
+    await click("Retry session");
+    expect(fetcher).toHaveBeenCalledTimes(count + 1);
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(field("Name").props.value).toBe("");
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  it("keeps list failures on the existing owner-fenced recipe retry", async () => {
+    const fetcher = readyFetcher();
+    const original = required(fetcher.getMockImplementation());
+    let lists = 0;
+    fetcher.mockImplementation(async (url, init) => {
+      if (url.startsWith("/api/recipes?") && ++lists === 1)
+        return new Response(null, { status: 503 });
+      return original(url, init);
+    });
+    hooks.mount(RecipesClient);
+    await hooks.settle();
+    expect(
+      elements().some((node) => node.type === "button" && text(node) === "Retry session"),
+    ).toBe(false);
+    await click("Retry recipes");
+    expect(lists).toBe(2);
+    expect(savedRecipeNames()).toEqual(["Saved recipe"]);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "/api/auth/me",
+      "/api/recipes?limit=50",
+      "/api/recipes?limit=50",
+      "/api/auth/me",
+    ]);
+  });
+
+  it("preserves a dirty builder and pending save through session recovery without replaying the write", async () => {
+    const fetcher = readyFetcher();
+    await mountReady();
+    review().onConfirm([ingredient("saved", "12.000001")]);
+    await hooks.settle();
+    await change("Name", "Retryable draft");
+    await change("Description", "Keep this description");
+    await change("Instructions (optional)", "Keep these steps");
+    await change("Final yield grams", "10.000001");
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST" ? new Response(null, { status: 503 }) : original(url, init),
+    );
+    save();
+    await hooks.settle();
+    const first = required(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")[0]);
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    navigation.query = "date=2026-09-10";
+    hooks.render();
+    await hooks.settle();
+    await click("Retry session");
+    expect(field("Name").props.value).toBe("Retryable draft");
+    expect(field("Description").props.value).toBe("Keep this description");
+    expect(field("Instructions (optional)").props.value).toBe("Keep these steps");
+    expect(field("Final yield grams").props.value).toBe("10.000001");
+    expect(text()).toContain("Ingredients (1/50)");
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    save();
+    await hooks.settle();
+    const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+  });
+
+  it("preserves pending log intent and destination choices without replaying the write", async () => {
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Meal", "snacks");
+    await change("Amount", "1.250000");
+    await change(optionalTimeLabel, "07:30");
+    await click("Log recipe");
+    const [, first] = required(recipeLogPosts(fetcher)[0]);
+    fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+    navigation.query = "date=2026-09-10";
+    hooks.render();
+    await hooks.settle();
+    await click("Retry session");
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    expect(field("Meal").props.value).toBe("snacks");
+    expect(field("Amount").props.value).toBe("1.250000");
+    expect(field("Local diary date").props.value).toBe("2026-09-10");
+    // Route replacement still clears optional time; retry does not discard the pending operation.
+    expect(field(optionalTimeLabel).props.value).toBe("");
+    await change("Local diary date", "2026-09-09");
+    await change(optionalTimeLabel, "07:30");
+    await click("Log recipe");
+    const writes = recipeLogPosts(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.[1]?.body).toBe(first?.body);
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first?.headers).get("idempotency-key"),
+    );
+  });
+});
+
+it("rejects retained recipe-list retries while a replacement route needs session recovery", async () => {
+  const fetcher = readyFetcher();
+  fetcher
+    .mockResolvedValueOnce(session())
+    .mockResolvedValueOnce(new Response(null, { status: 503 }));
+  hooks.mount(RecipesClient);
+  await hooks.settle();
+  const retry = button("Retry recipes");
+  fetcher.mockResolvedValueOnce(new Response(null, { status: 503 }));
+  navigation.query = "date=2026-09-10";
+  hooks.render();
+  await hooks.settle();
+  const count = fetcher.mock.calls.length;
+  invoke(retry, "onClick");
+  await hooks.settle();
+  expect(fetcher).toHaveBeenCalledTimes(count);
+  await click("Retry session");
+  expect(savedRecipeNames()).toEqual(["Saved recipe"]);
 });
