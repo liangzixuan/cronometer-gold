@@ -3026,3 +3026,503 @@ describe("My foods guarded time-zone recovery", () => {
     },
   );
 });
+
+describe("custom-food Archive retirement", () => {
+  const archivedFood = (item: CustomFood) => ({
+    ...item,
+    status: "archived" as const,
+    revision: "2",
+  });
+  function confirmArchive(accept = true) {
+    const confirm = vi.fn(() => accept);
+    vi.stubGlobal("window", { confirm });
+    return confirm;
+  }
+
+  it.each(["401", "success", "error"])(
+    "ignores a held %s response after navigation unmount",
+    async (outcome) => {
+      const first = food();
+      const { state, fetcher, writes } = workspace([first]);
+      await mount();
+      confirmArchive();
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      await click("Archive", card(first));
+      expect(writes()).toHaveLength(1);
+      hooks.unmount();
+      const updates = hooks.afterClose(),
+        requests = fetcher.mock.calls.length;
+      const response =
+        outcome === "success"
+          ? receipt(archivedFood(first))
+          : Response.json(
+              { error: "Old archive response" },
+              { status: outcome === "401" ? 401 : 503 },
+            );
+      const parse = vi.spyOn(response, "json");
+      pending.resolve(response);
+      await hooks.settle();
+      expect(parse).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(router.refresh).not.toHaveBeenCalled();
+      expect(hooks.afterClose()).toBe(updates);
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+    },
+  );
+
+  it("ignores a delayed archive body after unmount", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    await mount();
+    confirmArchive();
+    const body = deferred<unknown>();
+    const response = receipt(archivedFood(first));
+    response.json = vi.fn(() => body.promise);
+    state.write = () => response;
+    await click("Archive", card(first));
+    expect(response.json).toHaveBeenCalledTimes(1);
+    hooks.unmount();
+    const updates = hooks.afterClose();
+    body.resolve({ data: { replayed: false, customFood: archivedFood(first) } });
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(updates);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it.each(["hidden", "hidden before effect", "date", "meal", "profile", "owner", "private"])(
+    "retires responses and old controls on %s",
+    async (transition) => {
+      const first = food();
+      const life = visibility();
+      const { state, fetcher, writes } = workspace([first]);
+      state.cursor = "next";
+      await mount();
+      const confirm = confirmArchive();
+      const old = button("Archive", card(first));
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      await click("Archive", card(first));
+      if (transition === "hidden") await life.set("hidden");
+      else if (transition === "hidden before effect") life.document.visibilityState = "hidden";
+      else if (transition === "date" || transition === "meal") {
+        navigation.search = transition === "date" ? "?date=2026-09-11" : "?meal=breakfast";
+        hooks.renderWithoutEffects();
+      } else if (transition === "private") await click("Sign out");
+      else {
+        state.continuation = () => {
+          if (transition === "owner") state.owner = otherOwner;
+          return transition === "owner"
+            ? page([])
+            : Response.json({ error: "Reload required" }, { status: 503 });
+        };
+        await click("Load more private foods");
+        if (transition === "profile") {
+          state.timeZone = "America/New_York";
+          // The existing initial-load Retry is exposed by a failed full load, not a page failure.
+          hooks.replayEffects();
+          await hooks.settle();
+        }
+      }
+      const before = {
+        text: text(),
+        requests: fetcher.mock.calls.length,
+        redirects: router.replace.mock.calls.length,
+        confirms: confirm.mock.calls.length,
+      };
+      const response = Response.json({ error: "Retired archive expiry" }, { status: 401 });
+      const parse = vi.spyOn(response, "json");
+      pending.resolve(response);
+      invoke(old, "onClick");
+      await hooks.settle();
+      expect(parse).not.toHaveBeenCalled();
+      expect(router.replace).toHaveBeenCalledTimes(before.redirects);
+      expect(confirm).toHaveBeenCalledTimes(before.confirms);
+      expect(fetcher).toHaveBeenCalledTimes(before.requests);
+      expect(writes().filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+      expect(text()).toBe(before.text);
+    },
+  );
+
+  it("rechecks the scope after confirmation and blocks duplicate starts before paint", async () => {
+    const first = food();
+    const life = visibility();
+    const { state, writes } = workspace([first]);
+    await mount();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    const control = button("Archive", card(first));
+    const confirm = vi.fn(() => {
+      life.document.visibilityState = "hidden";
+      return true;
+    });
+    vi.stubGlobal("window", { confirm });
+    invoke(control, "onClick");
+    await hooks.settle();
+    expect(writes()).toHaveLength(0);
+    life.document.visibilityState = "visible";
+    confirm.mockImplementation(() => true);
+    invoke(control, "onClick");
+    invoke(control, "onClick");
+    await hooks.settle();
+    expect(writes()).toHaveLength(1);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    pending.resolve(receipt(archivedFood(first)));
+    await hooks.settle();
+    const calls = writes().length;
+    invoke(control, "onClick");
+    expect(writes()).toHaveLength(calls);
+    expect(text(card(first))).toContain("archived");
+  });
+
+  it("cannot release a newer page request or replace its feedback", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    state.cursor = "next";
+    await mount();
+    confirmArchive();
+    const archive = deferred<Response>(),
+      more = deferred<Response>();
+    state.write = () => archive.promise;
+    state.continuation = () => more.promise;
+    await click("Archive", card(first));
+    await click("Load more private foods");
+    const before = status();
+    archive.resolve(Response.json({ error: "Old archive failure" }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Load more private foods").props.disabled).toBe(true);
+    expect(status()).toBe(before);
+    more.resolve(Response.json({ error: "Current page failure" }, { status: 503 }));
+    await hooks.settle();
+    expect(status()).toContain("Current page failure");
+    expect(button("Load more private foods").props.disabled).toBe(false);
+  });
+
+  it("cannot retire a newer Archive after an old view is restored", async () => {
+    const first = food();
+    const life = visibility();
+    const { state, writes } = workspace([first]);
+    await mount();
+    confirmArchive();
+    const old = deferred<Response>(),
+      current = deferred<Response>();
+    state.write = () => old.promise;
+    await click("Archive", card(first));
+    await life.set("hidden");
+    await life.set("visible");
+    state.write = () => current.promise;
+    await click("Archive", card(first));
+    expect(writes()).toHaveLength(2);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+    );
+    old.resolve(Response.json({ error: "Old request" }, { status: 401 }));
+    await hooks.settle();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(button("Archive", card(first)).props.disabled).toBe(true);
+    current.resolve(receipt(archivedFood(first)));
+    await hooks.settle();
+    expect(text(card(first))).toContain("archived");
+  });
+
+  it("preserves confirmation cancellation, exact ambiguous retry and unrelated drafts", async () => {
+    const first = food();
+    const { state, writes } = workspace([first, food(2)]);
+    await mount();
+    await change("Name", "Unsaved personal food");
+    await change(savedFilterLabel, "Saved");
+    const drafts = formValues();
+    const confirm = confirmArchive(false);
+    await click("Archive", card(first));
+    expect(writes()).toHaveLength(0);
+    confirm.mockReturnValue(true);
+    state.write = () => Promise.reject(new Error("Network outcome unknown"));
+    await click("Archive", card(first));
+    expect(status()).toContain("Network outcome unknown");
+    state.write = () => Response.json({ error: "Temporary archive failure" }, { status: 503 });
+    await click("Archive", card(first));
+    expect(status()).toContain("Temporary archive failure");
+    state.write = () => Response.json({ data: { malformed: true } });
+    await click("Archive", card(first));
+    expect(text(card(first))).toContain("active");
+    state.write = () => receipt(archivedFood(first));
+    await click("Archive", card(first));
+    expect(writes()).toHaveLength(4);
+    const requests = writes().map(([url, init]) => ({
+      url,
+      method: init?.method,
+      body: init?.body,
+      headers: Object.fromEntries(new Headers(init?.headers)),
+    }));
+    expect(requests.every((item) => JSON.stringify(item) === JSON.stringify(requests[0]))).toBe(
+      true,
+    );
+    expect(requests[0]?.headers["if-match"]).toBe('"1"');
+    expect(text(card(first))).toContain("archived");
+    expect(text(card(food(2)))).toContain("active");
+    expect(formValues()).toEqual(drafts);
+    expect(status()).toContain("pinned diary history was preserved");
+  });
+
+  it("still closes the current private workspace on a current Archive 401", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    await mount();
+    confirmArchive();
+    const response = Response.json({ error: "Current expiry" }, { status: 401 });
+    const parse = vi.spyOn(response, "json");
+    state.write = () => response;
+    await click("Archive", card(first));
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(parse).not.toHaveBeenCalled();
+    expect(savedCards()).toHaveLength(0);
+    expect(status()).toContain("Closing your personal foods");
+  });
+});
+
+describe("custom-food Archive receipt boundaries", () => {
+  it.each(["save", "log"])(
+    "does not replace a newer %s failure or release its pending action",
+    async (action) => {
+      const first = food();
+      const { state, writes } = workspace([first]);
+      await mount();
+      vi.stubGlobal("window", { confirm: () => true });
+      if (action === "save") await copyFood(first);
+      else await prepareLog();
+      const archive = deferred<Response>(),
+        newer = deferred<Response>();
+      state.write = (_url, init) => (init.method === "DELETE" ? archive.promise : newer.promise);
+      await click("Archive", card(first));
+      await submit(action === "save" ? "Create private food" : "Log exact version");
+      expect(writes()).toHaveLength(2);
+      const response = Response.json({ error: "Old archive expiry" }, { status: 401 });
+      const parse = vi.spyOn(response, "json");
+      archive.resolve(response);
+      await hooks.settle();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(parse).not.toHaveBeenCalled();
+      expect(button(action === "save" ? "Saving…" : "Log exact version").props.disabled).toBe(true);
+      newer.resolve(Response.json({ error: "Newer action failed" }, { status: 503 }));
+      await hooks.settle();
+      expect(status()).toContain("Newer action failed");
+      expect(
+        button(action === "save" ? "Create private food" : "Log exact version").props.disabled,
+      ).toBe(false);
+    },
+  );
+
+  it.each(["date", "profile", "replacement"])(
+    "ignores a parsed old archive receipt after %s replacement",
+    async (boundary) => {
+      const first = food();
+      const { state } = workspace([first]);
+      await mount();
+      vi.stubGlobal("window", { confirm: () => true });
+      const body = deferred<unknown>();
+      const response = receipt({ ...first, status: "archived", revision: "2" });
+      response.json = vi.fn(() => body.promise);
+      state.write = () => response;
+      await click("Archive", card(first));
+      expect(response.json).toHaveBeenCalledTimes(1);
+      if (boundary === "date") {
+        navigation.search = "?date=2026-09-12";
+        hooks.renderWithoutEffects();
+        hooks.render();
+      } else {
+        if (boundary === "profile") state.timeZone = "America/New_York";
+        else state.items = [{ ...first, revision: "3" }];
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      const before = { text: text(), fields: formValues() };
+      body.resolve({
+        data: { replayed: false, customFood: { ...first, status: "archived", revision: "2" } },
+      });
+      await hooks.settle();
+      expect(text()).toBe(before.text);
+      expect(formValues()).toEqual(before.fields);
+      expect(text(card(first))).toContain("active");
+    },
+  );
+
+  it.each(["identity", "version", "status", "revision"])(
+    "retains the exact retry after a mismatched %s receipt",
+    async (change) => {
+      const first = food();
+      const { state, writes } = workspace([first, food(2)]);
+      await mount();
+      vi.stubGlobal("window", { confirm: () => true });
+      const archived = { ...first, status: "archived" as const, revision: "2" };
+      const wrong =
+        change === "identity"
+          ? { ...archived, id: food(2).id }
+          : change === "version"
+            ? { ...archived, currentVersion: food(2).currentVersion }
+            : change === "status"
+              ? { ...archived, status: "active" as const }
+              : { ...archived, revision: "1" };
+      state.write = () => receipt(wrong);
+      await click("Archive", card(first));
+      expect(status()).toContain("archive receipt did not match");
+      expect(text(card(first))).toContain("active");
+      expect(text(card(food(2)))).toContain("active");
+      state.write = () => receipt(archived);
+      await click("Archive", card(first));
+      expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+      );
+      expect(text(card(first))).toContain("archived");
+    },
+  );
+});
+
+describe("Archive admission respects existing operation owners", () => {
+  it.each(["save", "log", "page", "logout"])(
+    "rejects retained and rendered Archive during earlier %s without cancelling or replaying it",
+    async (action) => {
+      const first = food();
+      const { state, fetcher } = workspace([first]);
+      state.cursor = "next";
+      await mount();
+      if (action === "save") await copyFood(first);
+      if (action === "log") await prepareLog();
+      const confirm = vi.fn(() => true);
+      vi.stubGlobal("window", { confirm });
+      const oldArchive = button("Archive", card(first));
+      const earlier = deferred<Response>();
+      state.write = () => earlier.promise;
+      state.continuation = () => earlier.promise;
+      const original = fetcher.getMockImplementation();
+      if (!original) throw new Error("Missing workspace fixture");
+      if (action === "logout")
+        fetcher.mockImplementation((url, init) =>
+          url === "/api/auth/logout" ? earlier.promise : original(url, init),
+        );
+      if (action === "save" || action === "log")
+        invoke(action === "save" ? customForm() : logForm(), "onSubmit", { preventDefault() {} });
+      else invoke(button(action === "page" ? "Load more private foods" : "Sign out"), "onClick");
+      const calls = fetcher.mock.calls.length;
+      const signal = fetcher.mock.calls.at(-1)?.[1]?.signal;
+      invoke(oldArchive, "onClick");
+      expect(confirm).not.toHaveBeenCalled();
+      expect(fetcher).toHaveBeenCalledTimes(calls);
+      expect(signal?.aborted ?? false).toBe(false);
+      await hooks.settle();
+      const currentArchive = button("Archive", card(first));
+      expect(currentArchive.props.disabled).toBe(true);
+      invoke(currentArchive, "onClick");
+      expect(fetcher).toHaveBeenCalledTimes(calls);
+      expect(confirm).not.toHaveBeenCalled();
+      earlier.resolve(Response.json({ error: "Existing action failed" }, { status: 503 }));
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(calls);
+      expect(signal?.aborted ?? false).toBe(false);
+      expect(status()).toContain(
+        action === "logout" ? "Sign out could not be confirmed" : "Existing action failed",
+      );
+      state.write = () => receipt({ ...first, status: "archived", revision: "2" });
+      expect(button("Archive", card(first)).props.disabled).toBe(false);
+      await click("Archive", card(first));
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(fetcher.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+      expect(text(card(first))).toContain("archived");
+    },
+  );
+
+  it("keeps Archive unavailable until all already-started logout requests settle", async () => {
+    const first = food();
+    const { state, fetcher } = workspace([first]);
+    await mount();
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+    const firstLogout = deferred<Response>(),
+      secondLogout = deferred<Response>();
+    const original = fetcher.getMockImplementation();
+    if (!original) throw new Error("Missing workspace fixture");
+    let logouts = 0;
+    fetcher.mockImplementation((url, init) =>
+      url === "/api/auth/logout"
+        ? ++logouts === 1
+          ? firstLogout.promise
+          : secondLogout.promise
+        : original(url, init),
+    );
+    const signOut = button("Sign out");
+    invoke(signOut, "onClick");
+    invoke(signOut, "onClick");
+    await hooks.settle();
+    firstLogout.resolve(new Response(null, { status: 503 }));
+    await hooks.settle();
+    const blocked = button("Archive", card(first));
+    expect(blocked.props.disabled).toBe(true);
+    invoke(blocked, "onClick");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(logouts).toBe(2);
+    secondLogout.resolve(new Response(null, { status: 503 }));
+    await hooks.settle();
+    expect(button("Archive", card(first)).props.disabled).toBe(false);
+    state.write = () => receipt({ ...first, status: "archived", revision: "2" });
+    await click("Archive", card(first));
+    expect(logouts).toBe(2);
+    expect(text(card(first))).toContain("archived");
+  });
+
+  it("preserves a pending full private read and enables fresh Archive after installation", async () => {
+    const first = food();
+    const { state, fetcher } = workspace([first]);
+    await mount();
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+    const oldArchive = button("Archive", card(first));
+    const read = deferred<Response>();
+    state.read = () => read.promise;
+    hooks.replayEffects();
+    await hooks.settle();
+    const requests = fetcher.mock.calls.length;
+    const signal = fetcher.mock.calls.findLast(
+      ([url]) => url === "/api/retention/custom-foods?limit=50",
+    )?.[1]?.signal;
+    invoke(oldArchive, "onClick");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    expect(signal?.aborted).toBe(false);
+    read.resolve(page([first]));
+    await hooks.settle();
+    expect(signal?.aborted).toBe(false);
+    state.write = () => receipt({ ...first, status: "archived", revision: "2" });
+    await click("Archive", card(first));
+    expect(text(card(first))).toContain("archived");
+  });
+
+  it("preserves existing profile verification and date-review behavior before a fresh Archive", async () => {
+    const first = food();
+    const { state, fetcher } = workspace([first]);
+    await mount();
+    await prepareLog();
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+    const oldArchive = button("Archive", card(first));
+    const profile = deferred<Response>();
+    state.auth = () => profile.promise;
+    state.write = () =>
+      Response.json({ error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+    invoke(logForm(), "onSubmit", { preventDefault() {} });
+    invoke(oldArchive, "onClick");
+    expect(confirm).not.toHaveBeenCalled();
+    await hooks.settle();
+    const requests = fetcher.mock.calls.length;
+    const signal = fetcher.mock.calls.findLast(([url]) => url === "/api/auth/me")?.[1]?.signal;
+    invoke(oldArchive, "onClick");
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    expect(signal?.aborted).toBe(false);
+    profile.resolve(session(owner, "America/New_York"));
+    await hooks.settle();
+    expect(signal?.aborted).toBe(false);
+    expect(status()).toContain("This private food was not logged");
+    expect(button("Log exact version").props.disabled).toBe(true);
+    state.write = () => receipt({ ...first, status: "archived", revision: "2" });
+    await click("Archive", card(first));
+    expect(text(card(first))).toContain("archived");
+  });
+});

@@ -222,6 +222,15 @@ export function CustomFoodsClient() {
   }, []);
   const [customLogDateReviewRequired, setCustomLogDateReviewRequired] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const customArchive = useRef<{
+    readonly controller: AbortController;
+    readonly busyKey: string;
+    readonly route: typeof renderedRouteDestination;
+  } | null>(null);
+  const pendingLogouts = useRef(0);
+  const [, setPendingLogoutCount] = useState(0);
+  const archiveGeneration = useRef(0);
+  const renderedArchiveGeneration = archiveGeneration.current;
   const operations = useRef(new Map<string, string>());
   const customRef = useRef(custom);
   const customBaseline = useRef<CustomDraft | null>(custom);
@@ -260,6 +269,20 @@ export function CustomFoodsClient() {
   const expandedFoodsRef = useRef<ReadonlySet<CustomFood>>(new Set());
   const renderedListGeneration = foodListGeneration.current;
   const renderedDisclosureGeneration = disclosureGeneration.current;
+  const renderedArchiveLifecycle = customLifecycle.current;
+  const retireCustomArchive = useCallback(() => {
+    const pending = customArchive.current;
+    if (!pending) return;
+    customArchive.current = null;
+    archiveGeneration.current += 1;
+    pending.controller.abort();
+    if (mounted.current && !privateUiClosed.current)
+      setBusy((current) => (current === pending.busyKey ? null : current));
+    // Retirement only stops this view from using the response; the server may have written.
+  }, []);
+  useEffect(() => {
+    if (customArchive.current?.route !== renderedRouteDestination) retireCustomArchive();
+  }, [renderedRouteDestination, retireCustomArchive]);
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
   function canUseCustomLogControls() {
     return (
@@ -440,6 +463,7 @@ export function CustomFoodsClient() {
   const setSession = useCallback(
     (next: SessionSummary | null) => {
       if (installedSession.current !== next) {
+        retireCustomArchive();
         closeFoodDetails();
         invalidateCustomControls();
         savedFoodFilterGeneration.current += 1;
@@ -455,7 +479,7 @@ export function CustomFoodsClient() {
       installedSession.current = next;
       setSessionState(next);
     },
-    [closeFoodDetails, invalidateCustomControls, resetSavedFoodFilter],
+    [closeFoodDetails, invalidateCustomControls, resetSavedFoodFilter, retireCustomArchive],
   );
   const installCustomFoods = useCallback(
     (
@@ -515,6 +539,7 @@ export function CustomFoodsClient() {
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
+    retireCustomArchive();
     activeLog.current = null;
     customLifecycle.current += 1;
     customWrite.current = null;
@@ -552,6 +577,7 @@ export function CustomFoodsClient() {
     replaceCustom,
     replaceCustomLog,
     resetSavedFoodFilter,
+    retireCustomArchive,
     router,
     setSession,
   ]);
@@ -624,6 +650,7 @@ export function CustomFoodsClient() {
       (loadController.current && !loadController.current.signal.aborted)
     )
       return;
+    retireCustomArchive();
     const controller = new AbortController();
     loadController.current = controller;
     privateReadControllers.current.add(controller);
@@ -736,6 +763,7 @@ export function CustomFoodsClient() {
     invalidateCustomControls,
     replaceCustom,
     revalidateFoodSession,
+    retireCustomArchive,
     setSession,
     signInAgain,
   ]);
@@ -743,6 +771,7 @@ export function CustomFoodsClient() {
     if (!customFoodCursor) return;
     const initiatingOwnerUserId = ownerUserId.current;
     if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    retireCustomArchive();
     const controller = new AbortController();
     privateReadControllers.current.add(controller);
     setBusy("custom-more");
@@ -790,6 +819,7 @@ export function CustomFoodsClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      retireCustomArchive();
       activeLog.current = null;
       customLogGeneration.current += 1;
       setBusy((current) => (current === "custom-log" ? null : current));
@@ -805,6 +835,7 @@ export function CustomFoodsClient() {
     void loadFoods();
     return () => {
       mounted.current = false;
+      retireCustomArchive();
       activeLog.current = null;
       customLogGeneration.current += 1;
       customLifecycle.current += 1;
@@ -824,7 +855,7 @@ export function CustomFoodsClient() {
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [closeFoodDetails, invalidateCustomControls, loadFoods]);
+  }, [closeFoodDetails, invalidateCustomControls, loadFoods, retireCustomArchive]);
   async function refreshCustomLogProfileAfterTimeZoneChange(
     initiatingUserId: string,
   ): Promise<string | null> {
@@ -862,6 +893,7 @@ export function CustomFoodsClient() {
 
   async function saveCustomFood() {
     if (!canUseCustomControls() || !session || customWrite.current !== null) return;
+    retireCustomArchive();
     clearCustomDraftChoice();
     if (!custom.name.trim() || custom.nutrients.length < 1)
       return setMessage("Enter a name and at least one nutrient.");
@@ -972,39 +1004,105 @@ export function CustomFoodsClient() {
     }
   }
 
+  function archiveViewIsCurrent() {
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      session !== null &&
+      installedSession.current === session &&
+      ownerUserId.current === session.user.id &&
+      customLifecycle.current === renderedArchiveLifecycle &&
+      foodListGeneration.current === renderedListGeneration &&
+      routeDestination.current === renderedRouteDestination &&
+      foodDetailsReady.current
+    );
+  }
+  function canArchiveCustomFood(food: CustomFood) {
+    return (
+      archiveViewIsCurrent() &&
+      archiveGeneration.current === renderedArchiveGeneration &&
+      customArchive.current === null &&
+      customWrite.current === null &&
+      activeLog.current === null &&
+      loadController.current === null &&
+      privateReadControllers.current.size === 0 &&
+      profileRefreshController.current === null &&
+      pendingLogouts.current === 0 &&
+      food.status === "active" &&
+      installedFoods.current.includes(food)
+    );
+  }
   async function archiveCustomFood(food: CustomFood) {
+    if (!canArchiveCustomFood(food)) return;
     if (
       !window.confirm(
         `Archive ${food.currentVersion.name}? Historical diary entries keep their pinned version.`,
-      )
+      ) ||
+      !canArchiveCustomFood(food)
     )
       return;
     const key = `custom-archive:${food.id}:${food.revision}`;
-    setBusy(`custom:${food.id}`);
+    const exactOperationId = operation(key);
+    const token = {
+      controller: new AbortController(),
+      busyKey: `custom:${food.id}`,
+      route: renderedRouteDestination,
+    };
+    customArchive.current = token;
+    archiveGeneration.current += 1;
+    const current = () =>
+      customArchive.current === token &&
+      !token.controller.signal.aborted &&
+      archiveViewIsCurrent() &&
+      installedFoods.current.includes(food);
+    setBusy(token.busyKey);
     try {
-      const archived = parseCustomFoodMutation(
-        await request(`custom-foods/${food.id}`, {
-          method: "DELETE",
-          key,
-          revision: food.revision,
-        }),
-      );
-      operations.current.delete(key);
-      installCustomFoods(
-        (items) => items.map((item) => (item.id === archived.id ? archived : item)),
-        renderedListGeneration,
-        session?.user.id ?? null,
-      );
+      const response = await fetch(`/api/retention/custom-foods/${food.id}`, {
+        method: "DELETE",
+        headers: {
+          accept: "application/json",
+          "idempotency-key": exactOperationId,
+          "if-match": quoteRevision(food.revision),
+        },
+        cache: "no-store",
+        signal: token.controller.signal,
+      });
+      if (!current()) return;
+      if (response.status === 401) return signInAgain();
+      const body = await json(response);
+      if (!current()) return;
+      if (!response.ok) throw new Error(responseError(body, "Custom food could not be archived."));
+      const archived = parseCustomFoodMutation(body);
+      if (
+        archived.id !== food.id ||
+        archived.status !== "archived" ||
+        BigInt(archived.revision) <= BigInt(food.revision) ||
+        JSON.stringify(archived.currentVersion) !== JSON.stringify(food.currentVersion)
+      )
+        throw new Error("The archive receipt did not match this saved food. Retry safely.");
+      if (
+        !installCustomFoods(
+          (items) => items.map((item) => (item === food ? archived : item)),
+          renderedListGeneration,
+          session?.user.id ?? null,
+        )
+      )
+        return;
+      if (operations.current.get(key) === exactOperationId) operations.current.delete(key);
       setMessage("Custom food archived; pinned diary history was preserved.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Custom food could not be archived.");
+      if (current())
+        setMessage(error instanceof Error ? error.message : "Custom food could not be archived.");
     } finally {
-      setBusy(null);
+      if (customArchive.current === token && archiveViewIsCurrent()) retireCustomArchive();
     }
   }
 
   async function logCustomFood() {
     if (!canUseCustomLogControls() || activeLog.current !== null) return;
+    retireCustomArchive();
     if (customLogDateReviewRequired) {
       return setMessage("Review and confirm the local diary day before logging again.");
     }
@@ -1185,14 +1283,28 @@ export function CustomFoodsClient() {
   }
 
   async function signOut() {
-    setBusy("logout");
-    const confirmed = await confirmBrowserLogout(
-      () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
-      signInAgain,
-    );
-    if (!confirmed) {
-      setMessage("Sign out could not be confirmed. Your private workspace remains open.");
-      setBusy(null);
+    pendingLogouts.current += 1;
+    try {
+      retireCustomArchive();
+      setBusy("logout");
+      const confirmed = await confirmBrowserLogout(
+        () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
+        signInAgain,
+      );
+      if (!confirmed) {
+        setMessage("Sign out could not be confirmed. Your private workspace remains open.");
+        setBusy(null);
+      }
+    } finally {
+      pendingLogouts.current -= 1;
+      if (
+        mounted.current &&
+        visible.current &&
+        !privateUiClosed.current &&
+        (typeof document === "undefined" || document.visibilityState !== "hidden")
+      ) {
+        setPendingLogoutCount(pendingLogouts.current);
+      }
     }
   }
 
@@ -1621,7 +1733,7 @@ export function CustomFoodsClient() {
                             </button>
                             <button
                               className="dangerAction"
-                              disabled={busy === `custom:${food.id}`}
+                              disabled={!canArchiveCustomFood(food)}
                               onClick={() => void archiveCustomFood(food)}
                               type="button"
                             >
