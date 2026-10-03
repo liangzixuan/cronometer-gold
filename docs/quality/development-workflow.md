@@ -35,6 +35,20 @@ slice or continuation. Record the full source SHA, dirty diff digest and untrack
 files, evidence paths, unresolved failures, current service state, and exact next
 action. Do not duplicate the evidence into multiple rolling roadmap overlays.
 
+## Dependency selection
+
+Prefer the existing tested lockfile. Batch necessary security, compatibility or
+feature-driven updates and select established compatible versions rather than
+`latest`. Every direct and transitive version must be at least 1,440 minutes old,
+measured from its registry publication; already eligible versions need no new
+waiting period. Preserve frozen installs, integrity, provenance, vulnerability and
+license checks. Keep online recommendations distinct from demonstrated failures.
+
+Repository context tooling has its own frozen graph in `tools/repomix`, with strict
+age enforcement and no lifecycle scripts or age exceptions. It does not alter the
+application lock. Use the [root README](../../README.md#repository-context-artifacts)
+for committed-source packing, coverage and artifact limits.
+
 ## Validation stages
 
 | Stage | Work | Exit condition |

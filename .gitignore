@@ -44,3 +44,9 @@ data/exports/
 __pycache__/
 .turbo/
 tmp/
+
+# committed-source context artifacts (generated, never committed)
+/repomix-output.md
+/repomix-onboarding.md
+/repomix-manifest.json
+/.repomix-*.tmp

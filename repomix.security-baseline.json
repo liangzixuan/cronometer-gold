@@ -1,0 +1,1049 @@
+{
+  "schemaVersion": 1,
+  "scanner": {
+    "coreVersion": "13.0.6",
+    "presetVersion": "13.0.6",
+    "detectorIds": [
+      "@secretlint/secretlint-rule-1password",
+      "@secretlint/secretlint-rule-anthropic",
+      "@secretlint/secretlint-rule-aws",
+      "@secretlint/secretlint-rule-basicauth",
+      "@secretlint/secretlint-rule-cloudflare",
+      "@secretlint/secretlint-rule-database-connection-string",
+      "@secretlint/secretlint-rule-databricks",
+      "@secretlint/secretlint-rule-docker",
+      "@secretlint/secretlint-rule-figma",
+      "@secretlint/secretlint-rule-gcp",
+      "@secretlint/secretlint-rule-github",
+      "@secretlint/secretlint-rule-gitlab",
+      "@secretlint/secretlint-rule-grafana",
+      "@secretlint/secretlint-rule-groq",
+      "@secretlint/secretlint-rule-hashicorp-vault",
+      "@secretlint/secretlint-rule-huggingface",
+      "@secretlint/secretlint-rule-linear",
+      "@secretlint/secretlint-rule-notion",
+      "@secretlint/secretlint-rule-npm",
+      "@secretlint/secretlint-rule-openai",
+      "@secretlint/secretlint-rule-privatekey",
+      "@secretlint/secretlint-rule-sendgrid",
+      "@secretlint/secretlint-rule-shopify",
+      "@secretlint/secretlint-rule-slack",
+      "@secretlint/secretlint-rule-stripe",
+      "@secretlint/secretlint-rule-tailscale",
+      "@secretlint/secretlint-rule-vercel"
+    ],
+    "inlineSuppression": false
+  },
+  "review": "Reviewed public fixture/default/placeholder findings",
+  "files": [
+    {
+      "path": ".env.example",
+      "sha256": "c29e20a089f7a3116a688951cc2bdce231f803b93808e2fed9805625ac524164",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [698, 780],
+          "loc": {
+            "start": {
+              "line": 20,
+              "column": 13
+            },
+            "end": {
+              "line": 20,
+              "column": 95
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "a5b77a413de78cbad61ee39d09d64b6455641248b9224ce3911351677b461369",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [9609, 9691],
+          "loc": {
+            "start": {
+              "line": 254,
+              "column": 24
+            },
+            "end": {
+              "line": 254,
+              "column": 106
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [9919, 10001],
+          "loc": {
+            "start": {
+              "line": 261,
+              "column": 29
+            },
+            "end": {
+              "line": 261,
+              "column": 111
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [10161, 10243],
+          "loc": {
+            "start": {
+              "line": 266,
+              "column": 29
+            },
+            "end": {
+              "line": 266,
+              "column": 111
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [11172, 11254],
+          "loc": {
+            "start": {
+              "line": 291,
+              "column": 29
+            },
+            "end": {
+              "line": 291,
+              "column": 111
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [13254, 13336],
+          "loc": {
+            "start": {
+              "line": 329,
+              "column": 30
+            },
+            "end": {
+              "line": 329,
+              "column": 112
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [14201, 14296],
+          "loc": {
+            "start": {
+              "line": 346,
+              "column": 30
+            },
+            "end": {
+              "line": 346,
+              "column": 125
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [15172, 15254],
+          "loc": {
+            "start": {
+              "line": 363,
+              "column": 29
+            },
+            "end": {
+              "line": 363,
+              "column": 111
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [15770, 15852],
+          "loc": {
+            "start": {
+              "line": 372,
+              "column": 29
+            },
+            "end": {
+              "line": 372,
+              "column": 111
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/ingest/test/run.test.ts",
+      "sha256": "b98f1b73a002e44a3915a178a5b1c59819e6b1287e4f5e5c0e593d89079afd49",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [12597, 12635],
+          "loc": {
+            "start": {
+              "line": 404,
+              "column": 26
+            },
+            "end": {
+              "line": 404,
+              "column": 64
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/scripts/check-release-env.test.mjs",
+      "sha256": "b4f3b775f3eb5f2a7fad52ab9b4ee1d95ebc724f5d4b831a552a8bd5fb06499d",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [1714, 1750],
+          "loc": {
+            "start": {
+              "line": 43,
+              "column": 40
+            },
+            "end": {
+              "line": 43,
+              "column": 76
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/api/mobile-fetch.test.ts",
+      "sha256": "967ec578151a53bcb80a2a38d9211a8b90f6173c07d0c09aec48c1da3cc2a103",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [487, 527],
+          "loc": {
+            "start": {
+              "line": 15,
+              "column": 5
+            },
+            "end": {
+              "line": 15,
+              "column": 45
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/mobile/src/search/food-search.test.ts",
+      "sha256": "59bdb4be940e9534ca1e1ea3cfab020fbf7afe0ff2bf3235543b7e3de92ff337",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [2641, 2677],
+          "loc": {
+            "start": {
+              "line": 72,
+              "column": 39
+            },
+            "end": {
+              "line": 72,
+              "column": 75
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/web/src/lib/food-search.test.ts",
+      "sha256": "4d24565e6ec65b7fed221d117614105109216a6db0dd121359e35bcc004c1de4",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [2341, 2373],
+          "loc": {
+            "start": {
+              "line": 69,
+              "column": 41
+            },
+            "end": {
+              "line": 69,
+              "column": 73
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "apps/worker/src/config.ts",
+      "sha256": "5dc68d3c667909794086093b6c754b09723efbf181209fddc3d9b217befaba71",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [717, 802],
+          "loc": {
+            "start": {
+              "line": 25,
+              "column": 14
+            },
+            "end": {
+              "line": 25,
+              "column": 99
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "infra/azure/files/database.env.example",
+      "sha256": "0ddbcea6d07c71c18119b615d601906f50918e591f8d41a4d251d1fb0890babb",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [122, 215],
+          "loc": {
+            "start": {
+              "line": 4,
+              "column": 13
+            },
+            "end": {
+              "line": 4,
+              "column": 106
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "infra/oci/files/database.env.example",
+      "sha256": "0ddbcea6d07c71c18119b615d601906f50918e591f8d41a4d251d1fb0890babb",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [122, 215],
+          "loc": {
+            "start": {
+              "line": 4,
+              "column": 13
+            },
+            "end": {
+              "line": 4,
+              "column": 106
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "packages/db/test/catalogue-authority-deployment.integration.test.ts",
+      "sha256": "233a4e93b5081e034581a3b3e5f3885338cac58efd8f13bee6f535bfb641fd5d",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [26397, 26459],
+          "loc": {
+            "start": {
+              "line": 657,
+              "column": 5
+            },
+            "end": {
+              "line": 657,
+              "column": 67
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [26465, 26521],
+          "loc": {
+            "start": {
+              "line": 658,
+              "column": 5
+            },
+            "end": {
+              "line": 658,
+              "column": 61
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [26683, 26745],
+          "loc": {
+            "start": {
+              "line": 664,
+              "column": 5
+            },
+            "end": {
+              "line": 664,
+              "column": 67
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [26751, 26821],
+          "loc": {
+            "start": {
+              "line": 665,
+              "column": 5
+            },
+            "end": {
+              "line": 665,
+              "column": 75
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [26827, 26912],
+          "loc": {
+            "start": {
+              "line": 666,
+              "column": 5
+            },
+            "end": {
+              "line": 666,
+              "column": 90
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [26918, 27011],
+          "loc": {
+            "start": {
+              "line": 667,
+              "column": 5
+            },
+            "end": {
+              "line": 667,
+              "column": 98
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [27017, 27086],
+          "loc": {
+            "start": {
+              "line": 668,
+              "column": 5
+            },
+            "end": {
+              "line": 668,
+              "column": 74
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "packages/db/test/owned-postgres-session.test.ts",
+      "sha256": "3a4f475af3e8e3ce90fbf143da5c4d79b8194a8cb2596c48e740279a5d8cc101",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [4017, 4072],
+          "loc": {
+            "start": {
+              "line": 135,
+              "column": 23
+            },
+            "end": {
+              "line": 135,
+              "column": 78
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [7142, 7191],
+          "loc": {
+            "start": {
+              "line": 223,
+              "column": 27
+            },
+            "end": {
+              "line": 223,
+              "column": 76
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "packages/db/test/postgres-backup-connection.test.ts",
+      "sha256": "c7e04bc3b3b0d64704ca60973a1aaa1d30d89bb50d9e5d5bb1117aab87d27010",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [432, 487],
+          "loc": {
+            "start": {
+              "line": 15,
+              "column": 21
+            },
+            "end": {
+              "line": 15,
+              "column": 76
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [2114, 2185],
+          "loc": {
+            "start": {
+              "line": 60,
+              "column": 23
+            },
+            "end": {
+              "line": 60,
+              "column": 94
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [2673, 2704],
+          "loc": {
+            "start": {
+              "line": 75,
+              "column": 25
+            },
+            "end": {
+              "line": 75,
+              "column": 56
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [2974, 3012],
+          "loc": {
+            "start": {
+              "line": 85,
+              "column": 3
+            },
+            "end": {
+              "line": 85,
+              "column": 41
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3028, 3084],
+          "loc": {
+            "start": {
+              "line": 86,
+              "column": 3
+            },
+            "end": {
+              "line": 86,
+              "column": 59
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3088, 3144],
+          "loc": {
+            "start": {
+              "line": 87,
+              "column": 3
+            },
+            "end": {
+              "line": 87,
+              "column": 59
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3148, 3219],
+          "loc": {
+            "start": {
+              "line": 88,
+              "column": 3
+            },
+            "end": {
+              "line": 88,
+              "column": 74
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3269, 3323],
+          "loc": {
+            "start": {
+              "line": 90,
+              "column": 3
+            },
+            "end": {
+              "line": 90,
+              "column": 57
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3327, 3380],
+          "loc": {
+            "start": {
+              "line": 91,
+              "column": 3
+            },
+            "end": {
+              "line": 91,
+              "column": 56
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3384, 3431],
+          "loc": {
+            "start": {
+              "line": 92,
+              "column": 3
+            },
+            "end": {
+              "line": 92,
+              "column": 50
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3435, 3487],
+          "loc": {
+            "start": {
+              "line": 93,
+              "column": 3
+            },
+            "end": {
+              "line": 93,
+              "column": 55
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3491, 3548],
+          "loc": {
+            "start": {
+              "line": 94,
+              "column": 3
+            },
+            "end": {
+              "line": 94,
+              "column": 60
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3552, 3613],
+          "loc": {
+            "start": {
+              "line": 95,
+              "column": 3
+            },
+            "end": {
+              "line": 95,
+              "column": 64
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3617, 3678],
+          "loc": {
+            "start": {
+              "line": 96,
+              "column": 3
+            },
+            "end": {
+              "line": 96,
+              "column": 64
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3682, 3745],
+          "loc": {
+            "start": {
+              "line": 97,
+              "column": 3
+            },
+            "end": {
+              "line": 97,
+              "column": 66
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3749, 3807],
+          "loc": {
+            "start": {
+              "line": 98,
+              "column": 3
+            },
+            "end": {
+              "line": 98,
+              "column": 61
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [4023, 4075],
+          "loc": {
+            "start": {
+              "line": 103,
+              "column": 3
+            },
+            "end": {
+              "line": 103,
+              "column": 55
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [4182, 4235],
+          "loc": {
+            "start": {
+              "line": 106,
+              "column": 4
+            },
+            "end": {
+              "line": 106,
+              "column": 57
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [5928, 5959],
+          "loc": {
+            "start": {
+              "line": 151,
+              "column": 27
+            },
+            "end": {
+              "line": 151,
+              "column": 58
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "packages/ingestion/test/acquisition-evidence.test.ts",
+      "sha256": "32a448291e60db245be5cc5521b0bbff399b5510516216f41ba9ed009b8b43d5",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [2966, 3001],
+          "loc": {
+            "start": {
+              "line": 81,
+              "column": 38
+            },
+            "end": {
+              "line": 81,
+              "column": 73
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [3216, 3258],
+          "loc": {
+            "start": {
+              "line": 87,
+              "column": 32
+            },
+            "end": {
+              "line": 87,
+              "column": 74
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [3575, 3612],
+          "loc": {
+            "start": {
+              "line": 96,
+              "column": 42
+            },
+            "end": {
+              "line": 96,
+              "column": 79
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [4335, 4376],
+          "loc": {
+            "start": {
+              "line": 119,
+              "column": 43
+            },
+            "end": {
+              "line": 119,
+              "column": 84
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-basicauth",
+          "messageId": "BasicAuth",
+          "range": [8765, 8810],
+          "loc": {
+            "start": {
+              "line": 228,
+              "column": 41
+            },
+            "end": {
+              "line": 228,
+              "column": 86
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "scripts/postgres-backup.test.mjs",
+      "sha256": "b6f2dfe7aff5762a1368d9ab1a40dbabd8f99e66a6c8512ea945de2698e2dfc5",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [13734, 13805],
+          "loc": {
+            "start": {
+              "line": 343,
+              "column": 25
+            },
+            "end": {
+              "line": 343,
+              "column": 96
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "scripts/postgres-restore.test.mjs",
+      "sha256": "b281036397c7a785332b25089914f94e3f1d1fa96bba3582d2fa3b63df561c38",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [17944, 18005],
+          "loc": {
+            "start": {
+              "line": 465,
+              "column": 23
+            },
+            "end": {
+              "line": 465,
+              "column": 84
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "scripts/retention-privacy-drill-contract.test.mjs",
+      "sha256": "13744781505251187019c8b697ff19f91eaaed5a7118cc083cfccae317c47829",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [3017, 3101],
+          "loc": {
+            "start": {
+              "line": 87,
+              "column": 32
+            },
+            "end": {
+              "line": 87,
+              "column": 116
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [5883, 5967],
+          "loc": {
+            "start": {
+              "line": 151,
+              "column": 32
+            },
+            "end": {
+              "line": 151,
+              "column": 116
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [7011, 7095],
+          "loc": {
+            "start": {
+              "line": 182,
+              "column": 5
+            },
+            "end": {
+              "line": 182,
+              "column": 89
+            }
+          }
+        }
+      ]
+    },
+    {
+      "path": "scripts/run-local-development.test.mjs",
+      "sha256": "641f68e4eb0dd3efff0ba17d73ab03f1398d91a4e7c326ca3da2b970fbee3489",
+      "findings": [
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [1232, 1316],
+          "loc": {
+            "start": {
+              "line": 38,
+              "column": 7
+            },
+            "end": {
+              "line": 38,
+              "column": 91
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [11465, 11549],
+          "loc": {
+            "start": {
+              "line": 342,
+              "column": 9
+            },
+            "end": {
+              "line": 342,
+              "column": 93
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [11592, 11696],
+          "loc": {
+            "start": {
+              "line": 346,
+              "column": 9
+            },
+            "end": {
+              "line": 346,
+              "column": 113
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [35515, 35605],
+          "loc": {
+            "start": {
+              "line": 1070,
+              "column": 9
+            },
+            "end": {
+              "line": 1070,
+              "column": 99
+            }
+          }
+        },
+        {
+          "ruleId": "@secretlint/secretlint-rule-database-connection-string",
+          "messageId": "PostgreSQLConnection",
+          "range": [43958, 44042],
+          "loc": {
+            "start": {
+              "line": 1302,
+              "column": 13
+            },
+            "end": {
+              "line": 1302,
+              "column": 97
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "toolLockSha256": "32f8b937755fa9a6002861c802e5387be8e2b1e0a37e2299c66fdbeffcde3358"
+}

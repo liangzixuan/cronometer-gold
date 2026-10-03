@@ -10,6 +10,15 @@ accurately understand calories, macronutrients, and micronutrients. Accuracy
 means preserving source provenance and missingness—not presenting absent values
 as measured zeros.
 
+## Personal-use target
+
+Deliver a usable personal desktop-web and native Android experience before
+**November 1, 2026**, with iOS also in scope. Broad U.S. food search and barcode
+lookup are mandatory parts of the daily loop. Preserve this target while selecting
+the smallest complete next layer; synthetic data and source completion cannot
+stand in for accepted catalogue coverage or installed-device behavior. The six
+[beta exits](beta-exit-checklist.md) and their release requirements stay in force.
+
 ## Delivery status
 
 Here, **implemented** means the source and its local/CI evidence are complete. It

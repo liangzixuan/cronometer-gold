@@ -1,0 +1,21 @@
+{
+  "name": "@nourishing/repomix",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "pack": "timeout --signal=TERM --kill-after=10s 300s node pack.mjs",
+    "test": "timeout --signal=TERM --kill-after=10s 180s node --test pack.test.mjs",
+    "licenses": "node check-licenses.mjs"
+  },
+  "dependencies": {
+    "@secretlint/core": "13.0.6",
+    "@secretlint/secretlint-rule-preset-recommend": "13.0.6",
+    "repomix": "1.18.1",
+    "isbinaryfile": "5.0.7"
+  },
+  "license": "UNLICENSED"
+}

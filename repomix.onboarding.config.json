@@ -1,0 +1,17 @@
+{
+  "include": [
+    "README.md",
+    "AGENTS.md",
+    "LICENSE",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "docs/product/build-plan.md",
+    "docs/product/beta-exit-checklist.md",
+    "docs/quality/current-readiness.md",
+    "docs/quality/development-workflow.md",
+    "docs/quality/hosted-web-development.md",
+    "docs/quality/windows-mobile-tooling.md",
+    "infra/development/azure/README.md",
+    "docs/APPWRITE_DELIVERY.md"
+  ]
+}

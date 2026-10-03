@@ -1,5 +1,35 @@
 # Current readiness
 
+## October 2–3, 2026 snapshot
+
+The delivered source at `f7d78eddd51b9708c3eb48ad5c181f56d41140fe` includes
+maintained Windows frontend/Expo profiles, mobile API-origin state isolation and
+native Linux Azure development evidence/plan/session tooling with read-only
+complete-state reconciliation. Their runbooks define the qualified boundaries;
+source, export and saved-plan evidence do not establish a hosted app or signed
+phone acceptance. No current Azure allocation is claimed here.
+
+At the 23:27 UTC observation, that commit's BrowserStack workflow passed. CI
+passed its source/contract/check/build work but failed the production dependency
+audit on `GHSA-86w9-cpqp-85rv` (`node-forge`), with no reviewed exception. Container
+supply-chain results completed at 00:26 UTC on October 3: nine image jobs passed;
+the worker job failed while installing its ARM64 emulator because the Docker Hub
+authentication connection reset during a digest-pinned `tonistiigi/binfmt` pull.
+This transport failure does not establish a source defect. These dated outcomes
+do not waive any gate or establish results for a later commit.
+
+The next product work follows the [build plan](../product/build-plan.md): a usable
+desktop-web and Android-first daily loop before November 1, with iOS and broad
+U.S. search/barcodes retained. Hosted lifecycle/recovery, catalogue acceptance,
+signed devices and the six beta exits remain open. Follow the
+[Windows web](hosted-web-development.md), [Windows mobile](windows-mobile-tooling.md)
+and [Azure development](../../infra/development/azure/README.md) entry points.
+
+## Historical delivery evidence
+
+The records below retain their original dates, outcomes and scope. They do not
+assert current runtime health or transfer acceptance to successor source.
+
 The [ADR 0077 review follow-up](../adr/0077-role-specific-p0-evidence.md#follow-up-delivery-and-review-scope)
 is delivered at `5d4c5a148b68bd9a7fb9f1f8c76b66ec9c2ecb68` on
 `codex/retention-features`. Final local gates and all three CI/nine actual container
@@ -301,8 +331,8 @@ actual database canaries and nine endpoint fixtures, zero skips, on its recorded
 source. These historical runs do not measure the corrective commit afresh or the
 full USDA candidate. Owned resources were removed and services stopped/disabled.
 
-[ADR 0105](../adr/0105-catalogue-paged-publication.md) is the active source package
-under explicit user approval: bounded off-current publication, complete persisted
+[ADR 0105](../adr/0105-catalogue-paged-publication.md), later delivered at `0b6208df`
+with local and all three CI/nine container jobs passed, covered bounded off-current publication, complete persisted
 verification, atomic activation, rollback and published-V2 successor baselines.
 Authority, restore and privacy integration form part of that package. Initial
 independent review and offline checks passed on `reviewed-source-final-01.json`
@@ -395,7 +425,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Beta engineering prerequisites | ADRs 0100 through 0104 are delivered. ADR 0105 source review/offline checks and approved 251-record rehearsal 2 passed all 12 cases with cleanup complete. Attempt 1's authority failure and reviewed correction remain recorded; final delivery and exact-commit automatic evidence remain pending. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
+| Beta engineering prerequisites | ADRs 0100 through 0105 are delivered. ADR 0105 at `0b6208df` passed local and all three CI/nine container jobs. Its approved 251-record rehearsal 2 passed all 12 cases with cleanup complete; attempt 1's authority failure remains recorded. ADR 0106 capacity and populated-restore acceptance remains open. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -418,15 +448,11 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0105](../adr/0105-catalogue-paged-publication.md) as one coherent
-publication package through final source/delivery checks and exact-commit
-automatic evidence. Preserve rehearsal 1's failure and the separately approved
-attempt 2's successful, source-bound result. Its service approval is consumed;
-unchanged proof retains its recorded scope.
-ADRs 0077 through 0104 are delivered baselines. This work does not close C1/C2 or
-authorize live activation. Advance the [beta checklist](../product/beta-exit-checklist.md)
-with one package active and action-specific execution approvals preserved. Record
-interruptions outside Git; avoid status-only commit/build cycles.
+Use the [execution queue](../product/build-plan.md#execution-queue) to select one
+complete product layer. ADR 0105 delivery is complete; ADR 0106 scale and populated
+restore, catalogue acceptance, hosted recovery and signed-client acceptance remain
+separate gates. Preserve historical failures and consumed operation approvals.
+Record interruptions outside Git and avoid status-only commit/build cycles.
 
 The scoped external report is complete at `805b937`. Another paid review needs
 explicit scope/spending approval. Audit authorization is consumed. Source,

@@ -1,0 +1,49 @@
+name: Repomix source context
+
+on:
+  push:
+    branches: [codex/retention-features]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  pack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 11.19.0
+          run_install: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - name: Install isolated frozen tool without scripts
+        run: pnpm --dir tools/repomix install --frozen-lockfile --ignore-scripts --strict-peer-dependencies
+      - name: Audit tool dependencies
+        run: pnpm --dir tools/repomix audit --audit-level=low
+      - name: Verify package signatures and provenance
+        working-directory: tools/repomix
+        run: npm audit signatures --prefix="$PWD" --registry=https://registry.npmjs.org/ --ignore-scripts --no-fund --fetch-retries=0 --fetch-timeout=20000
+      - name: Enforce isolated tool license policy
+        run: pnpm --dir tools/repomix run licenses
+      - name: Test committed-source and security boundaries
+        run: pnpm --dir tools/repomix test
+      - name: Generate full and onboarding context
+        run: pnpm --dir tools/repomix run pack
+      - name: Upload accepted source context
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: repomix-${{ github.sha }}
+          path: |
+            repomix-output.md
+            repomix-onboarding.md
+            repomix-manifest.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 6

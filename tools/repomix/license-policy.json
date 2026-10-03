@@ -1,0 +1,14 @@
+{
+  "reviewedAt": "2026-10-02",
+  "reviewedExceptions": [
+    {
+      "packageName": "jschardet",
+      "license": "LGPL-2.1+",
+      "versions": ["3.1.4"],
+      "noticeToken": "jschardet 3.1.4",
+      "owner": "engineering",
+      "expires": "2026-11-15",
+      "reason": "Unmodified dependency of the isolated Repomix generation tool. Tool and node_modules are not redistributed in context artifacts. Preserve notices; modifications or distribution require separate license review."
+    }
+  ]
+}
