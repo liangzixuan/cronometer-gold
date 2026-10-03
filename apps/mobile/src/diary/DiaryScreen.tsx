@@ -1083,7 +1083,13 @@ export function DiaryScreen({
   }
 
   async function remove(entry: DiaryEntry) {
-    if (privateUiClosed.current || repeatDraftRef.current !== null || !diary) return;
+    if (
+      privateUiClosed.current ||
+      editorRef.current !== null ||
+      repeatDraftRef.current !== null ||
+      !diary
+    )
+      return;
     const owner = beginMutation(diary.localDate, entry.id);
     setMessage("Securing this deletion on your device before sending…");
     try {
@@ -1367,6 +1373,7 @@ export function DiaryScreen({
   }
 
   function confirmRemove(entry: DiaryEntry) {
+    if (editorRef.current !== null) return;
     Alert.alert(
       "Delete diary entry?",
       `${entryName(entry)} will be removed from ${diaryGroupLabel(diaryGroups, entry.mealSlot)}.`,
@@ -2660,6 +2667,7 @@ export function DiaryScreen({
                               accessibilityLabel={`Delete ${entryName(entry)}`}
                               accessibilityRole="button"
                               disabled={
+                                editor !== null ||
                                 busyEntry !== null ||
                                 diary.status === "locked" ||
                                 durableQueueUnavailable ||

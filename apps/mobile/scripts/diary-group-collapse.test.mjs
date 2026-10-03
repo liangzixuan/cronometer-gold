@@ -2677,3 +2677,193 @@ describe("native diary submitted edit ownership", () => {
     expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("latest-complete-edit");
   });
 });
+
+describe("native diary cross-entry Delete editor protection", () => {
+  const rawNote = "  exact unsaved note\nsecond line  ";
+  function draft(tree) {
+    const value = (label) =>
+      nodes(
+        tree,
+        (node) => node.type === "TextInput" && node.props.accessibilityLabel === label,
+      ).map((node) => node.props.value);
+    return {
+      quantity: value("Quantity"),
+      date: value("Entry local date"),
+      time: value("Entry local time in America/Chicago"),
+      note: value("Private note for Apple"),
+    };
+  }
+  async function openDraft(harness) {
+    let tree = await harness.settle();
+    byLabel(tree, "Edit Apple entry and private note").props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, "Quantity", "TextInput").props.onChangeText("2.0001");
+    tree = await harness.settle();
+    byLabel(tree, "Private note for Apple", "TextInput").props.onChangeText(rawNote);
+    return harness.settle();
+  }
+  function deleteConfirmation() {
+    const [title, , actions] = Alert.alert.mock.calls.at(-1);
+    expect(title).toBe("Delete diary entry?");
+    expect(actions.map((action) => action.text)).toEqual(["Cancel", "Delete"]);
+    return actions[1].onPress;
+  }
+  const deleteBody = {
+    operationKind: "delete",
+    entryId: privateCustomEntry.id,
+    expectedEntryRevision: "3",
+    entryName: "Owner oats",
+    portionLabel: "1.5 medium apple",
+    localDate: selectedDate,
+    mealSlot: "lunch",
+  };
+
+  it("keeps the raw Apple draft when ordinary Delete of Owner oats would acknowledge and reload", async () => {
+    let rows = entries;
+    const { harness, controller, requests, receive } = setup(() =>
+      response(page(selectedDate, rows)),
+    );
+    let tree = await openDraft(harness);
+    const original = draft(tree);
+    const reads = requests.length;
+    const button = byLabel(tree, "Delete Owner oats");
+    // Exercise the old ordinary enabled-button flow fully before asserting.
+    if (!button.props.disabled) {
+      button.props.onPress();
+      deleteConfirmation()();
+      tree = await harness.settle();
+      if (controller.enqueueOperation.mock.calls.length) {
+        expect(controller.enqueueOperation).toHaveBeenCalledExactlyOnceWith(deleteBody);
+        rows = entries.filter((row) => row.id !== privateCustomEntry.id);
+        receive();
+        tree = await harness.settle();
+      }
+    }
+    expect({
+      disabled: button.props.disabled,
+      alerts: Alert.alert.mock.calls.length,
+      enqueues: controller.enqueueOperation.mock.calls.length,
+      drains: controller.requestDrain.mock.calls.length,
+      additionalReads: requests.length - reads,
+      draft: draft(tree),
+    }).toEqual({
+      disabled: true,
+      alerts: 0,
+      enqueues: 0,
+      drains: 0,
+      additionalReads: 0,
+      draft: original,
+    });
+  });
+
+  for (const repaint of [false, true]) {
+    it(`rejects a retained Delete button after opening an editor with repaint=${repaint}`, async () => {
+      const { harness, controller, requests } = setup();
+      let tree = await harness.settle();
+      const remove = byLabel(tree, "Delete Owner oats").props.onPress;
+      byLabel(tree, "Edit Apple entry and private note").props.onPress();
+      if (repaint) tree = await harness.settle();
+      const reads = requests.length;
+      remove();
+      tree = await harness.settle();
+      expect(Alert.alert).not.toHaveBeenCalled();
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+      expect(controller.requestDrain).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(reads);
+      expect(draft(tree).quantity).toEqual(["1.5"]);
+    });
+  }
+
+  it("rejects an Alert Delete callback retained before another entry's editor opens", async () => {
+    const { harness, controller, requests } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, "Delete Owner oats").props.onPress();
+    const confirm = deleteConfirmation();
+    tree = await openDraft(harness);
+    const original = draft(tree);
+    const reads = requests.length;
+    confirm();
+    tree = await harness.settle();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(reads);
+    expect(draft(tree)).toEqual(original);
+  });
+
+  for (const close of ["Cancel", "Save"]) {
+    it(`allows ordinary Delete with its exact outbox payload after ${close} closes the editor`, async () => {
+      let rows = entries;
+      const { harness, controller, receive } = setup(() => response(page(selectedDate, rows)));
+      controller.enqueueOperation.mockImplementation(async () => ({
+        operationId: `operation-${controller.enqueueOperation.mock.calls.length}`,
+      }));
+      let tree = await openDraft(harness);
+      byLabel(
+        tree,
+        close === "Cancel" ? "Cancel editing Apple" : "Save changes to Apple",
+      ).props.onPress();
+      tree = await harness.settle();
+      if (close === "Save") {
+        expect(controller.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+          operationKind: "update",
+          entryId: entry.id,
+          expectedEntryRevision: "3",
+          entryName: "Apple",
+          portionLabel: "1.5 medium apple",
+          localDate: selectedDate,
+          mealSlot: "breakfast",
+          body: {
+            portion: { kind: "serving", servingId: "303", amount: "2.0001" },
+            mealSlot: "breakfast",
+            note: rawNote,
+          },
+        });
+        rows = entries.map((row) =>
+          row.id === entry.id
+            ? {
+                ...row,
+                revision: "4",
+                note: rawNote,
+                portion: { ...row.portion, amount: "2.0001" },
+                resolvedGrams: "200.01",
+              }
+            : row,
+        );
+        receive();
+        tree = await harness.settle();
+      }
+      const button = byLabel(tree, "Delete Owner oats");
+      expect(button.props.disabled).toBe(false);
+      button.props.onPress();
+      deleteConfirmation()();
+      tree = await harness.settle();
+      expect(controller.enqueueOperation).toHaveBeenLastCalledWith(deleteBody);
+      expect(controller.enqueueOperation).toHaveBeenCalledTimes(close === "Save" ? 2 : 1);
+      expect(controller.requestDrain).toHaveBeenLastCalledWith(
+        close === "Save" ? "operation-2" : "operation-1",
+      );
+      rows = rows.filter((row) => row.id !== privateCustomEntry.id);
+      receive();
+      tree = await harness.settle();
+      expect(screenText(tree)).not.toContain("Owner oats");
+      expect(screenText(tree)).toContain("Apple");
+      expect(draft(tree).quantity).toEqual([]);
+    });
+  }
+
+  it("opens ordinary native Delete confirmation without enqueueing when Cancel is selected", async () => {
+    const { harness, controller, requests } = setup();
+    const tree = await harness.settle();
+    const reads = requests.length;
+    const button = byLabel(tree, "Delete Owner oats");
+    expect(button.props.disabled).toBe(false);
+    button.props.onPress();
+    deleteConfirmation();
+    const cancel = Alert.alert.mock.calls.at(-1)[2][0];
+    cancel.onPress?.();
+    await harness.settle();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(reads);
+  });
+});
