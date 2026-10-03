@@ -875,3 +875,219 @@ describe("passive food serving amounts", () => {
     expect(text()).toContain("1 slice · 150 g");
   });
 });
+
+describe("web search request retirement", () => {
+  const freshHit = { ...hit, foodId: "102", foodVersionId: "203", name: "Fresh Pear" };
+  const finalHit = { ...hit, foodId: "103", foodVersionId: "204", name: "Final Pear" };
+  const page = (items: readonly unknown[], nextCursor: string | null = null) => ({
+    data: items,
+    page: { nextCursor },
+  });
+  async function submitQuery(value: string) {
+    await change("food-query", value);
+    const form = elements().find(
+      (node) => node.type === "form" && node.props["aria-label"] === "Food search",
+    );
+    if (!form) throw new Error("Missing search form");
+    // Calls the real form handler. This does not prove an implicit browser submit
+    // is reachable while the submit button is disabled.
+    invoke(form, "onSubmit", { preventDefault: vi.fn() });
+    await hooks.settle();
+  }
+  function searchView() {
+    const status = elements().find(
+      (node) =>
+        typeof node.props.className === "string" &&
+        node.props.className.startsWith("searchStatus "),
+    );
+    const list = elements().find((node) => node.props["aria-label"] === "Food search results");
+    return {
+      status: text(status),
+      state: status?.props.className,
+      names: elements(list ?? null)
+        .filter((node) => node.type === "h3")
+        .map((node) => text(node)),
+      loadMore: elements().some(
+        (node) => node.type === "button" && text(node) === "Load more results",
+      ),
+    };
+  }
+
+  it.each(["success", "http", "network", "json", "malformed-json"])(
+    "keeps blank handler validation after an older %s response and permits fresh recovery",
+    async (outcome) => {
+      const held = deferred<Response>();
+      const body = deferred<unknown>();
+      const delayedBody = outcome === "json" || outcome === "malformed-json";
+      const oldJson = vi.fn(() =>
+        delayedBody ? body.promise : Promise.resolve(page([hit], "old_cursor")),
+      );
+      let originalSignal: AbortSignal | null | undefined;
+      let reads = 0;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?")) {
+          reads += 1;
+          if (reads === 1) {
+            originalSignal = init?.signal;
+            return delayedBody
+              ? ({ ok: true, status: 200, json: oldJson } as unknown as Response)
+              : held.promise;
+          }
+          return Response.json(page([freshHit]));
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await submitQuery("apple");
+      expect(button("Searching…").props.disabled).toBe(true);
+      if (delayedBody) expect(oldJson).toHaveBeenCalledOnce();
+      await submitQuery(outcome === "http" || outcome === "json" ? " \t " : "");
+      const validation = searchView();
+      expect(validation.status).toBe("Enter a food or brand name before searching.");
+      expect(validation.names).toEqual([]);
+      expect(validation.loadMore).toBe(false);
+      expect(reads).toBe(1);
+      if (delayedBody)
+        body.resolve(outcome === "json" ? page([hit], "old_cursor") : { broken: true });
+      else if (outcome === "network") held.reject(new TypeError("Synthetic retired request"));
+      else
+        held.resolve({
+          ok: outcome !== "http",
+          status: outcome === "http" ? 503 : 200,
+          json: oldJson,
+        } as unknown as Response);
+      await hooks.settle();
+      expect(searchView()).toEqual(validation);
+      expect(originalSignal?.aborted).toBe(true);
+      if (!delayedBody) expect(oldJson).not.toHaveBeenCalled();
+      await submitQuery("pear");
+      expect(searchView().names).toEqual(["Fresh Pear"]);
+      expect(searchView().status).toBe("1 result shown for “pear”.");
+      expect(reads).toBe(2);
+      expect(authCount(fetcher)).toBe(1);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["new-search", "intent", "unmount"])(
+    "ignores an older invalid continuation after %s",
+    async (boundary) => {
+      const held = deferred<Response>();
+      const oldJson = vi.fn(() => Promise.resolve({ error: "Synthetic expired cursor" }));
+      let originalSignal: AbortSignal | null | undefined;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?")) {
+          const query = new URL(url, "https://example.test").searchParams;
+          if (query.get("cursor") === "old_cursor") {
+            originalSignal = init?.signal;
+            return held.promise;
+          }
+          if (query.get("cursor") === "fresh_cursor") return Response.json(page([finalHit]));
+          return query.get("query") === "pear"
+            ? Response.json(page([freshHit], "fresh_cursor"))
+            : Response.json(page([hit], "old_cursor"));
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await submitQuery("apple");
+      invoke(button("Load more results"));
+      await hooks.settle();
+      if (boundary === "new-search") await submitQuery("pear");
+      else if (boundary === "intent") {
+        const radio = elements().find(
+          (node) => node.props.name === "food-intent" && node.props.value === "generic",
+        );
+        if (!radio) throw new Error("Missing food intent");
+        expect(radio.props.disabled).not.toBe(true);
+        invoke(radio, "onChange");
+        await hooks.settle();
+      } else hooks.unmount();
+      const current = searchView();
+      held.resolve({ ok: false, status: 400, json: oldJson } as unknown as Response);
+      await hooks.settle();
+      expect(hooks.afterClose()).toBe(0);
+      expect(searchView()).toEqual(current);
+      expect(originalSignal?.aborted).toBe(true);
+      expect(oldJson).not.toHaveBeenCalled();
+      if (boundary === "new-search") {
+        expect(current.names).toEqual(["Fresh Pear"]);
+        expect(current.loadMore).toBe(true);
+        invoke(button("Load more results"));
+        await hooks.settle();
+        expect(searchView().names).toEqual(["Fresh Pear", "Final Pear"]);
+        expect(searchView().loadMore).toBe(false);
+      } else if (boundary === "intent") {
+        expect(current.names).toEqual([]);
+        expect(current.status).toBe("Search generic by food or brand name.");
+        await submitQuery("pear");
+        expect(searchView().names).toEqual(["Fresh Pear"]);
+        expect(fetcher.mock.calls.some(([url]) => url.includes("intent=generic"))).toBe(true);
+      }
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
+  it("appends a current continuation without duplicating versions", async () => {
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return session();
+      if (url.startsWith("/api/foods/search?"))
+        return Response.json(
+          url.includes("cursor=") ? page([hit, freshHit]) : page([hit], "current_cursor"),
+        );
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await submitQuery("apple");
+    await change("quick-add-search-202-amount", "2.500000");
+    invoke(button("Load more results"));
+    await hooks.settle();
+    expect(searchView().names).toEqual(["Apple Pie", "Fresh Pear"]);
+    expect(searchView().status).toBe("2 results shown for “apple”.");
+    expect(searchView().loadMore).toBe(false);
+    expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(operationId).not.toHaveBeenCalled();
+  });
+
+  it("keeps current continuation expiry visible and permits a fresh search", async () => {
+    const json = vi.fn();
+    let reads = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return session();
+      if (url.startsWith("/api/foods/search?")) {
+        reads += 1;
+        if (url.includes("cursor=")) return { ok: false, status: 400, json } as unknown as Response;
+        return Response.json(
+          page(reads === 1 ? [hit] : [freshHit], reads === 1 ? "expired_cursor" : null),
+        );
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await submitQuery("apple");
+    invoke(button("Load more results"));
+    await hooks.settle();
+    expect(searchView().names).toEqual(["Apple Pie"]);
+    expect(searchView().status).toBe(
+      "These results changed while you were browsing. Search again for a fresh result set.",
+    );
+    expect(searchView().loadMore).toBe(false);
+    expect(json).not.toHaveBeenCalled();
+    await submitQuery("pear");
+    expect(searchView().names).toEqual(["Fresh Pear"]);
+    expect(reads).toBe(3);
+  });
+});

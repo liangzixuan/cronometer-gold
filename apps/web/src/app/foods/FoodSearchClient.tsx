@@ -435,6 +435,8 @@ export function FoodSearchClient() {
 
   const runSearch = useCallback(
     async (requestedQuery: string, cursor?: string) => {
+      searchController.current?.abort();
+      searchController.current = null;
       const normalized = normalizeSearchText(requestedQuery);
       if (!normalized) {
         setResults([]);
@@ -444,7 +446,6 @@ export function FoodSearchClient() {
         return;
       }
 
-      searchController.current?.abort();
       if (cursor === undefined) {
         setResults([]);
         setNextCursor(null);
@@ -452,6 +453,7 @@ export function FoodSearchClient() {
       }
       const controller = new AbortController();
       searchController.current = controller;
+      const isCurrent = () => !controller.signal.aborted && searchController.current === controller;
       setSearchState("loading");
       setSearchMessage(cursor ? "Loading more matching foods…" : `Searching for “${normalized}”…`);
 
@@ -465,6 +467,7 @@ export function FoodSearchClient() {
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
+        if (!isCurrent()) return;
         if (isInvalidContinuationResponse(response.status, cursor)) {
           setNextCursor(null);
           setSearchState("error");
@@ -474,8 +477,9 @@ export function FoodSearchClient() {
           return;
         }
         if (!response.ok) throw new Error("search-unavailable");
-        const payload = parseFoodSearchPage(await responseJson(response));
-        if (controller.signal.aborted) return;
+        const body = await responseJson(response);
+        if (!isCurrent()) return;
+        const payload = parseFoodSearchPage(body);
 
         const merged = mergeFoodSearchResults(results, payload.data, cursor !== undefined);
         setResults(merged);
@@ -488,7 +492,7 @@ export function FoodSearchClient() {
             : `${merged.length} ${merged.length === 1 ? "result" : "results"} shown for “${normalized}”.`,
         );
       } catch {
-        if (!controller.signal.aborted) {
+        if (isCurrent()) {
           setSearchState("error");
           setSearchMessage(
             "Food search is unavailable right now. Your query was not saved; please try again.",
