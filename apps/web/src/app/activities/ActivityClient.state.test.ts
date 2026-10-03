@@ -1927,3 +1927,174 @@ describe("Activity recovered session preserves existing work", () => {
     expect(button("Add entry").props.disabled).toBe(false);
   });
 });
+
+describe("activity editor replacement protection", () => {
+  const second = { ...original, id: "8bcfa2bf-4950-43f7-9f24-b983ac803012", name: "Evening cycle" };
+  function rowEdit(id: string) {
+    const row = elements().find(
+      (node) => node.type === "li" && (node as ElementNode & { key?: string }).key === id,
+    );
+    if (!row) throw new Error(`Missing activity row ${id}`);
+    const control = elements(row).find(
+      (node) => node.type === "button" && text(node) === "Edit activity",
+    );
+    if (!control) throw new Error(`Missing Edit for ${id}`);
+    return control;
+  }
+  function editorValues() {
+    return [
+      "Activity name",
+      "Duration (minutes)",
+      "Self-reported calories (optional)",
+      "Local date",
+      "Local time",
+    ].map((label) => field(label, editor()).props.value);
+  }
+  async function openRawDraft() {
+    invoke(rowEdit(original.id));
+    await hooks.settle();
+    for (const [label, value] of [
+      ["Activity name", "  unfinished correction  "],
+      ["Duration (minutes)", "003x"],
+      ["Self-reported calories (optional)", "12."],
+      ["Local date", ""],
+      ["Local time", ""],
+    ])
+      await change(label as string, value as string, editor());
+    return editorValues();
+  }
+
+  it("prevents ordinary B Edit from silently replacing all raw correction fields for A", async () => {
+    const fetch = await mount(fetcher(day([original, second])));
+    await change("Activity name", "  independent Add draft  ");
+    const expected = await openRawDraft();
+    const count = fetch.mock.calls.length;
+    const other = rowEdit(second.id);
+    // Follow the old enabled-button path before comparing the resulting editor.
+    if (!other.props.disabled) {
+      invoke(other);
+      await hooks.settle();
+    }
+    expect({ disabled: other.props.disabled, values: editorValues() }).toEqual({
+      disabled: true,
+      values: expected,
+    });
+    expect(field("Activity name").props.value).toBe("  independent Add draft  ");
+    expect(fetch).toHaveBeenCalledTimes(count);
+  });
+
+  it("rejects a current-render B callback while A has raw corrections", async () => {
+    const fetch = await mount(fetcher(day([original, second])));
+    const expected = await openRawDraft();
+    const count = fetch.mock.calls.length;
+    invoke(rowEdit(second.id));
+    await hooks.settle();
+    expect(editorValues()).toEqual(expected);
+    expect(fetch).toHaveBeenCalledTimes(count);
+  });
+
+  it.each([original.id, second.id])(
+    "keeps an earlier Edit callback for %s inert before the first editor paints",
+    async (target) => {
+      const fetch = await mount(fetcher(day([original, second])));
+      const prior = rowEdit(target);
+      const count = fetch.mock.calls.length;
+      invoke(rowEdit(original.id));
+      invoke(prior);
+      await hooks.settle();
+      expect(field("Activity name", editor()).props.value).toBe(original.name);
+      expect(fetch).toHaveBeenCalledTimes(count);
+    },
+  );
+
+  it("preserves a selected repeated-minute occurrence and saved precision while replacement is blocked", async () => {
+    routeDate = foldEntry.localDate;
+    const { fetch, writes } = occurrenceFetcher(
+      day([foldEntry, { ...foldEntry, id: second.id, name: second.name }], routeDate),
+    );
+    await mount(fetch);
+    invoke(rowEdit(original.id));
+    await hooks.settle();
+    await click("Edit activity Later occurrence · UTC−06:00");
+    await change("Duration (minutes)", "36", editor());
+    const expected = editorValues();
+    const count = fetch.mock.calls.length;
+    invoke(rowEdit(second.id));
+    await hooks.settle();
+    expect(editorValues()).toEqual(expected);
+    expect(button("Edit activity Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+    expect(fetch).toHaveBeenCalledTimes(count);
+    await submitEdit();
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({
+      durationMinutes: 36,
+      occurredAt: "2026-11-01T07:30:00.000Z",
+    });
+    expect(writes[0]?.headers).toMatchObject({
+      "if-match": '"2"',
+      "x-expected-profile-time-zone": "America/Chicago",
+    });
+    await click("Retry day view");
+    invoke(rowEdit(second.id));
+    await hooks.settle();
+    await submitEdit();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(writes[1]?.headers).toEqual(writes[0]?.headers);
+  });
+
+  it.each(["Cancel", "Save"] as const)(
+    "restores ordinary B Edit after %s closes A without disturbing the Add draft",
+    async (close) => {
+      const pending = deferred<Response>();
+      let rows = [original, second];
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return Response.json(session());
+        if (init?.method === "PATCH") {
+          writes.push(init);
+          return pending.promise;
+        }
+        return Response.json(day(rows));
+      });
+      await mount(fetch);
+      await change("Activity name", "independent Add");
+      invoke(rowEdit(original.id));
+      await hooks.settle();
+      await change("Duration (minutes)", "45", editor());
+      const retainedB = rowEdit(second.id);
+      if (close === "Cancel") {
+        await click("Cancel");
+      } else {
+        invoke(editor(), "onSubmit", { preventDefault() {} });
+        invoke(retainedB);
+        await hooks.settle();
+        expect(field("Duration (minutes)", editor()).props.value).toBe("45");
+        expect(rowEdit(second.id).props.disabled).toBe(true);
+        expect(writes).toHaveLength(1);
+        expect(JSON.parse(String(writes[0]?.body))).toEqual({ durationMinutes: 45 });
+        expect(writes[0]?.headers).toMatchObject({ "if-match": '"2"' });
+        rows = [{ ...original, revision: "3", durationMinutes: 45 }, second];
+        pending.resolve(
+          Response.json({
+            data: {
+              replayed: false,
+              entry: rows[0],
+              affectedDays: [{ localDate: original.localDate, revision: "4" }],
+            },
+          }),
+        );
+        await hooks.settle();
+      }
+      const next = rowEdit(second.id);
+      expect(next.props.disabled).toBe(false);
+      const count = fetch.mock.calls.length;
+      invoke(next);
+      await hooks.settle();
+      expect(field("Activity name", editor()).props.value).toBe(second.name);
+      expect(field("Activity name").props.value).toBe("independent Add");
+      expect(fetch).toHaveBeenCalledTimes(count);
+      expect(writes).toHaveLength(close === "Save" ? 1 : 0);
+    },
+  );
+});

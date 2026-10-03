@@ -589,6 +589,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     setDate(next);
   }
   function beginEdit(entry: ActivityEntry) {
+    if (editRef.current !== null) return;
     if (!canUseControls() || !day || dayRef.current !== day || !day.entries.includes(entry)) return;
     setEdit({
       entry,
@@ -1417,7 +1418,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                         </button>
                         <button
                           className="buttonQuiet"
-                          disabled={controlsDisabled}
+                          disabled={controlsDisabled || edit !== null}
                           onClick={() => beginEdit(entry)}
                           type="button"
                         >
