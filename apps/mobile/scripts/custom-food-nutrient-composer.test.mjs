@@ -10870,3 +10870,429 @@ describe("native independent health section loading", () => {
 vi.mock("../src/api/mobile-fetch", () => ({
   mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
 }));
+
+const nativeArchiveAlert = (await import("react-native")).Alert;
+function archiveCard(tree, food = sourceFood) {
+  const found = nodes(
+    tree,
+    (node) =>
+      node.type === "View" &&
+      React.Children.toArray(node.props.children).some(
+        (child) => child?.type === "Text" && text(child) === food.currentVersion.name,
+      ),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+async function openArchiveAlert(harness, food = sourceFood) {
+  const target = button(archiveCard(await harness.settle(), food), "Archive");
+  expect(target.props.disabled).not.toBe(true);
+  target.props.onPress();
+  const call = nativeArchiveAlert.alert.mock.calls.at(-1);
+  expect(call[0]).toBe("Archive private food?");
+  return call[2];
+}
+const archiveReceipt = (changes = {}) =>
+  response({
+    data: {
+      replayed: false,
+      customFood: { ...sourceFood, status: "archived", revision: "2", ...changes },
+    },
+  });
+const archiveRequests = (requests) =>
+  requests.filter(
+    (request) =>
+      request.method === "DELETE" && request.url.pathname.startsWith("/v1/custom-foods/"),
+  );
+const confirmArchive = (choices) => choices.find((choice) => choice.text === "Archive").onPress();
+
+describe("native custom-food Archive retirement", () => {
+  for (const status of [200, 401, 500]) {
+    it(`ignores held ${status} after unmount before parsing, unauthorized or state writes`, async () => {
+      const held = deferred();
+      const { harness, requests, props } = setup((request) =>
+        request.method === "DELETE" ? held.promise : undefined,
+      );
+      confirmArchive(await openArchiveAlert(harness));
+      expect(archiveRequests(requests)).toHaveLength(1);
+      const pending = archiveRequests(requests)[0];
+      harness.unmount();
+      const json = vi.fn(async () => ({
+        data: { replayed: false, customFood: { ...sourceFood, status: "archived", revision: "2" } },
+      }));
+      held.resolve({ status, ok: status === 200, json });
+      await harness.settle();
+      expect(pending.signal?.aborted).toBe(true);
+      expect(json).not.toHaveBeenCalled();
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+  for (const boundary of ["owner", "session", "token", "API", "profile", "background"]) {
+    it(`retires a pending Archive across ${boundary} before replacement effects`, async () => {
+      const held = deferred();
+      const { harness, props } = setup((request) =>
+        request.method === "DELETE" ? held.promise : undefined,
+      );
+      try {
+        confirmArchive(await openArchiveAlert(harness));
+        await harness.settle();
+        if (boundary === "background") state("background");
+        else {
+          harness.updateProps(
+            boundary === "owner"
+              ? { ownerUserId: otherOwner }
+              : boundary === "session"
+                ? { sessionEpoch: 2 }
+                : boundary === "token"
+                  ? { accessToken: "replacement-synthetic-session" }
+                  : boundary === "API"
+                    ? { apiBase: new URL("http://127.0.0.1:4001") }
+                    : { profileTimeZone: "UTC" },
+          );
+          harness.renderWithoutEffects();
+        }
+        const before = harness.stateWrites;
+        const json = vi.fn(async () => ({}));
+        held.resolve({ status: 401, ok: false, json });
+        await harness.settle();
+        expect(json).not.toHaveBeenCalled();
+        expect(props.onUnauthorized).not.toHaveBeenCalled();
+        expect(harness.stateWrites).toBe(before);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  for (const boundary of ["background", "unmount", "profile"]) {
+    it(`does not install a parsed receipt delayed across ${boundary}`, async () => {
+      const body = deferred();
+      const json = vi.fn(() => body.promise);
+      const { harness, requests } = setup((request) =>
+        request.method === "DELETE" ? { status: 200, ok: true, json } : undefined,
+      );
+      let unmounted = false;
+      try {
+        confirmArchive(await openArchiveAlert(harness));
+        await harness.settle();
+        expect(json).toHaveBeenCalledTimes(1);
+        if (boundary === "unmount") {
+          harness.unmount();
+          unmounted = true;
+        } else if (boundary === "background") state("background");
+        else {
+          harness.updateProps({ profileTimeZone: "UTC" });
+          harness.renderWithoutEffects();
+        }
+        const before = harness.stateWrites;
+        body.resolve(await archiveReceipt().json());
+        await harness.settle();
+        expect(harness.stateWrites).toBe(before);
+        expect(archiveRequests(requests)).toHaveLength(1);
+        expect(harness.writesAfterUnmount).toBe(0);
+      } finally {
+        if (!unmounted) harness.unmount();
+      }
+    });
+  }
+  for (const boundary of ["cancel", "refresh", "owner", "background", "unmount"]) {
+    it(`keeps a retained Alert confirmation inert after ${boundary}`, async () => {
+      const { harness, requests } = setup((request) =>
+        request.method === "DELETE" ? archiveReceipt() : undefined,
+      );
+      let unmounted = false;
+      try {
+        const choices = await openArchiveAlert(harness);
+        if (boundary === "cancel") choices.find((choice) => choice.text === "Cancel").onPress?.();
+        else if (boundary === "refresh") await click(harness, "Refresh private data");
+        else if (boundary === "owner") {
+          harness.updateProps({ ownerUserId: otherOwner });
+          harness.renderWithoutEffects();
+        } else if (boundary === "background") state("background");
+        else {
+          harness.unmount();
+          unmounted = true;
+        }
+        confirmArchive(choices);
+        await harness.settle();
+        expect(archiveRequests(requests)).toHaveLength(0);
+        expect(harness.writesAfterUnmount).toBe(0);
+      } finally {
+        if (!unmounted) harness.unmount();
+      }
+    });
+  }
+  it("consumes confirmation once and blocks a retained second Archive while pending", async () => {
+    const held = deferred();
+    const { harness, requests } = setup((request) =>
+      request.method === "DELETE" ? held.promise : undefined,
+    );
+    try {
+      const oldButton = button(archiveCard(await harness.settle()), "Archive").props.onPress;
+      const choices = await openArchiveAlert(harness);
+      confirmArchive(choices);
+      confirmArchive(choices);
+      oldButton();
+      expect(archiveRequests(requests)).toHaveLength(1);
+      expect(nativeArchiveAlert.alert).toHaveBeenCalledTimes(1);
+      const tree = await harness.settle();
+      expect(button(archiveCard(tree), "Archive").props.disabled).toBe(true);
+      held.resolve(archiveReceipt());
+      expect(text(archiveCard(await harness.settle()))).toContain("archived");
+      expect(archiveRequests(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const operation of ["save", "page", "refresh"]) {
+    it(`does not overlap an earlier ${operation}, even through a pre-paint Alert`, async () => {
+      const held = deferred();
+      let holding = false;
+      const { harness, requests } = setup((request) => {
+        if (request.method === "DELETE") return archiveReceipt();
+        if (
+          holding &&
+          (operation === "save"
+            ? request.method === "POST"
+            : request.url.pathname === "/v1/custom-foods")
+        )
+          return held.promise;
+        if (request.url.pathname === "/v1/custom-foods")
+          return response({ data: [sourceFood], page: { nextCursor: "page-two" } });
+        return undefined;
+      });
+      try {
+        if (operation === "save") await fillManual(harness);
+        const tree = await harness.settle();
+        const oldButton = button(archiveCard(tree), "Archive").props.onPress;
+        const choices = await openArchiveAlert(harness);
+        holding = true;
+        button(
+          tree,
+          operation === "save"
+            ? "Create private food"
+            : operation === "page"
+              ? "Load more custom foods"
+              : "Refresh private data",
+        ).props.onPress();
+        confirmArchive(choices);
+        oldButton();
+        expect(archiveRequests(requests)).toHaveLength(0);
+        expect(nativeArchiveAlert.alert).toHaveBeenCalledTimes(1);
+        const prior = requests.at(-1);
+        expect(prior.signal?.aborted).not.toBe(true);
+        holding = false;
+        held.resolve(response({ message: "Synthetic earlier failure" }, 503));
+        await harness.settle();
+        if (operation === "refresh") await click(harness, "Refresh private data");
+        confirmArchive(await openArchiveAlert(harness));
+        expect(archiveRequests(requests)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("keeps an exact uncertain retry across background and does not clear a newer Archive", async () => {
+    const old = deferred();
+    const newer = deferred();
+    let count = 0;
+    const { harness, requests } = setup((request) =>
+      request.method === "DELETE" ? (++count === 1 ? old.promise : newer.promise) : undefined,
+    );
+    try {
+      await type(harness, "Name", "Unrelated raw draft");
+      confirmArchive(await openArchiveAlert(harness));
+      state("background");
+      state("active");
+      confirmArchive(await openArchiveAlert(harness));
+      const [first, second] = archiveRequests(requests);
+      expect(first.signal.aborted).toBe(true);
+      expect(second.headers).toEqual(first.headers);
+      expect(second.body).toBe(first.body);
+      old.resolve(response({ message: "Retired failure" }, 503));
+      let tree = await harness.settle();
+      expect(button(archiveCard(tree), "Archive").props.disabled).toBe(true);
+      expect(text(tree)).not.toContain("Retired failure");
+      newer.resolve(archiveReceipt());
+      tree = await harness.settle();
+      expect(text(tree)).toContain("Custom food archived; exact diary history remains pinned.");
+      expect(input(tree, "Name").props.value).toBe("Unrelated raw draft");
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const outcome of [
+    "error",
+    "malformed",
+    "wrong-id",
+    "wrong-version",
+    "active",
+    "old-revision",
+    "412",
+  ]) {
+    it(`retains current ${outcome} recovery with the correct operation identity`, async () => {
+      let count = 0;
+      const { harness, requests } = setup((request) => {
+        if (request.method !== "DELETE") return undefined;
+        if (++count > 1) return archiveReceipt();
+        return outcome === "error"
+          ? response({ message: "Synthetic failure" }, 503)
+          : outcome === "malformed"
+            ? response({ data: {} })
+            : outcome === "412"
+              ? response({ message: "Changed revision" }, 412)
+              : archiveReceipt(
+                  outcome === "wrong-id"
+                    ? { id: archivedFood.id }
+                    : outcome === "wrong-version"
+                      ? { currentVersion: { ...sourceFood.currentVersion, id: "999" } }
+                      : outcome === "active"
+                        ? { status: "active" }
+                        : { revision: "1" },
+                );
+      });
+      try {
+        confirmArchive(await openArchiveAlert(harness));
+        let tree = await harness.settle();
+        expect(text(archiveCard(tree))).toContain("active");
+        expect(text(tree)).not.toContain(
+          "Custom food archived; exact diary history remains pinned.",
+        );
+        confirmArchive(await openArchiveAlert(harness));
+        tree = await harness.settle();
+        const [first, second] = archiveRequests(requests);
+        expect(second.headers["if-match"]).toBe(first.headers["if-match"]);
+        if (outcome === "412")
+          expect(second.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+        else expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+        expect(text(archiveCard(tree))).toContain("archived");
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("closes the current unauthorized view exactly once without publishing Archive success", async () => {
+    const { harness, requests, props } = setup((request) =>
+      request.method === "DELETE" ? response({}, 401) : undefined,
+    );
+    try {
+      const choices = await openArchiveAlert(harness);
+      confirmArchive(choices);
+      const tree = await harness.settle();
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      expect(text(tree)).not.toContain("Custom food archived; exact diary history remains pinned.");
+      confirmArchive(choices);
+      await harness.settle();
+      expect(archiveRequests(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+describe("native Archive integration with private logging and closure", () => {
+  it("rejects the retained Alert while an earlier Log is being secured, then permits a fresh Archive", async () => {
+    const held = deferred();
+    const { harness, requests, props } = setup((request) =>
+      request.method === "DELETE" ? archiveReceipt() : undefined,
+    );
+    props.quickAddOutboxController.enqueueOperation.mockReturnValue(held.promise);
+    try {
+      await click(harness, "Log exact version");
+      const tree = await changeCustomLogField(harness, "Local date", "2026-09-01");
+      const choices = await openArchiveAlert(harness);
+      const oldButton = button(archiveCard(tree), "Archive").props.onPress;
+      button(tree, "Secure & log pinned version").props.onPress();
+      confirmArchive(choices);
+      oldButton();
+      expect(archiveRequests(requests)).toHaveLength(0);
+      expect(nativeArchiveAlert.alert).toHaveBeenCalledTimes(1);
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      held.resolve({ operationId: "held-before-archive" });
+      await harness.settle();
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "held-before-archive",
+      );
+      confirmArchive(await openArchiveAlert(harness));
+      await harness.settle();
+      expect(archiveRequests(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("does not let an older Archive parse, publish or clear a newer retained Log's busy state", async () => {
+    const archive = deferred();
+    const log = deferred();
+    const { harness, props } = setup((request) =>
+      request.method === "DELETE" ? archive.promise : undefined,
+    );
+    props.quickAddOutboxController.enqueueOperation.mockReturnValue(log.promise);
+    try {
+      await click(harness, "Log exact version");
+      const tree = await changeCustomLogField(harness, "Local date", "2026-09-01");
+      const logNow = button(tree, "Secure & log pinned version").props.onPress;
+      confirmArchive(await openArchiveAlert(harness));
+      logNow();
+      const json = vi.fn(async () => ({}));
+      archive.resolve({ status: 500, ok: false, json });
+      const pending = await harness.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(button(archiveCard(pending), "Archive").props.disabled).toBe(true);
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      log.resolve({ operationId: "newer-log" });
+      expect(text(await harness.settle())).toContain("queued securely");
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "newer-log",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("does not repeat unauthorized handling after a refresh closed the current private view", async () => {
+    const held = deferred();
+    let closed = false;
+    const { harness, props } = setup((request) => {
+      if (request.method === "DELETE") return held.promise;
+      if (closed && request.url.pathname === "/v1/custom-foods") return response({}, 401);
+      return undefined;
+    });
+    try {
+      confirmArchive(await openArchiveAlert(harness));
+      closed = true;
+      await click(harness, "Refresh private data");
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      const json = vi.fn(async () => ({}));
+      held.resolve({ status: 401, ok: false, json });
+      const tree = await harness.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      expect(text(tree)).not.toContain("Custom food archived; exact diary history remains pinned.");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("permits current cancellation and retries a rejected transport with exact protected request identity", async () => {
+    let count = 0;
+    const { harness, requests } = setup((request) => {
+      if (request.method !== "DELETE") return undefined;
+      if (++count === 1) throw new Error("Synthetic transport failure");
+      return archiveReceipt();
+    });
+    try {
+      const cancelled = await openArchiveAlert(harness);
+      cancelled.find((choice) => choice.text === "Cancel").onPress();
+      expect(archiveRequests(requests)).toHaveLength(0);
+      confirmArchive(await openArchiveAlert(harness));
+      expect(text(await harness.settle())).toContain("Synthetic transport failure");
+      confirmArchive(await openArchiveAlert(harness));
+      const tree = await harness.settle();
+      const [first, retry] = archiveRequests(requests);
+      expect(retry.url.href).toBe(first.url.href);
+      expect(retry.headers).toEqual(first.headers);
+      expect(retry.body).toBe(first.body);
+      expect(text(archiveCard(tree))).toContain("archived");
+    } finally {
+      harness.unmount();
+    }
+  });
+});

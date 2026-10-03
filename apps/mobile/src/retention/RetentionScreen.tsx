@@ -437,7 +437,21 @@ export function RetentionScreen({
   }, []);
   const [busy, setBusyState] = useState<string | null>(null);
   const busyRef = useRef(busy);
+  const customArchive = useRef<{
+    readonly controller: AbortController;
+    readonly busyKey: string;
+  } | null>(null);
+  const customArchiveChoice = useRef<object | null>(null);
+  const customArchiveGeneration = useRef(0);
   const setBusy = useCallback((value: string | null) => {
+    if (value !== busyRef.current) {
+      customArchiveGeneration.current += 1;
+      customArchiveChoice.current = null;
+    }
+    if (customArchive.current && value !== customArchive.current.busyKey) {
+      customArchive.current.controller.abort();
+      customArchive.current = null;
+    }
     busyRef.current = value;
     setBusyState(value);
   }, []);
@@ -625,12 +639,20 @@ export function RetentionScreen({
   const installedFoodFilterScope = useRef<typeof foodFilterScope | null>(null);
   useEffect(() => {
     if (installedFoodFilterScope.current !== foodFilterScope) {
+      customArchiveChoice.current = null;
+      if (busyRef.current?.startsWith("food:")) setBusy(null);
       installedFoodFilterScope.current = foodFilterScope;
       resetSavedFoodFilter();
       clearCustomCopyChoice();
       clearCustomRevisionConflict();
     }
-  }, [clearCustomCopyChoice, clearCustomRevisionConflict, foodFilterScope, resetSavedFoodFilter]);
+  }, [
+    clearCustomCopyChoice,
+    clearCustomRevisionConflict,
+    foodFilterScope,
+    resetSavedFoodFilter,
+    setBusy,
+  ]);
   const customInstalled = useRef<typeof customScope | null>(null);
   const customClosed = useRef<typeof customScope | null>(null);
   const customMounted = useRef(false);
@@ -697,11 +719,19 @@ export function RetentionScreen({
     customFoodsScope.current = null;
     customWrite.current?.abort();
     customWrite.current = null;
+    customArchive.current?.controller.abort();
+    customArchive.current = null;
+    customArchiveChoice.current = null;
     customPageRequest.current?.abort();
     customPageRequest.current = null;
     customOperations.current.clear();
     installCustom(blankCustom(), true);
-    if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
+    if (
+      busyRef.current === "custom" ||
+      busyRef.current === "food-more" ||
+      busyRef.current?.startsWith("food:")
+    )
+      setBusy(null);
   }, [
     abortTrendRead,
     currentCustomScope,
@@ -730,7 +760,8 @@ export function RetentionScreen({
     }
     if (
       (busyRef.current === "custom" && !customWrite.current) ||
-      (busyRef.current === "food-more" && !customPageRequest.current)
+      (busyRef.current === "food-more" && !customPageRequest.current) ||
+      (busyRef.current?.startsWith("food:") && !customArchive.current)
     )
       setBusy(null);
     return () => {
@@ -740,6 +771,9 @@ export function RetentionScreen({
       customEpoch.current += 1;
       customWrite.current?.abort();
       customWrite.current = null;
+      customArchive.current?.controller.abort();
+      customArchive.current = null;
+      customArchiveChoice.current = null;
       customPageRequest.current?.abort();
       customPageRequest.current = null;
     };
@@ -759,9 +793,17 @@ export function RetentionScreen({
       customEpoch.current += 1;
       customWrite.current?.abort();
       customWrite.current = null;
+      customArchive.current?.controller.abort();
+      customArchive.current = null;
+      customArchiveChoice.current = null;
       customPageRequest.current?.abort();
       customPageRequest.current = null;
-      if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
+      if (
+        busyRef.current === "custom" ||
+        busyRef.current === "food-more" ||
+        busyRef.current?.startsWith("food:")
+      )
+        setBusy(null);
       setCustomEpoch(customEpoch.current);
     });
     return () => subscription.remove();
@@ -1168,6 +1210,8 @@ export function RetentionScreen({
     async (only?: HealthSection) => {
       const epoch = customEpoch.current;
       if (!currentCustomScope(epoch) || eventWrite.current !== null) return;
+      customArchiveChoice.current = null;
+      if (customArchive.current) setBusy(null);
       const sections: readonly HealthSection[] = only
         ? [only]
         : ["foods", "biometrics", "reminders", "integrations"];
@@ -1382,6 +1426,7 @@ export function RetentionScreen({
       setFoods,
       setLoading,
       setReminders,
+      setBusy,
     ],
   );
 
@@ -1437,6 +1482,7 @@ export function RetentionScreen({
   }, [reconcileReminders, request, setReminders]);
 
   const renderedCustomEpoch = customEpoch.current;
+  const renderedArchiveGeneration = customArchiveGeneration.current;
   const renderedCustomChoiceGeneration = customChoiceGeneration.current;
   const savedFoodFilterVisible =
     currentCustomScope(renderedCustomEpoch) &&
@@ -2155,23 +2201,116 @@ export function RetentionScreen({
     }
   }
 
+  function archiveViewIsCurrent() {
+    return (
+      currentCustomScope(renderedCustomEpoch) &&
+      AppState.currentState === "active" &&
+      foodFilterScopeRef.current === foodFilterScope &&
+      installedFoodFilterScope.current === foodFilterScope &&
+      customFoodsScope.current === customScope &&
+      renderedFoodDetailsReady &&
+      foodDetailsReady.current &&
+      !loadingRef.current
+    );
+  }
+  function canArchiveCustomFood(food: CustomFood) {
+    return (
+      archiveViewIsCurrent() &&
+      customArchiveGeneration.current === renderedArchiveGeneration &&
+      busyRef.current === null &&
+      customArchive.current === null &&
+      customWrite.current === null &&
+      customPageRequest.current === null &&
+      !customLogEnqueueInFlight.current &&
+      eventWrite.current === null &&
+      !Object.values(sectionControllers.current).some((controller) => !controller.signal.aborted) &&
+      foodsRef.current === foods &&
+      foodsRef.current.includes(food) &&
+      food.status === "active"
+    );
+  }
+  function confirmCustomArchive(food: CustomFood) {
+    if (!canArchiveCustomFood(food)) return;
+    const choice = {};
+    customArchiveChoice.current = choice;
+    const cancel = () => {
+      if (customArchiveChoice.current === choice) customArchiveChoice.current = null;
+    };
+    Alert.alert(
+      "Archive private food?",
+      "Historical diary entries retain their pinned version.",
+      [
+        { text: "Cancel", style: "cancel", onPress: cancel },
+        {
+          text: "Archive",
+          style: "destructive",
+          onPress: () => {
+            if (customArchiveChoice.current !== choice || !canArchiveCustomFood(food)) return;
+            customArchiveChoice.current = null;
+            void archiveCustomFood(food);
+          },
+        },
+      ],
+      { onDismiss: cancel },
+    );
+  }
   async function archiveCustomFood(food: CustomFood) {
+    if (!canArchiveCustomFood(food)) return;
     const key = `custom-archive:${food.id}:${food.revision}`;
-    setBusy(`food:${food.id}`);
+    const operation = stableOperation(key, null);
+    const pending = { controller: new AbortController(), busyKey: `food:${food.id}` };
+    customArchive.current = pending;
+    const current = () =>
+      archiveViewIsCurrent() &&
+      customArchive.current === pending &&
+      !pending.controller.signal.aborted &&
+      busyRef.current === pending.busyKey &&
+      foodsRef.current === foods &&
+      foodsRef.current.includes(food);
+    setBusy(pending.busyKey);
     try {
-      const saved = parseCustomFoodResponse(
-        await request(`/v1/custom-foods/${food.id}`, {
+      const response = await mobileFetch(
+        apiUrl(apiBase, `/v1/custom-foods/${food.id}`).toString(),
+        {
           method: "DELETE",
-          operationKey: key,
-          revision: food.revision,
-        }),
+          headers: authenticatedHeaders(accessToken, {
+            "idempotency-key": operation.id,
+            "if-match": quoteRevision(food.revision),
+          }),
+          signal: pending.controller.signal,
+        },
       );
-      setFoods((items) => items.map((item) => (item.id === saved.id ? saved : item)));
+      if (!current()) return;
+      if (response.status === 401) {
+        closeCustom();
+        await unauthorizedRef.current();
+        return;
+      }
+      const value = await jsonBody(response);
+      if (!current()) return;
+      if (response.status === 412 && operations.current.get(key) === operation)
+        operations.current.delete(key);
+      if (!response.ok) throw new Error(responseError(value, "The private health request failed."));
+      const saved = parseCustomFoodResponse(value);
+      if (
+        saved.id !== food.id ||
+        saved.status !== "archived" ||
+        BigInt(saved.revision) <= BigInt(food.revision) ||
+        JSON.stringify(saved.currentVersion) !== JSON.stringify(food.currentVersion)
+      )
+        throw new Error("The matching archived food revision was not returned.");
+      if (operations.current.get(key) === operation) operations.current.delete(key);
+      setFoods(foodsRef.current.map((item) => (item === food ? saved : item)));
       setMessage("Custom food archived; exact diary history remains pinned.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Custom food could not be archived.");
+      if (current())
+        setMessage(error instanceof Error ? error.message : "Custom food could not be archived.");
     } finally {
-      setBusy(null);
+      if (customArchive.current === pending) {
+        customArchive.current = null;
+        pending.controller.abort();
+        if (archiveViewIsCurrent() && busyRef.current === pending.busyKey) setBusy(null);
+      }
     }
   }
 
@@ -4202,20 +4341,8 @@ export function RetentionScreen({
                 {food.status === "active" ? (
                   <Button
                     label="Archive"
-                    onPress={() =>
-                      Alert.alert(
-                        "Archive private food?",
-                        "Historical diary entries retain their pinned version.",
-                        [
-                          { text: "Cancel", style: "cancel" },
-                          {
-                            text: "Archive",
-                            style: "destructive",
-                            onPress: () => void archiveCustomFood(food),
-                          },
-                        ],
-                      )
-                    }
+                    disabled={!canArchiveCustomFood(food)}
+                    onPress={() => confirmCustomArchive(food)}
                     danger
                   />
                 ) : null}
