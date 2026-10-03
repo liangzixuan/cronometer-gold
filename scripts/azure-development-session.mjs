@@ -60,7 +60,14 @@ export async function runDevelopmentSession(
 ) {
   requireValue(process.platform === "linux" && process.arch === "x64");
   requireValue(
-    ["execute", "reconcile", "reconcile-partial", "prepare-dispose", "dispose"].includes(mode),
+    [
+      "execute",
+      "reconcile",
+      "reconcile-partial",
+      "reconcile-dispose",
+      "prepare-dispose",
+      "dispose",
+    ].includes(mode),
   );
   rejectAmbient(environment);
   requireValue(
@@ -206,7 +213,7 @@ export async function runDevelopmentSession(
     "init.stdout",
     90_000,
   );
-  if (mode !== "execute") {
+  if (mode !== "execute" && mode !== "reconcile-dispose") {
     await tool("state", ["show", "-json", resolve(directory, "terraform.tfstate")], "state.json");
     await reads("resources", "before");
   }
@@ -243,7 +250,7 @@ export async function runDevelopmentSession(
       await held.verify();
       phases.at(-1).binaryPlanSha256 = held.sha256;
       if (mode === "execute") await reads("groups", "before");
-      if (!["reconcile", "reconcile-partial"].includes(mode)) {
+      if (!["reconcile", "reconcile-partial", "reconcile-dispose"].includes(mode)) {
         // Publish unknown outcome durably before the only mutating command.
         await pure("intent", extra);
         await held.verify();
@@ -259,7 +266,7 @@ export async function runDevelopmentSession(
     } finally {
       await held.close();
     }
-    if (!["reconcile", "reconcile-partial"].includes(mode)) {
+    if (!["reconcile", "reconcile-partial", "reconcile-dispose"].includes(mode)) {
       await tool(
         "state-after",
         ["show", "-json", resolve(directory, "terraform.tfstate")],
@@ -267,6 +274,14 @@ export async function runDevelopmentSession(
       );
       await reads(mode === "execute" ? "resources" : "groups", "after");
     }
+  }
+  if (mode === "reconcile-dispose") {
+    await tool(
+      "state-after",
+      ["show", "-json", resolve(directory, "terraform.tfstate")],
+      "final-state.json",
+    );
+    await reads("groups", "after");
   }
   await writeFile(resolve(session.directory, "phases.json"), `${JSON.stringify(phases)}\n`, {
     flag: "wx",
@@ -300,9 +315,11 @@ async function main() {
     console.log(
       args[0] === "prepare-dispose"
         ? "Private deletion plan prepared for separate review; no deletion attempted."
-        : ["reconcile", "reconcile-partial"].includes(args[0])
-          ? "Private current ownership recorded; original execution outcome remains unconfirmed."
-          : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
+        : args[0] === "reconcile-dispose"
+          ? "Private current disposal observation recorded; original disposal outcome remains unconfirmed."
+          : ["reconcile", "reconcile-partial"].includes(args[0])
+            ? "Private current ownership recorded; original execution outcome remains unconfirmed."
+            : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
     );
   } finally {
     for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(name, stop);

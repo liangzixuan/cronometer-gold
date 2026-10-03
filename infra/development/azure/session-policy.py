@@ -20,11 +20,13 @@ require = A.require
 SOURCE_FILES = ("infra/development/azure/session-policy.py", "scripts/azure-development-session.mjs")
 COMMON = {"schema_version", "source_sha256", "operation_name", "not_after_utc"}
 RECONCILIATION_MODES = ("reconcile", "reconcile-partial")
+READ_ONLY_MODES = (*RECONCILIATION_MODES, "reconcile-dispose")
 FIELDS = {"execute": COMMON | {"plan_request", "plan_result", "plan_result_sha256"},
           "reconcile": COMMON | {"execute_request", "execute_directory", "execute_session_sha256", "execute_intent_sha256"},
           "prepare-dispose": COMMON | {"ownership_result", "ownership_result_sha256"},
           "dispose": COMMON | {"disposal_result", "disposal_result_sha256"}}
 FIELDS["reconcile-partial"] = FIELDS["reconcile"]
+FIELDS["reconcile-dispose"] = COMMON | {"dispose_request", "dispose_directory", "dispose_session_sha256", "dispose_intent_sha256"}
 MAX_JSON = 20 * 1024 * 1024
 OUTPUTS = {"session.json": MAX_JSON, "mutation-intent.json": 65536, "result.json": MAX_JSON,
            "phases.json": MAX_JSON, "version.json": 65536, "rendered.json": MAX_JSON,
@@ -116,6 +118,55 @@ def reconciliation_origin(request, now):
         'lineage': raw['lineage'], 'serial': raw['serial']}
     return original
 
+
+def empty_disposal_state(path, previous):
+    raw,digest=raw_state(path)
+    require(type(raw['version']) is int and raw['resources']==[] and raw['lineage']==previous['lineage']
+            and raw['serial']>previous['serial'] and isinstance(raw.get('outputs',{}),dict), 'empty advanced disposal state required')
+    return raw,digest
+
+def empty_disposal_render(document, raw):
+    require(isinstance(document,dict) and document.get('format_version')=='1.0'
+            and document.get('terraform_version')=='1.5.7', 'qualified empty state renderer required')
+    values=document.get('values',{});require(isinstance(values,dict), 'empty state values required')
+    root=values.get('root_module',{});require(isinstance(root,dict) and set(root)<={'resources','child_modules'}
+            and root.get('resources',[])==[] and root.get('child_modules',[])==[], 'rendered disposal resources remain')
+    require(set(values)<={'outputs','root_module'} and isinstance(values.get('outputs',{}),dict)
+            and canonical(values.get('outputs',{}))==canonical(raw.get('outputs',{})), 'empty state outputs differ')
+
+def disposal_reconciliation_origin(request, now):
+    """Check pre-delete custody separately from the changed resulting state."""
+    path,directory=Path(request['dispose_request']),Path(request['dispose_directory'])
+    P.safe_path(directory);A.H._require_private_directory(directory,'original disposal')
+    intent_value=reference(directory/'mutation-intent.json',request['dispose_intent_sha256'])
+    recorded=A.receipt_utc(intent_value.get('createdAt'),'original disposal intent time')
+    require(recorded<=now,'original disposal intent is in the future')
+    session,_,original,ownership,disposal=verify('dispose',path,directory,request['dispose_session_sha256'],recorded)
+    validate_intent('dispose',directory,session,original,ownership,disposal,recorded)
+    authenticate('dispose',path,directory,request['dispose_session_sha256'],recorded)
+    version,_=private(directory/'version.json')
+    require(version.get('terraform_version')=='1.5.7' and version.get('platform')=='linux_amd64','original Terraform identity differs')
+    prior=Path(disposal['state_path']);prior_bytes=private_bytes(prior)
+    require(session['baseline'].get('work/terraform.tfstate')=={'type':'file','mode':0o600,'size':len(prior_bytes),'sha256':A.sha(prior_bytes)},
+            'original pre-delete state baseline differs')
+    current,document=current_ownership(directory,'before',original,partial_mode('dispose',ownership),state_path=prior)
+    same_owned(current,ownership)
+    require(current['state_sha256']==disposal['state_sha256'],'original deletion state differs')
+    rendered,rendered_hash=private(directory/'rendered.json')
+    require(rendered_hash==disposal['rendered_sha256'],'original deletion rendering differs')
+    audit_destroy(rendered,document,original,recorded,partial_mode('dispose',ownership))
+    require(not (directory/'work/errored.tfstate').exists(),'emergency state requires separate recovery')
+    raw,state_hash=empty_disposal_state(directory/'work/terraform.tfstate',ownership)
+    info=directory.stat()
+    original['disposal_reconciliation']={'dispose_request':str(path),'dispose_directory':str(directory),
+        'dispose_session_sha256':request['dispose_session_sha256'],'dispose_intent_sha256':request['dispose_intent_sha256'],
+        'intent_time':recorded.isoformat(),'directory_identity':[info.st_dev,info.st_ino],'retained_files':Q.tree(directory),
+        'state_path':str(directory/'work/terraform.tfstate'),'state_sha256':state_hash,'lineage':raw['lineage'],'serial':raw['serial'],
+        'previous_lineage':ownership['lineage'],'previous_serial':ownership['serial'],'pre_state_sha256':current['state_sha256'],
+        'ownership_result':disposal['ownership_result'],'ownership_result_sha256':disposal['ownership_result_sha256'],
+        'binary_plan_path':disposal['binary_plan_path'],'binary_plan_sha256':disposal['binary_plan_sha256'],'rendered_sha256':rendered_hash}
+    return original
+
 def load_request(mode, path, now):
     require(mode in FIELDS, "fixed session mode required")
     request, digest = private(path)
@@ -129,9 +180,9 @@ def load_request(mode, path, now):
     ownership = disposal = None
     if mode == "execute":
         original = plan_inputs(Path(request["plan_request"]), Path(request["plan_result"]), request["plan_result_sha256"])
-    elif mode in RECONCILIATION_MODES:
-        original = reconciliation_origin(request, now)
-        old = Path(request["execute_directory"])
+    elif mode in READ_ONLY_MODES:
+        original = disposal_reconciliation_origin(request, now) if mode=="reconcile-dispose" else reconciliation_origin(request, now)
+        old = Path(request["dispose_directory"] if mode=="reconcile-dispose" else request["execute_directory"])
         new = path.parent/request["operation_name"]
         require(old != new and old not in new.parents and new not in old.parents and old not in path.parents,
                 "reconciliation must preserve the separate original directory")
@@ -168,6 +219,7 @@ def load_request(mode, path, now):
     snapshot = {"source": request["source_sha256"], "request": digest, "plan": original["plan_result_sha256"],
                 "inputs": original["snapshot"]}
     if mode in RECONCILIATION_MODES: snapshot["reconciliation"] = original["reconciliation"]
+    if mode=="reconcile-dispose": snapshot["disposal_reconciliation"] = original["disposal_reconciliation"]
     if ownership: snapshot["ownership"] = ownership_hash
     if disposal: snapshot["disposal"] = request["disposal_result_sha256"]
     return request, original, ownership, disposal, snapshot
@@ -185,8 +237,9 @@ def prepare(mode, path, now):
         fd = os.open(directory / "work" / name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "wb") as out: out.write(data)
     Q.write_json(directory / "work/inputs.tfvars.json", original["values"])
-    if ownership or mode in RECONCILIATION_MODES:
-        state_path = Path(original["reconciliation"]["state_path"] if mode in RECONCILIATION_MODES else
+    if ownership or mode in READ_ONLY_MODES:
+        state_path = Path(original["disposal_reconciliation"]["state_path"] if mode=="reconcile-dispose" else
+                          original["reconciliation"]["state_path"] if mode in RECONCILIATION_MODES else
                           disposal["state_path"] if disposal else ownership["state_path"])
         data = private_bytes(state_path)
         fd = os.open(directory / "work/terraform.tfstate", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -211,8 +264,8 @@ def prepare(mode, path, now):
             "terraform": {"path": original["request"]["terraform"], "sha256": A.TF_SHA256},
             "azure": {"path": "/usr/bin/az", "sha256": P.CLI_SHA256}, "auth_commands": P.commands(original["expected"]),
             "profile_directory": original["request"]["profile_directory"], "subscription_id": original["expected"]["subscriptionId"],
-            "tenant_id": original["expected"]["tenantId"], "binary_plan_path": disposal["binary_plan_path"] if disposal else original["binary"],
-            "binary_plan_sha256": disposal["binary_plan_sha256"] if disposal else original["result"]["binary_plan_sha256"]}
+            "tenant_id": original["expected"]["tenantId"], "binary_plan_path": original["disposal_reconciliation"]["binary_plan_path"] if mode=="reconcile-dispose" else disposal["binary_plan_path"] if disposal else original["binary"],
+            "binary_plan_sha256": original["disposal_reconciliation"]["binary_plan_sha256"] if mode=="reconcile-dispose" else disposal["binary_plan_sha256"] if disposal else original["result"]["binary_plan_sha256"]}
 
 def verify(mode, path, directory, state_hash, now):
     P.safe_path(directory); A.H._require_private_directory(directory, "owned session")
@@ -225,7 +278,7 @@ def verify(mode, path, directory, state_hash, now):
     # The provider/source baseline is immutable; only the local state is expected to change.
     current = Q.tree(directory)
     for name, value in state['baseline'].items():
-        if mode in RECONCILIATION_MODES or name != 'work/terraform.tfstate': require(current.get(name) == value, "fixed session input changed")
+        if mode in READ_ONLY_MODES or name != 'work/terraform.tfstate': require(current.get(name) == value, "fixed session input changed")
     link = 'data/providers/registry.terraform.io/hashicorp/azurerm/4.79.0/linux_amd64'
     parents = {str(p) for p in Path(link).parents if str(p) != '.'}
     evidence_name = 'nourishing-evidence-'+request['operation_name'].rsplit('-',1)[1]
@@ -469,8 +522,8 @@ def state_graph(document, values, partial=False):
     if VM in resources:arm_id(value(VM,'os_disk',0,'id'),owned['os'])
     return resources
 
-def retained_graph(directory,value,partial=False):
-    raw,digest=raw_state(directory/'work/terraform.tfstate')
+def retained_graph(directory,value,partial=False,*,state_path=None):
+    raw,digest=raw_state(state_path if state_path is not None else directory/'work/terraform.tfstate')
     document,_=private(directory/'state.json');resources=state_graph(document,value,partial)
     # Both representations must describe the same state, including every managed instance.
     raw_resources={r.get('type','')+'.'+r.get('name',''):r for r in raw['resources']}
@@ -486,8 +539,8 @@ def retained_graph(directory,value,partial=False):
                     and type(instance.get('schema_version')) is int and instance['schema_version']==resources[address]['schema_version'], 'ambiguous partial instance')
     return raw,digest,document,resources
 
-def current_ownership(directory, prefix, original, partial=False):
-    value=original['values'];raw,digest,document,resources=retained_graph(directory,value,partial)
+def current_ownership(directory, prefix, original, partial=False,*,state_path=None):
+    value=original['values'];raw,digest,document,resources=retained_graph(directory,value,partial,state_path=state_path)
     rendered_hash=private(directory/'state.json')[1]
     addresses=set(resources) if partial else None
     live=documents(directory,prefix,value,'resources',addresses);binding=live_graph(live,value,addresses)
@@ -498,7 +551,7 @@ def current_ownership(directory, prefix, original, partial=False):
         require(isinstance(generation,str) and re.fullmatch(UUID,generation)
                 and generation.lower()==binding['generations'][key], 'retained state and live generation differ')
     if partial:binding.update(ownership_scope='partial',state_addresses=sorted(resources))
-    return {**binding,'state_path':str(directory/'work/terraform.tfstate'),'state_sha256':digest,
+    return {**binding,'state_path':str(state_path if state_path is not None else directory/'work/terraform.tfstate'),'state_sha256':digest,
             'lineage':raw['lineage'],'serial':raw['serial'],'state_rendered_sha256':rendered_hash},document
 
 def same_owned(actual, expected):
@@ -539,6 +592,22 @@ def fresh_evidence(directory, request, original, now):
     require(hashes==index.get('evidence_sha256'), "fresh family changed")
     return A.evidence_values(docs,hashes,original['expected']['subscriptionId'],A.utc(original['values']['shutdown_deadline_utc'],'shutdown'),now)
 
+
+def observed_disposal(directory, original):
+    retained=original['disposal_reconciliation']
+    raw,digest=empty_disposal_state(directory/'work/terraform.tfstate',{'lineage':retained['previous_lineage'],'serial':retained['previous_serial']})
+    require(digest==retained['state_sha256'] and raw['lineage']==retained['lineage'] and raw['serial']==retained['serial'], 'resulting disposal state copy changed')
+    empty_disposal_render(private(directory/'final-state.json')[0],raw)
+    document=documents(directory,'after',original['values'],'groups')['groups'];absent(document,original['values'])
+    ids_seen=[row['id'].lower() for row in document['value']]
+    prefix='/subscriptions/'+re.escape(original['values']['subscription_id'])+'/resourcegroups/[^/]+'
+    require('error' not in document and len(ids_seen)==len(set(ids_seen))
+            and all(re.fullmatch(prefix,item,re.IGNORECASE) for item in ids_seen), 'malformed or duplicate group inventory')
+    require(private(directory/'rendered.json')[1]==retained['rendered_sha256'], 'reviewed deletion rendered differently')
+    return {'state_path':str(directory/'work/terraform.tfstate'),'state_sha256':digest,'lineage':raw['lineage'],'serial':raw['serial'],
+            'state_rendered_sha256':private(directory/'final-state.json')[1],
+            'absence_sha256':private(directory/'after-groups.json')[1]}
+
 def audit(mode,path,directory,digest,now):
     _,request,original,ownership,disposal=verify(mode,path,directory,digest,now)
     version,_=private(directory/'version.json');require(version.get('terraform_version')=='1.5.7' and version.get('platform')=='linux_amd64', "Terraform identity differs")
@@ -548,6 +617,9 @@ def audit(mode,path,directory,digest,now):
         A.audit_plan(document,original['documents'],original['hashes'],now)
         fresh_evidence(directory,request,original,now)
         absent(documents(directory,'before',original['values'],'groups')['groups'],original['values'])
+    elif mode=='reconcile-dispose':
+        authenticate(mode,path,directory,digest,now)
+        observed_disposal(directory,original)
     else:
         authenticate(mode,path,directory,digest,now)
         current,state=current_ownership(directory,'before',original,partial_mode(mode,ownership))
@@ -601,7 +673,7 @@ def completion_phases(mode, directory, state, original, ownership, disposal, pha
             and isinstance(arguments[2],str) and re.fullmatch(r'/proc/[1-9][0-9]*/fd/[0-9]+',arguments[2]),
             'held binary descriptor arguments required')
     descriptor = arguments[2]
-    binary = directory/'destroy.tfplan' if mode=='prepare-dispose' else Path(disposal['binary_plan_path']) if disposal else Path(original['binary'])
+    binary = directory/'destroy.tfplan' if mode=='prepare-dispose' else Path(original['disposal_reconciliation']['binary_plan_path']) if mode=='reconcile-dispose' else Path(disposal['binary_plan_path']) if disposal else Path(original['binary'])
     binary_hash, _ = A.H.secure_plan_digest(binary)
     rows=[]
     if mode!='execute':
@@ -613,10 +685,14 @@ def completion_phases(mode, directory, state, original, ownership, disposal, pha
         rendered_state=private(directory/'state.json')[0]
         addresses=set(state_graph(rendered_state,original['values'],partial=True))
         if ownership:require(sorted(addresses)==ownership['state_addresses'], 'completion subset differs')
-    if mode!='execute':
+    if mode not in ('execute','reconcile-dispose'):
         rows.append(('state',A.TF_SHA256,['show','-json',str(directory/'work/terraform.tfstate')],'state.json'))
         rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in read_commands(original['values'],'resources',addresses)]
-    if mode in RECONCILIATION_MODES:
+    if mode=='reconcile-dispose':
+        rows += [('show',A.TF_SHA256,['show','-json',descriptor],'rendered.json'),
+                 ('state-after',A.TF_SHA256,['show','-json',str(directory/'work/terraform.tfstate')],'final-state.json')]
+        rows += [('after-'+r['label'],P.CLI_SHA256,r['arguments'],'after-'+r['label']+'.json') for r in read_commands(original['values'],'groups')]
+    elif mode in RECONCILIATION_MODES:
         rows.append(('show',A.TF_SHA256,['show','-json',descriptor],'rendered.json'))
     elif mode=='prepare-dispose':
         rows += [('prepare-dispose',A.TF_SHA256,['plan','-destroy','-input=false','-no-color','-lock-timeout=0s','-parallelism=1','-var-file=inputs.tfvars.json','-out='+str(binary)],'prepare-dispose.stdout'),
@@ -668,6 +744,12 @@ def finish(mode,path,directory,digest,now):
             historical_admission_scope='Retained policy consistency at the recorded intent time; no original observation chronology or apply-success attestation.',
             scope='Current complete-state ownership only. Original local settlement and exclusive use are external preconditions; no original apply success or shutdown observation.')
         if mode=='reconcile-partial':result['scope']='Current terminal partial-state ownership only; no complete deployment, original apply success or shutdown protection. Local settlement and exclusive use remain external preconditions.'
+    elif mode=='reconcile-dispose':
+        audit(mode,path,directory,digest,now)
+        result.update(observed_disposal(directory,original),reconciled=True,disposal_observed=True,
+            original_disposal_outcome='unconfirmed',external_quiescence_verified=False,remote_operation_completion_verified=False,
+            historical_admission_scope='Retained pre-disposal policy consistency at intent time; no original observation chronology or apply-success attestation.',
+            scope='Current empty retained state and target-group absence only. Original local settlement, remote quiescence and exclusive use remain external preconditions.')
     elif mode=='prepare-dispose':
         authenticate(mode,path,directory,digest,now)
         current,current_state=current_ownership(directory,'before',original,partial_mode(mode,ownership));same_owned(current,ownership)

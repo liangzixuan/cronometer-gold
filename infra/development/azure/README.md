@@ -138,7 +138,7 @@ qualified invocations.
 
 ## Execute and dispose of an owned empty-host session
 
-The native Linux session command has five fixed modes. Select any real mutation
+The native Linux session command has six fixed modes. Select any real mutation
 separately after reviewing the exact plan and current resource budget. The local
 tests use synthetic Azure/Terraform responses and do not qualify a real allocation,
 shutdown or deletion.
@@ -148,6 +148,7 @@ node scripts/azure-development-session.mjs --source-digest
 node scripts/azure-development-session.mjs execute --input /absolute/private/execute.json
 node scripts/azure-development-session.mjs reconcile --input /absolute/private/reconcile.json
 node scripts/azure-development-session.mjs reconcile-partial --input /absolute/private/reconcile-partial.json
+node scripts/azure-development-session.mjs reconcile-dispose --input /absolute/private/reconcile-dispose.json
 node scripts/azure-development-session.mjs prepare-dispose --input /absolute/private/prepare-dispose.json
 node scripts/azure-development-session.mjs dispose --input /absolute/private/dispose.json
 ```
@@ -163,6 +164,9 @@ the entire bound inside the authorized work window. Mode-specific fields are:
   retained successful development plan and its original protected request.
 - `reconcile` and `reconcile-partial`: `execute_request`, `execute_directory`, `execute_session_sha256`
   and `execute_intent_sha256`, binding the original protected execute request,
+  private directory, session snapshot and durable unknown-outcome intent.
+- `reconcile-dispose`: `dispose_request`, `dispose_directory`, `dispose_session_sha256`
+  and `dispose_intent_sha256`, binding the separate original disposal request,
   private directory, session snapshot and durable unknown-outcome intent.
 - `prepare-dispose`: `ownership_result`, `ownership_result_sha256`, referring to
   the completed execution or separate reconciliation result and its retained
@@ -247,6 +251,27 @@ resource-group inventory proving the owned group absent. Deallocation alone does
 not satisfy disposal because disks and IP addresses may remain billable. Old
 create-time credit evidence remains historical custody evidence during disposal;
 it is not misrepresented as a fresh spending assessment.
+
+`reconcile-dispose` records current absence after a disposal whose command exit,
+final readback or publication was uncertain. It accepts only protected empty
+resulting state with the original lineage and an increased serial. It checks the
+reviewed pre-delete ownership state against the original session baseline and
+retained pre-apply state/rendering/readbacks at the intent time; it never uses the
+mutated state as that historical admission. This proves retained policy consistency,
+not original observation chronology or a successful apply.
+
+The new operation preserves every original file, including any already-published
+result. It authenticates freshly, renders the copied empty state and exact deletion
+plan, and requires a complete successful subscription inventory showing the group
+absent. Errors, pagination, duplicate/malformed entries, remaining resources,
+changed or emergency state all fail. No plan, apply, refresh, import, repair or
+retry runs. The separate result records `disposal_observed: true`,
+`original_disposal_outcome: "unconfirmed"`, `external_quiescence_verified: false`
+and `remote_operation_completion_verified: false`. Caller-established local
+settlement, remote quiescence and exclusive use remain prerequisites. Current
+absence is not remote operation completion or scheduled-shutdown evidence.
+Reduced or lost state requires separate recovery; this result cannot authorize
+another deletion. Tests use synthetic responses and establish no real Azure cleanup.
 
 These checks require exclusive use of the resource group and local state. Azure
 readbacks do not make Terraform deletes conditional on generation or etag. The

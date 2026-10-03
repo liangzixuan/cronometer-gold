@@ -169,7 +169,7 @@ async function fixture(t, subset) {
       if (argv[0] === "show") {
         if (argv[2].endsWith("terraform.tfstate"))
           value =
-            state.mode === "dispose" && phase === "final-state.json"
+            ["dispose", "reconcile-dispose"].includes(state.mode) && phase === "final-state.json"
               ? { format_version: "1.0", terraform_version: "1.5.7" }
               : f.responses.state;
         else {
@@ -648,5 +648,225 @@ for (const [label, subset] of [
     }
     assert.equal(receipt.disposed, true);
     assert.deepEqual(await snapshot(original), before);
+  });
+}
+
+for (const [failure, partial] of [
+  ["apply-complete", false],
+  ["readback-child", false],
+  ["publication", false],
+  ["apply-complete", true],
+]) {
+  test(`terminal disposal reconciliation after ${failure}, partial origin ${partial}`, {
+    timeout: 120000,
+  }, async (t) => {
+    const f = await fixture(t, partial ? ["group", "data", "pip"] : undefined);
+    let owned;
+    if (partial) {
+      f.state.fail = "apply-partial";
+      await assert.rejects(f.execute());
+      f.state.fail = undefined;
+      f.state.mode = "reconcile-partial";
+      const original = join(f.root, "nourishing-session-0123456789ab");
+      const input = join(f.root, "partial-ownership.json");
+      await json(input, {
+        schema_version: 1,
+        source_sha256: await sourceDigest(),
+        operation_name: `nourishing-session-${"c".repeat(12)}`,
+        not_after_utc: "2026-10-01T08:18:00Z",
+        execute_request: f.input,
+        execute_directory: original,
+        execute_session_sha256: hash(await readFile(join(original, "session.json"))),
+        execute_intent_sha256: hash(await readFile(join(original, "mutation-intent.json"))),
+      });
+      owned = await runDevelopmentSession("reconcile-partial", input, { environment: {} }, f.run);
+    } else owned = await f.execute();
+    f.state.mode = "prepare-dispose";
+    const prepareInput = join(f.root, "prepare-dispose-recovery.json"),
+      ownership = join(owned.directory, "result.json");
+    await json(prepareInput, {
+      schema_version: 1,
+      source_sha256: await sourceDigest(),
+      operation_name: `nourishing-session-${"a".repeat(12)}`,
+      not_after_utc: "2026-10-01T08:18:00Z",
+      ownership_result: ownership,
+      ownership_result_sha256: hash(await readFile(ownership)),
+    });
+    const prepared = await runDevelopmentSession(
+      "prepare-dispose",
+      prepareInput,
+      { environment: {} },
+      f.run,
+    );
+    const disposal = join(prepared.directory, "result.json"),
+      input = join(f.root, "uncertain-dispose.json");
+    await json(input, {
+      schema_version: 1,
+      source_sha256: await sourceDigest(),
+      operation_name: `nourishing-session-${"b".repeat(12)}`,
+      not_after_utc: "2026-10-01T08:18:00Z",
+      disposal_result: disposal,
+      disposal_result_sha256: hash(await readFile(disposal)),
+    });
+    f.state.mode = "dispose";
+    f.state.fail = failure;
+    const failRead = async (tool, args, options) => {
+      if (
+        failure === "readback-child" &&
+        basename(options.outputPath ?? "") === "after-groups.json"
+      ) {
+        const python = { path: await realpath("/usr/bin/python3") };
+        python.sha256 = hash(await readFile(python.path));
+        return runTool(
+          python,
+          [
+            "-I",
+            "-B",
+            "-c",
+            `from pathlib import Path;Path(${JSON.stringify(join(f.root, "disposal-readback-child-started"))}).write_text('started');raise SystemExit(7)`,
+          ],
+          { ...options, outputPath: undefined },
+        );
+      }
+      return f.run(tool, args, options);
+    };
+    await assert.rejects(runDevelopmentSession("dispose", input, { environment: {} }, failRead));
+    const original = join(f.root, `nourishing-session-${"b".repeat(12)}`);
+    assert.deepEqual(
+      JSON.parse(await readFile(join(original, "work/terraform.tfstate"))).resources,
+      [],
+    );
+    if (failure === "apply-complete")
+      assert.equal(await readFile(join(f.root, "apply-child-started"), "utf8"), "started");
+    if (failure === "readback-child")
+      assert.equal(
+        await readFile(join(f.root, "disposal-readback-child-started"), "utf8"),
+        "started",
+      );
+    if (failure === "publication")
+      assert.equal(JSON.parse(await readFile(join(original, "result.json"))).disposed, true);
+    else {
+      await absent(join(original, "result.json"));
+      await absent(join(original, "phases.json"));
+    }
+    const before = await snapshot(original);
+    f.state.fail = undefined;
+    f.state.mode = "reconcile-dispose";
+    const request = {
+      schema_version: 1,
+      source_sha256: await sourceDigest(),
+      operation_name: `nourishing-session-${"d".repeat(12)}`,
+      not_after_utc: "2026-10-01T08:18:00Z",
+      dispose_request: input,
+      dispose_directory: original,
+      dispose_session_sha256: hash(await readFile(join(original, "session.json"))),
+      dispose_intent_sha256: hash(await readFile(join(original, "mutation-intent.json"))),
+    };
+    if (failure === "apply-complete" && !partial) {
+      for (const [kind, suffix] of [
+        ["child", "e"],
+        ["abort", "f"],
+        ["publication", "1"],
+      ]) {
+        const failed = join(f.root, `observation-${kind}.json`),
+          directory = join(f.root, `nourishing-session-${suffix.repeat(12)}`);
+        await json(failed, { ...request, operation_name: basename(directory) });
+        const stop = new AbortController(),
+          start = f.state.calls.length;
+        f.state.fail = kind === "publication" ? "publication" : undefined;
+        const reject = async (tool, args, options) => {
+          if (
+            basename(options.outputPath ?? "") === "after-groups.json" &&
+            kind !== "publication"
+          ) {
+            if (kind === "abort") {
+              stop.abort(new Error("synthetic observation abort"));
+              options.signal.throwIfAborted();
+            }
+            const python = { path: await realpath("/usr/bin/python3") };
+            python.sha256 = hash(await readFile(python.path));
+            return runTool(
+              python,
+              [
+                "-I",
+                "-B",
+                "-c",
+                `from pathlib import Path;Path(${JSON.stringify(join(f.root, "absence-child-started"))}).write_text('started');raise SystemExit(7)`,
+              ],
+              { ...options, outputPath: undefined },
+            );
+          }
+          return f.run(tool, args, options);
+        };
+        await assert.rejects(
+          runDevelopmentSession(
+            "reconcile-dispose",
+            failed,
+            { environment: {}, signal: stop.signal },
+            reject,
+          ),
+        );
+        if (kind === "child")
+          assert.equal(await readFile(join(f.root, "absence-child-started"), "utf8"), "started");
+        if (kind === "publication")
+          assert.equal(
+            JSON.parse(await readFile(join(directory, "result.json"))).disposal_observed,
+            true,
+          );
+        else await absent(join(directory, "result.json"));
+        await absent(join(directory, "mutation-intent.json"));
+        assert.ok(
+          f.state.calls
+            .slice(start)
+            .every((c) => !["apply", "plan", "refresh", "import"].includes(c.argv[0])),
+        );
+        assert.deepEqual(await snapshot(original), before);
+      }
+    }
+    f.state.fail = undefined;
+    const recoveryInput = join(f.root, "reconcile-dispose.json");
+    await json(recoveryInput, request);
+    const start = f.state.calls.length;
+    const recovered = await runDevelopmentSession(
+      "reconcile-dispose",
+      recoveryInput,
+      { environment: {} },
+      f.run,
+    );
+    const calls = f.state.calls.slice(start);
+    assert.deepEqual(
+      calls.map((c) => c.output),
+      [
+        "auth-version.json",
+        "auth-extensions.json",
+        "auth-account.json",
+        "auth-subscription.json",
+        "version.json",
+        "init.stdout",
+        "rendered.json",
+        "final-state.json",
+        "after-groups.json",
+      ],
+    );
+    assert.ok(calls.every((c) => !["apply", "plan", "refresh", "import"].includes(c.argv[0])));
+    assert.ok(
+      calls
+        .filter((c) => c.argv[0] === "rest")
+        .every((c) => c.argv[1] === "--method" && c.argv[2] === "get"),
+    );
+    const result = JSON.parse(await readFile(join(recovered.directory, "result.json")));
+    assert.equal(result.mode, "reconcile-dispose");
+    assert.equal(result.disposal_observed, true);
+    assert.equal(result.original_disposal_outcome, "unconfirmed");
+    assert.equal(result.external_quiescence_verified, false);
+    assert.equal(result.remote_operation_completion_verified, false);
+    assert.equal("disposed" in result, false);
+    await absent(join(recovered.directory, "mutation-intent.json"));
+    assert.deepEqual(await snapshot(original), before);
+    assert.deepEqual(
+      result.input_sha256.disposal_reconciliation.retained_files,
+      JSON.parse(await readFile(join(recovered.directory, "session.json"))).snapshot
+        .disposal_reconciliation.retained_files,
+    );
   });
 }
