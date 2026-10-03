@@ -2301,3 +2301,379 @@ describe("native diary repeat destination", () => {
 vi.mock("../src/api/mobile-fetch", () => ({
   mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
 }));
+
+describe("native diary submitted edit ownership", () => {
+  function controls(tree) {
+    return {
+      quantity: byLabel(tree, "Quantity", "TextInput"),
+      date: byLabel(tree, "Entry local date", "TextInput"),
+      time: byLabel(tree, "Entry local time in America/Chicago", "TextInput"),
+      note: byLabel(tree, "Private note for Apple", "TextInput"),
+      meal: nodes(
+        tree,
+        (n) =>
+          n.type === "Pressable" &&
+          n.props.accessibilityRole === "radio" &&
+          screenText(n) === "Lunch",
+      )[0],
+      clear: byLabel(tree, "Clear private note for Apple"),
+      cancel: byLabel(tree, "Cancel editing Apple"),
+      save: byLabel(tree, "Save changes to Apple"),
+    };
+  }
+  async function openDraft(harness) {
+    let tree = await harness.settle();
+    byLabel(tree, "Edit Apple entry and private note").props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, "Quantity", "TextInput").props.onChangeText("2.0001");
+    tree = await harness.settle();
+    byLabel(tree, "Private note for Apple", "TextInput").props.onChangeText(
+      "  exact submitted note\nline  ",
+    );
+    return harness.settle();
+  }
+  function tryChanges(c) {
+    c.quantity.props.onChangeText("9.999");
+    c.date.props.onChangeText("2026-08-16");
+    c.time.props.onChangeText("12:34");
+    c.note.props.onChangeText("later unsaved text");
+    c.meal.props.onPress();
+    c.clear.props.onPress();
+    c.cancel.props.onPress();
+  }
+  function expectSubmitted(tree, original) {
+    const c = controls(tree);
+    for (const key of ["quantity", "date", "time", "note"])
+      expect(c[key].props.value).toBe(original[key].props.value);
+    const lunch = c.meal;
+    expect(lunch.props.accessibilityState.checked).toBe(false);
+    return c;
+  }
+  it("freezes pending fields and retained callbacks before render while queuing the captured draft once", async () => {
+    const { harness, controller } = setup();
+    const pending = deferred();
+    controller.enqueueOperation.mockImplementation(() => pending.promise);
+    const original = controls(await openDraft(harness));
+    try {
+      original.save.props.onPress();
+      tryChanges(original);
+      let tree = await harness.settle();
+      const held = expectSubmitted(tree, original);
+      for (const key of ["quantity", "date", "time", "note"])
+        expect(held[key].props.editable).toBe(false);
+      for (const key of ["meal", "clear", "cancel", "save"])
+        expect(held[key].props.disabled).toBe(true);
+      expect(held.meal.props.accessibilityState.disabled).toBe(true);
+      tryChanges(held);
+      tryChanges(original);
+      tree = await harness.settle();
+      expectSubmitted(tree, original);
+      expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+      expect(controller.enqueueOperation.mock.calls[0][0]).toEqual({
+        operationKind: "update",
+        entryId: entry.id,
+        expectedEntryRevision: "3",
+        entryName: "Apple",
+        portionLabel: "1.5 medium apple",
+        localDate: selectedDate,
+        mealSlot: "breakfast",
+        body: {
+          portion: { kind: "serving", servingId: "303", amount: "2.0001" },
+          mealSlot: "breakfast",
+          note: "  exact submitted note\nline  ",
+        },
+      });
+      pending.resolve({ operationId: "held-edit" });
+      tree = await harness.settle();
+      expect(
+        nodes(tree, (n) => n.type === "TextInput" && n.props.accessibilityLabel === "Quantity"),
+      ).toHaveLength(0);
+      expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("held-edit");
+      const writes = harness.stateWrites;
+      tryChanges(original);
+      original.save.props.onPress();
+      await harness.settle();
+      expect(harness.stateWrites).toBe(writes);
+      expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    } finally {
+      pending.resolve({ operationId: "held-edit" });
+      await harness.settle();
+    }
+  });
+  it("rejects duplicate retained Save before and after pending render", async () => {
+    const { harness, controller } = setup();
+    const pending = deferred();
+    controller.enqueueOperation.mockImplementation(() => pending.promise);
+    const old = controls(await openDraft(harness));
+    try {
+      old.save.props.onPress();
+      old.save.props.onPress();
+      const held = controls(await harness.settle());
+      held.save.props.onPress();
+      old.save.props.onPress();
+      expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    } finally {
+      pending.resolve({ operationId: "one-edit" });
+      await harness.settle();
+    }
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("one-edit");
+  });
+
+  it("restores the exact submitted draft after a known enqueue failure and requires an explicit retry", async () => {
+    const { harness, controller } = setup();
+    const pending = deferred();
+    controller.enqueueOperation.mockImplementationOnce(() =>
+      pending.promise.then(() => {
+        throw new Error("synthetic storage refused");
+      }),
+    );
+    const original = controls(await openDraft(harness));
+    original.save.props.onPress();
+    tryChanges(original);
+    pending.resolve();
+    let tree = await harness.settle();
+    const recovered = expectSubmitted(tree, original);
+    for (const key of ["quantity", "date", "time", "note"])
+      expect(recovered[key].props.editable).toBe(true);
+    for (const key of ["meal", "clear", "cancel", "save"])
+      expect(recovered[key].props.disabled).toBe(false);
+    expect(screenText(tree)).toContain("synthetic storage refused");
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+    recovered.quantity.props.onChangeText("3.0002");
+    tryChanges(original);
+    original.save.props.onPress();
+    tree = await harness.settle();
+    expect(controls(tree).quantity.props.value).toBe("3.0002");
+    expect(controls(tree).note.props.value).toBe(original.note.props.value);
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    controls(tree).save.props.onPress();
+    await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(2);
+    expect(controller.enqueueOperation.mock.calls[1][0].body.portion.amount).toBe("3.0002");
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("operation-1");
+  });
+
+  it("retires an ambiguous submitted edit without replaying and drains only its operation", async () => {
+    const { harness, controller } = setup();
+    const pending = deferred();
+    controller.enqueueOperation.mockImplementationOnce(() =>
+      pending.promise.then(() => {
+        throw new QuickAddEnqueueAmbiguousError(
+          "ambiguous-edit",
+          new Error("synthetic storage response lost"),
+        );
+      }),
+    );
+    const original = controls(await openDraft(harness));
+    original.save.props.onPress();
+    tryChanges(original);
+    pending.resolve();
+    const tree = await harness.settle();
+    expect(screenText(tree)).toContain("Do not save it again until the queue status recovers");
+    expect(nodes(tree, (n) => n.props.accessibilityLabel === "Quantity")).toHaveLength(0);
+    const writes = harness.stateWrites;
+    tryChanges(original);
+    original.save.props.onPress();
+    await harness.settle();
+    expect(harness.stateWrites).toBe(writes);
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("ambiguous-edit");
+  });
+
+  it("does not let cancelled editor callbacks alter a newly opened draft before render", async () => {
+    const { harness, controller } = setup();
+    const original = controls(await openDraft(harness));
+    original.cancel.props.onPress();
+    tryChanges(original);
+    original.save.props.onPress();
+    let tree = await harness.settle();
+    expect(nodes(tree, (n) => n.props.accessibilityLabel === "Quantity")).toHaveLength(0);
+    byLabel(tree, "Edit Apple entry and private note").props.onPress();
+    tryChanges(original);
+    original.save.props.onPress();
+    tree = await harness.settle();
+    expect(byLabel(tree, "Quantity", "TextInput").props.value).toBe("1.5");
+    expect(byLabel(tree, "Private note for Apple", "TextInput").props.value).toBe("");
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+
+  for (const outcome of ["success", "failure", "ambiguous"]) {
+    for (const boundary of [
+      "route before effects",
+      "replacement draft",
+      "closed private view",
+      "unmount",
+    ]) {
+      it(`does not write to ${boundary} after late enqueue ${outcome}`, async () => {
+        let expired = false;
+        const { harness, controller, receive, props } = setup(() =>
+          expired ? response({}, 401) : undefined,
+        );
+        const pending = deferred();
+        controller.enqueueOperation.mockImplementationOnce(() =>
+          pending.promise.then(() => {
+            if (outcome === "failure") throw new Error("synthetic late edit failure");
+            if (outcome === "ambiguous")
+              throw new QuickAddEnqueueAmbiguousError(
+                "late-edit",
+                new Error("synthetic response loss"),
+              );
+            return { operationId: "late-edit" };
+          }),
+        );
+        const original = controls(await openDraft(harness));
+        original.save.props.onPress();
+        await harness.settle();
+        let expectedText;
+        if (boundary === "route before effects") {
+          harness.updateProps({ requestedDate: "2026-08-16", refreshKey: "retire-pending-editor" });
+          harness.renderWithoutEffects();
+        } else if (boundary === "replacement draft") {
+          receive();
+          await harness.settle();
+          expectedText = screenText(await openDraft(harness));
+        } else if (boundary === "closed private view") {
+          expired = true;
+          receive();
+          await harness.settle();
+          expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+        } else harness.unmount();
+        const writes = harness.stateWrites;
+        tryChanges(original);
+        original.save.props.onPress();
+        pending.resolve();
+        // Resolve only microtasks before route effects: any state write here belongs to the stale save.
+        for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+        expect(harness.stateWrites).toBe(writes);
+        expect(harness.writesAfterUnmount).toBe(0);
+        expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+        if (outcome === "failure") expect(controller.requestDrain).not.toHaveBeenCalled();
+        else expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("late-edit");
+        if (boundary === "replacement draft") {
+          const tree = await harness.settle();
+          expect(screenText(tree)).toBe(expectedText);
+          expect(controls(tree).quantity.props.value).toBe("2.0001");
+          expect(controls(tree).note.props.value).toBe(original.note.props.value);
+        }
+      });
+    }
+  }
+
+  for (const update of [
+    { expectedOwnerUserId: "other-private-owner" },
+    { accessToken: "synthetic-replaced-token" },
+  ]) {
+    it(`rejects retained editor changes when ${Object.keys(update)[0]} changes before effects`, async () => {
+      const { harness, controller } = setup();
+      const original = controls(await openDraft(harness));
+      harness.updateProps(update);
+      harness.renderWithoutEffects();
+      const writes = harness.stateWrites;
+      tryChanges(original);
+      original.save.props.onPress();
+      expect(harness.stateWrites).toBe(writes);
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    });
+  }
+
+  for (const outcome of ["success", "failure", "ambiguous"]) {
+    it(`settles the owned draft across background completion ${outcome} without replay`, async () => {
+      const { harness, controller } = setup();
+      const pending = deferred();
+      controller.enqueueOperation.mockImplementationOnce(() =>
+        pending.promise.then(() => {
+          if (outcome === "failure") throw new Error("synthetic background failure");
+          if (outcome === "ambiguous")
+            throw new QuickAddEnqueueAmbiguousError(
+              "background-edit",
+              new Error("synthetic response loss"),
+            );
+          return { operationId: "background-edit" };
+        }),
+      );
+      const original = controls(await openDraft(harness));
+      original.save.props.onPress();
+      appState("background");
+      tryChanges(original);
+      original.save.props.onPress();
+      pending.resolve();
+      await harness.settle();
+      appState("active");
+      const tree = await harness.settle();
+      original.save.props.onPress();
+      expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+      if (outcome === "failure") {
+        const recovered = expectSubmitted(tree, original);
+        expect(recovered.quantity.props.editable).toBe(true);
+        expect(recovered.save.props.disabled).toBe(false);
+        expect(screenText(tree)).toContain("synthetic background failure");
+        expect(controller.requestDrain).not.toHaveBeenCalled();
+      } else {
+        expect(nodes(tree, (n) => n.props.accessibilityLabel === "Quantity")).toHaveLength(0);
+        expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("background-edit");
+        if (outcome === "ambiguous") expect(screenText(tree)).toContain("Do not save it again");
+      }
+    });
+  }
+
+  it("accepts both ordinary same-render Quantity events before repaint", async () => {
+    const { harness, controller } = setup();
+    const original = controls(await openDraft(harness));
+    original.quantity.props.onChangeText("2");
+    original.quantity.props.onChangeText("23");
+    const tree = await harness.settle();
+    expect(controls(tree).quantity.props.value).toBe("23");
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    const writes = harness.stateWrites;
+    tryChanges(original);
+    original.save.props.onPress();
+    expect(harness.stateWrites).toBe(writes);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+
+  it("merges ordinary same-render fields and Save captures the latest complete draft", async () => {
+    const { harness, controller } = setup();
+    const pending = deferred();
+    controller.enqueueOperation.mockReturnValueOnce(pending.promise);
+    const original = controls(await openDraft(harness));
+    try {
+      original.quantity.props.onChangeText("2");
+      original.quantity.props.onChangeText("23");
+      original.date.props.onChangeText("2026-08-16");
+      original.time.props.onChangeText("12:34");
+      original.meal.props.onPress();
+      original.clear.props.onPress();
+      original.note.props.onChangeText("  latest complete note\nkept  ");
+      original.save.props.onPress();
+      original.note.props.onChangeText("discard pending callback");
+      original.save.props.onPress();
+      expect(controller.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+        operationKind: "update",
+        entryId: entry.id,
+        expectedEntryRevision: "3",
+        entryName: "Apple",
+        portionLabel: "1.5 medium apple",
+        localDate: selectedDate,
+        mealSlot: "breakfast",
+        body: {
+          portion: { kind: "serving", servingId: "303", amount: "23" },
+          mealSlot: "lunch",
+          occurredAt: "2026-08-16T17:34:00.000Z",
+          note: "  latest complete note\nkept  ",
+        },
+      });
+      const held = controls(await harness.settle());
+      expect(held.quantity.props.value).toBe("23");
+      expect(held.date.props.value).toBe("2026-08-16");
+      expect(held.time.props.value).toBe("12:34");
+      expect(held.note.props.value).toBe("  latest complete note\nkept  ");
+      expect(held.meal.props.accessibilityState.checked).toBe(true);
+      expect(held.save.props.disabled).toBe(true);
+    } finally {
+      pending.resolve({ operationId: "latest-complete-edit" });
+      await harness.settle();
+    }
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("latest-complete-edit");
+  });
+});

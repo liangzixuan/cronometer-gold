@@ -247,9 +247,17 @@ export function DiaryScreen({
   const [state, setState] = useState<LoadState>("loading");
   const [pageState, setPageState] = useState<PageLoadState>("idle");
   const [message, setMessage] = useState("Opening your private diary…");
-  const [editor, setEditor] = useState<Editor | null>(null);
-  const editorRef = useRef(editor);
-  editorRef.current = editor;
+  const [editor, setEditorState] = useState<Editor | null>(null);
+  const editorRef = useRef<Editor | null>(null);
+  const editorSessionRef = useRef({});
+  const editorSession = editorSessionRef.current;
+  const editorRenderRef = useRef(editor);
+  editorRenderRef.current = editor;
+  const setEditor = useCallback((next: Editor | null) => {
+    editorSessionRef.current = {};
+    editorRef.current = next;
+    setEditorState(next);
+  }, []);
   const [, refreshMealPresentation] = useState(0);
   const mealScopeKey = JSON.stringify([
     expectedOwnerUserId,
@@ -434,7 +442,7 @@ export function DiaryScreen({
       setDate("");
     }
     return unauthorizedFlight.current.run(onUnauthorized);
-  }, [clearEntryDetails, clearRepeatDraft, onUnauthorized]);
+  }, [clearEntryDetails, clearRepeatDraft, onUnauthorized, setEditor]);
 
   const load = useCallback(
     async (requested: string, refreshedAfterStalePage = false) => {
@@ -492,7 +500,7 @@ export function DiaryScreen({
         return false;
       }
     },
-    [accessToken, apiBase, clearEntryDetails, clearRepeatDraft, closeForUnauthorized],
+    [accessToken, apiBase, clearEntryDetails, clearRepeatDraft, closeForUnauthorized, setEditor],
   );
 
   const loadSupportingSummary = useCallback(
@@ -654,7 +662,7 @@ export function DiaryScreen({
       if (dateChanged) setDate(next);
       else setRouteReloadGeneration((generation) => generation + 1);
     },
-    [clearEntryDetails, clearRepeatDraft],
+    [clearEntryDetails, clearRepeatDraft, setEditor],
   );
 
   useEffect(() => {
@@ -906,19 +914,67 @@ export function DiaryScreen({
     }
   }
 
+  function editorIsCurrent(draft: Editor): boolean {
+    const entry = diary?.entries.find((item) => item.id === draft.entryId);
+    return (
+      editorSessionRef.current === editorSession &&
+      editorRenderRef.current === draft &&
+      editorRef.current !== null &&
+      editor === draft &&
+      repeatDraftRef.current === null &&
+      entry !== undefined &&
+      repeatSourceCurrent(entry)
+    );
+  }
+
+  function changeEditor(
+    draft: Editor,
+    update: Partial<Pick<Editor, "quantity" | "mealSlot" | "localDate" | "localTime" | "note">>,
+  ) {
+    if (activeMutation.current !== null || !editorIsCurrent(draft) || !editorRef.current) return;
+    const next = { ...editorRef.current, ...update };
+    editorRef.current = next;
+    setEditorState(next);
+  }
+
+  function cancelEditor(draft: Editor) {
+    if (activeMutation.current !== null || !editorIsCurrent(draft)) return;
+    setEditor(null);
+  }
+
+  function canSaveEditor(draft: Editor): boolean {
+    const queue = quickAddOutboxController.getState();
+    const dependencies = repeatDependencies.current;
+    return (
+      activeMutation.current === null &&
+      editorIsCurrent(draft) &&
+      diary?.status === "open" &&
+      queue.pendingCount < MAX_QUICK_ADD_OUTBOX_ITEMS &&
+      queue.status !== "closed" &&
+      queue.status !== "owner_mismatch" &&
+      !(
+        queue.status === "unavailable" &&
+        (queue.reason === "storage" || queue.reason === "credential")
+      ) &&
+      !dependencies.pendingCorrectionEntries.has(draft.entryId) &&
+      !dependencies.pendingReorderDates.has(draft.originLocalDate)
+    );
+  }
+
   async function save() {
-    if (privateUiClosed.current || repeatDraftRef.current !== null || !editor || !diary) return;
-    if (!isPositiveDecimal(editor.quantity)) {
+    const submitted = editorRef.current;
+    if (!editor || !diary || !submitted || !canSaveEditor(editor)) return;
+    if (!isPositiveDecimal(submitted.quantity)) {
       setMessage("Quantity must be a positive decimal number.");
       return;
     }
-    const entry = diary.entries.find((candidate) => candidate.id === editor.entryId);
+    const entry = diary.entries.find((candidate) => candidate.id === submitted.entryId);
     if (!entry) {
       setEditor(null);
       setMessage("That entry is no longer present. Fresh diary data is required.");
       return;
     }
-    if (!diaryEditorOriginMatches(editor, diary, entry, profileTimeZone)) {
+    if (!diaryEditorOriginMatches(submitted, diary, entry, profileTimeZone)) {
       setEditor(null);
       setMessage(
         "The diary changed after editing began. Review the fresh entry before editing again.",
@@ -926,24 +982,24 @@ export function DiaryScreen({
       return;
     }
     let note: string | null | undefined;
-    if (editor.note !== (entry.note ?? "")) {
+    if (submitted.note !== (entry.note ?? "")) {
       try {
-        note = diaryNoteFromDraft(editor.note);
+        note = diaryNoteFromDraft(submitted.note);
       } catch (caught) {
         setMessage(caught instanceof Error ? caught.message : "The private note is invalid.");
         return;
       }
     }
     const timestampChanged =
-      editor.localDate !== editor.originalEntryLocalDate ||
-      editor.localTime !== editor.originalLocalTime;
+      submitted.localDate !== submitted.originalEntryLocalDate ||
+      submitted.localTime !== submitted.originalLocalTime;
     let occurredAt: string | undefined;
     if (timestampChanged) {
       try {
         occurredAt = localDateTimeToInstant(
-          editor.localDate,
-          editor.localTime,
-          editor.originTimeZone,
+          submitted.localDate,
+          submitted.localTime,
+          submitted.originTimeZone,
         );
       } catch (caught) {
         setMessage(caught instanceof Error ? caught.message : "The local time is invalid.");
@@ -954,38 +1010,60 @@ export function DiaryScreen({
       portion:
         entry.portion.kind === "serving"
           ? entry.entryKind === "food"
-            ? { kind: "serving", servingId: entry.portion.servingId, amount: editor.quantity }
-            : { kind: "serving", amount: editor.quantity }
-          : { kind: "grams", grams: editor.quantity },
-      mealSlot: editor.mealSlot,
+            ? { kind: "serving", servingId: entry.portion.servingId, amount: submitted.quantity }
+            : { kind: "serving", amount: submitted.quantity }
+          : { kind: "grams", grams: submitted.quantity },
+      mealSlot: submitted.mealSlot,
       ...(occurredAt ? { occurredAt } : {}),
       ...(note !== undefined ? { note } : {}),
     };
-    const owner = beginMutation(editor.originLocalDate, editor.entryId);
+    const owner = beginMutation(submitted.originLocalDate, submitted.entryId);
+    const submittedSession = {};
+    editorSessionRef.current = submittedSession;
+    const canRelease = () =>
+      activeMutation.current === owner.token &&
+      repeatLifecycle.current.mounted &&
+      !privateUiClosed.current &&
+      repeatLifecycle.current.scope === repeatScope &&
+      repeatLifecycle.current.controller === quickAddOutboxController &&
+      currentMealRoute.current === requestedMealRoute &&
+      viewEpoch.current === owner.viewEpoch &&
+      requestGeneration.current === mealRequestGeneration &&
+      mealGuard.current.diaryPage === diaryPage;
+    const canReport = () =>
+      canRelease() &&
+      editorSessionRef.current === submittedSession &&
+      editorRef.current === submitted;
     setMessage("Securing this diary edit on your device before sending…");
     try {
       const item = await quickAddOutboxController.enqueueOperation({
         operationKind: "update",
         entryId: entry.id,
-        expectedEntryRevision: editor.originEntryRevision,
+        expectedEntryRevision: submitted.originEntryRevision,
         entryName: entryName(entry),
         portionLabel: entryPortionLabel(entry),
-        localDate: editor.originLocalDate,
+        localDate: submitted.originLocalDate,
         mealSlot: entry.mealSlot,
         body,
       });
-      setEditor(null);
-      setMessage(
-        `${entryName(entry)} changes are queued securely. The visible entry and totals stay unchanged until the server confirms the exact edit.`,
-      );
+      if (canReport()) {
+        setEditor(null);
+        setMessage(
+          `${entryName(entry)} changes are queued securely. The visible entry and totals stay unchanged until the server confirms the exact edit.`,
+        );
+      }
       void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
       if (caught instanceof QuickAddEnqueueAmbiguousError) {
-        setEditor(null);
+        if (canReport()) {
+          setEditor(null);
+          setMessage(
+            "Secure storage could not confirm whether this edit was queued. Do not save it again until the queue status recovers.",
+          );
+        }
         void quickAddOutboxController.requestDrain(caught.operationId);
-        setMessage(
-          "Secure storage could not confirm whether this edit was queued. Do not save it again until the queue status recovers.",
-        );
+      } else if (!canReport()) {
+        return;
       } else if (caught instanceof DiaryOutboxCapacityError) {
         setMessage(
           "This private note makes the protected diary envelope larger than the reviewed 1,600-byte slot. Shorten the note; it was not truncated or sent online.",
@@ -1000,7 +1078,7 @@ export function DiaryScreen({
         );
       }
     } finally {
-      finishMutation(owner);
+      if (canRelease()) finishMutation(owner);
     }
   }
 
@@ -1711,6 +1789,9 @@ export function DiaryScreen({
     refreshMealPresentation((value) => value + 1);
   }
 
+  const editorControlsDisabled =
+    editor === null || activeMutation.current !== null || !editorIsCurrent(editor);
+
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <ScrollView
@@ -2358,9 +2439,10 @@ export function DiaryScreen({
                             <Text style={styles.label}>Quantity</Text>
                             <TextInput
                               accessibilityLabel="Quantity"
+                              editable={!editorControlsDisabled}
                               keyboardType="decimal-pad"
                               maxLength={18}
-                              onChangeText={(quantity) => setEditor({ ...editor, quantity })}
+                              onChangeText={(quantity) => changeEditor(editor, { quantity })}
                               style={styles.input}
                               value={editor.quantity}
                             />
@@ -2369,9 +2451,13 @@ export function DiaryScreen({
                               {diaryGroups.map(({ mealSlot: slot, label }) => (
                                 <Pressable
                                   accessibilityRole="radio"
-                                  accessibilityState={{ checked: editor.mealSlot === slot }}
+                                  accessibilityState={{
+                                    checked: editor.mealSlot === slot,
+                                    disabled: editorControlsDisabled,
+                                  }}
+                                  disabled={editorControlsDisabled}
                                   key={slot}
-                                  onPress={() => setEditor({ ...editor, mealSlot: slot })}
+                                  onPress={() => changeEditor(editor, { mealSlot: slot })}
                                   style={[
                                     styles.chip,
                                     editor.mealSlot === slot && styles.chipActive,
@@ -2391,17 +2477,19 @@ export function DiaryScreen({
                             <Text style={styles.label}>Local date</Text>
                             <TextInput
                               accessibilityLabel="Entry local date"
+                              editable={!editorControlsDisabled}
                               maxLength={10}
-                              onChangeText={(localDate) => setEditor({ ...editor, localDate })}
+                              onChangeText={(localDate) => changeEditor(editor, { localDate })}
                               style={styles.input}
                               value={editor.localDate}
                             />
                             <Text style={styles.label}>Local time</Text>
                             <TextInput
                               accessibilityLabel={`Entry local time in ${editor.originTimeZone}`}
+                              editable={!editorControlsDisabled}
                               keyboardType="numbers-and-punctuation"
                               maxLength={5}
-                              onChangeText={(localTime) => setEditor({ ...editor, localTime })}
+                              onChangeText={(localTime) => changeEditor(editor, { localTime })}
                               style={styles.input}
                               value={editor.localTime}
                             />
@@ -2412,9 +2500,10 @@ export function DiaryScreen({
                             <TextInput
                               accessibilityHint="Saving an empty value removes the note from the current display only. Immutable prior revisions remain in your private account export until whole-account erasure."
                               accessibilityLabel={`Private note for ${entryName(entry)}`}
+                              editable={!editorControlsDisabled}
                               multiline
                               numberOfLines={4}
-                              onChangeText={(note) => setEditor({ ...editor, note })}
+                              onChangeText={(note) => changeEditor(editor, { note })}
                               style={[styles.input, styles.noteInput]}
                               textAlignVertical="top"
                               value={editor.note}
@@ -2433,9 +2522,9 @@ export function DiaryScreen({
                                 accessibilityHint="Save to remove the note from the current display only. Immutable prior revisions remain in your private account export until whole-account erasure."
                                 accessibilityLabel={`Clear private note for ${entryName(entry)}`}
                                 accessibilityRole="button"
-                                accessibilityState={{ disabled: busyEntry !== null }}
-                                disabled={busyEntry !== null}
-                                onPress={() => setEditor({ ...editor, note: "" })}
+                                accessibilityState={{ disabled: editorControlsDisabled }}
+                                disabled={editorControlsDisabled}
+                                onPress={() => changeEditor(editor, { note: "" })}
                                 style={styles.clearNoteButton}
                               >
                                 <Text style={styles.secondaryText}>Clear note</Text>
@@ -2445,13 +2534,8 @@ export function DiaryScreen({
                               <Pressable
                                 accessibilityLabel={`Save changes to ${entryName(entry)}`}
                                 accessibilityRole="button"
-                                disabled={
-                                  busyEntry !== null ||
-                                  diary.status === "locked" ||
-                                  durableQueueUnavailable ||
-                                  pendingCorrectionEntries.has(entry.id) ||
-                                  pendingReorderDates.has(diary.localDate)
-                                }
+                                accessibilityState={{ disabled: !canSaveEditor(editor) }}
+                                disabled={!canSaveEditor(editor)}
                                 onPress={() => void save()}
                                 style={styles.primarySmall}
                               >
@@ -2462,9 +2546,9 @@ export function DiaryScreen({
                               <Pressable
                                 accessibilityLabel={`Cancel editing ${entryName(entry)}`}
                                 accessibilityRole="button"
-                                accessibilityState={{ disabled: busyEntry !== null }}
-                                disabled={busyEntry !== null}
-                                onPress={() => setEditor(null)}
+                                accessibilityState={{ disabled: editorControlsDisabled }}
+                                disabled={editorControlsDisabled}
+                                onPress={() => cancelEditor(editor)}
                                 style={styles.secondarySmall}
                               >
                                 <Text style={styles.secondaryText}>Cancel</Text>
@@ -2566,7 +2650,6 @@ export function DiaryScreen({
                               onPress={() => {
                                 if (repeatDraftRef.current !== null) return;
                                 const nextEditor = editorFor(entry, diary, profileTimeZone);
-                                editorRef.current = nextEditor;
                                 setEditor(nextEditor);
                               }}
                               style={styles.secondarySmall}
