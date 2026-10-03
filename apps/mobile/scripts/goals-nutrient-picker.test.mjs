@@ -2031,3 +2031,361 @@ for (const conflicted of [false, true])
 vi.mock("../src/api/mobile-fetch", () => ({
   mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
 }));
+
+describe("native Goals pending builder ownership", () => {
+  const energyLabel = "Your selected daily energy (kcal)";
+  const reasonLabel = "Why this energy target?";
+  const effectiveLabel = "Effective from YYYY-MM-DD";
+  const fieldLabels = [
+    energyLabel,
+    reasonLabel,
+    "Protein minimum",
+    "Protein target",
+    "Protein maximum",
+    "Protein source (required)",
+    "Protein source version",
+    "Protein rationale",
+  ];
+  const rowRemove = (tree) =>
+    nodes(
+      tree,
+      (node) =>
+        node.type === "Pressable" && node.props.accessibilityLabel === "Remove Protein target",
+    )[0];
+  const check = (tree, fragment) =>
+    nodes(
+      tree,
+      (node) =>
+        node.type === "Pressable" &&
+        node.props.accessibilityRole === "checkbox" &&
+        text(node).includes(fragment),
+    )[0];
+
+  for (const revise of [false, true])
+    for (const phase of ["response", "body"])
+      it(`freezes ${revise ? "Publish" : "Create"} inputs and retained callbacks while ${phase} is pending`, async () => {
+        const held = deferred();
+        const { harness, requests } = setup({
+          goal: revise ? savedGoal([nutrient]) : null,
+          handler: (request) =>
+            request.method === "POST"
+              ? phase === "response"
+                ? held.promise
+                : { status: 503, ok: false, json: () => held.promise }
+              : undefined,
+        });
+        if (!revise) await add(harness, nutrient);
+        await type(harness, energyLabel, "2000.000001");
+        await type(harness, reasonLabel, "Synthetic energy rationale");
+        await type(harness, "Protein target", "12.00001");
+        const tree = await type(harness, "Protein source (required)", " synthetic source ");
+        const before = fields(tree);
+        const save = button(tree, revise ? "Publish goal revision" : "Create goal").props.onPress;
+        const actions = fieldLabels.map(
+          (label) => () => input(tree, label).props.onChangeText(" changed after capture "),
+        );
+        actions.push(
+          () => input(tree, effectiveLabel).props.onChangeText("2026-09-10"),
+          () => input(tree, effectiveLabel).props.onEndEditing(),
+          button(tree, "Profile-derived estimate").props.onPress,
+          rowRemove(tree).props.onPress,
+          save,
+        );
+        save();
+        expect(writes(requests)).toHaveLength(1);
+        const first = writes(requests)[0];
+        const count = harness.stateWrites;
+        const requestCount = requests.length;
+        actions.forEach((action) => {
+          action();
+        });
+        expect(harness.stateWrites).toBe(count);
+        expect(requests).toHaveLength(requestCount);
+        let pendingTree = await harness.settle();
+        expect(fields(pendingTree)).toEqual(before);
+        for (const label of [...fieldLabels, effectiveLabel])
+          expect(input(pendingTree, label).props.editable).toBe(false);
+        expect(button(pendingTree, "Profile-derived estimate").props.disabled).toBe(true);
+        expect(rowRemove(pendingTree).props.disabled).toBe(true);
+        const during = harness.stateWrites;
+        actions.forEach((action) => {
+          action();
+        });
+        expect(harness.stateWrites).toBe(during);
+        held.resolve(
+          phase === "response"
+            ? response({ title: "Synthetic uncertain save" }, 503)
+            : { title: "Synthetic uncertain save" },
+        );
+        pendingTree = await harness.settle();
+        expect(fields(pendingTree)).toEqual(before);
+        await click(harness, revise ? "Publish goal revision" : "Create goal");
+        expect(writes(requests)).toHaveLength(2);
+        expect(writes(requests)[1].body).toBe(first.body);
+        expect(writes(requests)[1].headers["idempotency-key"]).toBe(
+          first.headers["idempotency-key"],
+        );
+        await type(harness, reasonLabel, "Editing reopened after failure");
+        expect(input(await harness.settle(), reasonLabel).props.value).toBe(
+          "Editing reopened after failure",
+        );
+      });
+
+  it("freezes derived PAL, adjustment, acknowledgement and mode callbacks", async () => {
+    const held = deferred();
+    const { harness, requests } = setupNew("derived", {
+      handler: (request) => (request.method === "POST" ? held.promise : undefined),
+    });
+    const tree = await harness.settle();
+    const before = fields(tree);
+    const actions = [
+      button(tree, "Fixed target").props.onPress,
+      button(tree, "Light 1.40–1.69").props.onPress,
+      button(tree, "Moderate 1.70–1.99").props.onPress,
+      button(tree, "Vigorous 2.00–2.40").props.onPress,
+      () => input(tree, "PAL factor").props.onChangeText("1.8"),
+      () => input(tree, "Adjustment kcal").props.onChangeText("-10"),
+      check(tree, "PAL represents").props.onPress,
+    ];
+    button(tree, "Publish goal revision").props.onPress();
+    expect(writes(requests)).toHaveLength(1);
+    const count = harness.stateWrites;
+    actions.forEach((action) => {
+      action();
+    });
+    expect(harness.stateWrites).toBe(count);
+    const pendingTree = await harness.settle();
+    expect(fields(pendingTree)).toEqual(before);
+    for (const label of ["PAL factor", "Adjustment kcal"])
+      expect(input(pendingTree, label).props.editable).toBe(false);
+    for (const label of [
+      "Fixed target",
+      "Light 1.40–1.69",
+      "Moderate 1.70–1.99",
+      "Vigorous 2.00–2.40",
+    ])
+      expect(button(pendingTree, label).props.disabled).toBe(true);
+    expect(check(pendingTree, "PAL represents").props.disabled).toBe(true);
+    held.resolve(response({}, 503));
+    await harness.settle();
+  });
+
+  for (const kind of ["manual", "reference"])
+    it(`freezes ${kind} reference actions and candidate metadata before their side effects`, async () => {
+      const held = deferred();
+      const { harness, requests } = setupNew(kind, {
+        handler: (request) => {
+          if (request.method === "POST") return held.promise;
+          if (kind === "reference" && request.url.pathname === "/v1/goals/reference-target-sets")
+            return response({
+              data: { ...referenceFixture().data, date: request.url.searchParams.get("date") },
+            });
+          return undefined;
+        },
+      });
+      let tree = await harness.settle();
+      if (kind === "manual") {
+        tree = await click(harness, "U.S.–Canada reference candidate: male adults 19–50");
+        check(tree, "I confirm").props.onPress();
+        tree = await harness.settle();
+      }
+      const before = fields(tree);
+      const actions = [
+        button(tree, "U.S.–Canada reference candidate: male adults 19–50").props.onPress,
+        check(tree, "I confirm").props.onPress,
+        () => input(tree, effectiveLabel).props.onEndEditing(),
+        button(tree, "Apply 12 values to unsaved draft").props.onPress,
+      ];
+      if (kind === "reference")
+        actions.push(
+          button(tree, "Customize editable copy and clear verified provenance").props.onPress,
+        );
+      button(tree, "Publish goal revision").props.onPress();
+      expect(writes(requests)).toHaveLength(1);
+      const count = harness.stateWrites;
+      const requestCount = requests.length;
+      actions.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+      expect(requests).toHaveLength(requestCount);
+      expect(fields(await harness.settle())).toEqual(before);
+      held.resolve(response({}, 503));
+      await harness.settle();
+    });
+
+  it("composes repeated and multi-field edits before repaint and saves the latest complete draft", async () => {
+    const { harness, requests } = setup({
+      goal: savedGoal([nutrient]),
+      handler: (request) => (request.method === "POST" ? response({}, 503) : undefined),
+    });
+    const tree = await harness.settle();
+    const energy = input(tree, energyLabel).props.onChangeText;
+    energy("2");
+    energy("2300");
+    input(tree, reasonLabel).props.onChangeText(" latest rationale ");
+    input(tree, "Protein target").props.onChangeText("23.000001");
+    input(tree, "Protein source (required)").props.onChangeText(" latest source ");
+    button(tree, "Publish goal revision").props.onPress();
+    expect(writes(requests)).toHaveLength(1);
+    const body = JSON.parse(writes(requests)[0].body);
+    expect(body.energy).toEqual({
+      mode: "fixed",
+      targetKcal: "2300",
+      rationale: " latest rationale ",
+    });
+    expect(body.nutrientTargets[0]).toMatchObject({
+      targetAmount: "23.000001",
+      source: { label: " latest source ", version: "v1" },
+    });
+    expect(input(await harness.settle(), energyLabel).props.value).toBe("2300");
+  });
+
+  for (const boundary of [
+    "reload",
+    "new",
+    "copy",
+    "date-aba",
+    "owner",
+    "profile",
+    "token",
+    "unmount",
+    "replay",
+    "private",
+  ])
+    it(`retires editor callbacks after ${boundary} without changing the replacement`, async () => {
+      const { harness, requests } = setupCopy({
+        handler: (request) => (request.method === "POST" ? response({}, 401) : undefined),
+      });
+      const tree = await harness.settle();
+      const actions = [
+        () => input(tree, energyLabel).props.onChangeText("999"),
+        () => input(tree, "Protein target").props.onChangeText("999"),
+        rowRemove(tree).props.onPress,
+        () => input(tree, effectiveLabel).props.onEndEditing(),
+        button(tree, "Profile-derived estimate").props.onPress,
+        button(tree, "Publish goal revision").props.onPress,
+      ];
+      if (boundary === "reload") await click(harness, "Refresh goals and progress");
+      if (boundary === "new") button(tree, newLabel).props.onPress();
+      if (boundary === "copy") button(tree, copyLabel).props.onPress();
+      if (boundary === "date-aba") {
+        const date = input(tree, "Progress date YYYY-MM-DD");
+        date.props.onChangeText("2026-09-20");
+        date.props.onChangeText(date.props.value);
+      }
+      if (["owner", "profile", "token"].includes(boundary)) {
+        harness.updateProps(
+          boundary === "owner"
+            ? { expectedOwnerUserId: "80eedafb-9d6e-4adc-b924-8e55e87ff5d0" }
+            : boundary === "profile"
+              ? { profileRevision: "5" }
+              : { accessToken: "replacement-synthetic-session" },
+        );
+        harness.renderWithoutEffects();
+      }
+      if (boundary === "unmount") harness.unmount();
+      if (boundary === "replay") {
+        harness.replayEffects();
+        await harness.settle();
+      }
+      if (boundary === "private") await click(harness, "Publish goal revision");
+      const count = harness.stateWrites;
+      const requestCount = requests.length;
+      actions.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+      expect(requests).toHaveLength(requestCount);
+      if (boundary === "unmount") expect(harness.writesAfterUnmount).toBe(0);
+      else harness.unmount();
+    });
+
+  it("keeps current successful response and reload authoritative", async () => {
+    const held = deferred();
+    let current = savedGoal([nutrient]);
+    const { harness, requests } = setup({
+      handler: (request) =>
+        request.method === "POST"
+          ? held.promise
+          : request.url.pathname === "/v1/goals/current"
+            ? response({ data: { goal: current } })
+            : undefined,
+    });
+    let tree = await type(harness, energyLabel, "2200");
+    const stale = input(tree, energyLabel).props.onChangeText;
+    button(tree, "Publish goal revision").props.onPress();
+    expect(JSON.parse(writes(requests)[0].body).energy.targetKcal).toBe("2200");
+    stale("9999");
+    tree = await harness.settle();
+    expect(input(tree, energyLabel).props.value).toBe("2200");
+    current = savedGoal([nutrient], { revision: "4" });
+    current.currentVersion.versionNumber = 4;
+    current.currentVersion.energy.targetKcal = "2200";
+    held.resolve(response({ data: { replayed: false, goal: current } }));
+    tree = await harness.settle();
+    expect(text(tree)).toContain("Goal version 4 published.");
+    expect(input(tree, energyLabel).props.value).toBe("2200");
+    expect(input(tree, energyLabel).props.editable).not.toBe(false);
+    const count = harness.stateWrites;
+    stale("9999");
+    expect(harness.stateWrites).toBe(count);
+  });
+});
+
+describe("native Goals editor completion controls", () => {
+  it("reopens editing after a definitive conflict while retiring the submitted editor callbacks", async () => {
+    const held = deferred();
+    let attempt = 0;
+    const { harness, requests } = setup({
+      goal: savedGoal([nutrient]),
+      handler: (request) =>
+        request.method === "POST"
+          ? ++attempt === 1
+            ? held.promise
+            : response({}, 503)
+          : undefined,
+    });
+    const tree = await type(harness, "Why this energy target?", "submitted rationale");
+    const stale = input(tree, "Protein target").props.onChangeText;
+    button(tree, "Publish goal revision").props.onPress();
+    const first = writes(requests)[0];
+    held.resolve(response({}, 412));
+    let current = await harness.settle();
+    expect(text(current)).toContain("Your edits are still here");
+    expect(input(current, "Why this energy target?").props.value).toBe("submitted rationale");
+    const count = harness.stateWrites;
+    stale("999");
+    expect(harness.stateWrites).toBe(count);
+    current = await type(harness, "Protein target", "24.000001");
+    expect(input(current, "Protein target").props.value).toBe("24.000001");
+    await click(harness, "Publish goal revision");
+    expect(writes(requests)).toHaveLength(2);
+    expect(writes(requests)[1].headers["if-match"]).toBe('"3"');
+    expect(writes(requests)[1].headers["idempotency-key"]).not.toBe(
+      first.headers["idempotency-key"],
+    );
+    expect(JSON.parse(writes(requests)[1].body).nutrientTargets[0].targetAmount).toBe("24.000001");
+  });
+
+  it("keeps historical editor inputs and retained actions read-only", async () => {
+    const { harness, requests } = setup({
+      goal: savedGoal([nutrient], { effectiveTo: "2026-09-08" }),
+    });
+    const tree = await harness.settle();
+    const count = harness.stateWrites;
+    const requestCount = requests.length;
+    for (const label of [
+      "Your selected daily energy (kcal)",
+      "Why this energy target?",
+      "Protein target",
+    ]) {
+      expect(input(tree, label).props.editable).toBe(false);
+      input(tree, label).props.onChangeText("999");
+    }
+    button(tree, "Profile-derived estimate").props.onPress();
+    button(tree, "Closed goal history is read-only").props.onPress();
+    expect(harness.stateWrites).toBe(count);
+    expect(requests).toHaveLength(requestCount);
+  });
+});

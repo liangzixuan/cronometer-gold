@@ -284,6 +284,7 @@ export function GoalsScreen({
   const [definitions, setDefinitions] = useState<readonly TargetableNutrient[]>([]);
   const [builder, setBuilderState] = useState<GoalBuilder>(() => emptyGoal(date));
   const builderRef = useRef(builder);
+  const builderEditor = useRef({});
   const builderGeneration = useRef(0);
   const [copySource, setCopySource] = useState<CopySource | null>(null);
   const copySourceRef = useRef<CopySource | null>(null);
@@ -336,6 +337,8 @@ export function GoalsScreen({
       const current = builderRef.current;
       const next = typeof update === "function" ? update(current) : update;
       if (next === current) return;
+      // Replacing the draft retires its editor; functional edits keep the same editor.
+      if (typeof update !== "function") builderEditor.current = {};
       if (next.goalId !== current.goalId || next.revision !== current.revision) {
         clearRevisionConflict();
       }
@@ -811,13 +814,38 @@ export function GoalsScreen({
     }
   }
 
+  const renderedBuilderEditor = builderEditor.current;
+  const renderedBuilderScope = copyScope.current;
+  const renderedBuilderGeneration = generation.current;
+  const renderedBuilderAction = newGoalActionGeneration.current;
+  const builderDisabled = loading || saving || profileSaving || historicalGoal;
+  function canEditBuilder() {
+    return (
+      !builderDisabled &&
+      copyMounted.current &&
+      !copyPrivateClosed.current &&
+      copyScope.current === renderedBuilderScope &&
+      builderEditor.current === renderedBuilderEditor &&
+      generation.current === renderedBuilderGeneration &&
+      newGoalActionGeneration.current === renderedBuilderAction &&
+      dateRef.current === date &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current
+    );
+  }
+  function editBuilder(update: (current: GoalBuilder) => GoalBuilder) {
+    if (canEditBuilder()) setBuilder(update);
+  }
+
   function applyReferenceDraft(set: NativeReferenceTargetSet) {
+    if (!canEditBuilder() || (referenceLocked && !appliedProfileDrift)) return;
     if (!referenceSets || !referenceAcknowledged) {
       setMessage("Review and accept the exact eligibility acknowledgement before applying.");
       return;
     }
     if (
-      referenceSets.date !== builder.effectiveFrom ||
+      referenceSets.date !== builderRef.current.effectiveFrom ||
       referenceSets.profileRevision !== profileRevisionRef.current ||
       set.groupCode !== selectedReferenceGroup
     ) {
@@ -827,7 +855,7 @@ export function GoalsScreen({
       return;
     }
     setBuilder({
-      ...builder,
+      ...builderRef.current,
       targets: nativeReferenceDraftTargets(set),
       reference: {
         selection: nativeReferenceSelection(referenceSets, set),
@@ -843,14 +871,15 @@ export function GoalsScreen({
   }
 
   function customizeReferenceDraft(set?: NativeReferenceTargetSet) {
+    if (!canEditBuilder() || !referenceLocked) return;
     const targets = set
       ? nativeReferenceDraftTargets(set, true)
-      : builder.targets.map((target) => ({
+      : builderRef.current.targets.map((target) => ({
           ...target,
           sourceLabel: `User-customized copy of ${target.sourceLabel}`.slice(0, 160),
           rationale: "User-editable copy; verified reference-template identity cleared.",
         }));
-    setBuilder({ ...builder, targets, reference: null });
+    setBuilder({ ...builderRef.current, targets, reference: null });
     setReferenceAcknowledged(false);
     setReferenceCustomized(true);
     const nextMessage =
@@ -860,13 +889,14 @@ export function GoalsScreen({
   }
 
   function patchTarget(index: number, patch: Partial<TargetDraft>) {
-    if (referenceLocked) return;
-    setBuilder({
-      ...builder,
-      targets: builder.targets.map((target, candidate) =>
-        candidate === index ? { ...target, ...patch } : target,
+    if (referenceLocked || builderRef.current.reference !== null) return;
+    const definition = builder.targets[index]?.definition;
+    editBuilder((current) => ({
+      ...current,
+      targets: current.targets.map((target, candidate) =>
+        candidate === index && target.definition === definition ? { ...target, ...patch } : target,
       ),
-    });
+    }));
   }
 
   const pickerDisabled = loading || saving || profileSaving || historicalGoal || referenceLocked;
@@ -923,7 +953,9 @@ export function GoalsScreen({
   }
 
   async function save() {
-    if (verifiedApplied && builder.reference === null && !referenceCustomized) {
+    if (!canEditBuilder()) return;
+    const draft = builderRef.current;
+    if (verifiedApplied && draft.reference === null && !referenceCustomized) {
       setMessage(
         "Choose Customize explicitly before publishing custom rows from this verified goal.",
       );
@@ -932,12 +964,12 @@ export function GoalsScreen({
     if (saving || writeController.current) return;
     let body: ReturnType<typeof nativeGoalRequest>;
     try {
-      body = nativeGoalRequest(builder, templatesSupported ? expectedOwnerUserId : undefined);
+      body = nativeGoalRequest(draft, templatesSupported ? expectedOwnerUserId : undefined);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Review the goal fields.");
       return;
     }
-    const key = `${builder.goalId ?? "create"}:${builder.revision ?? "new"}:${JSON.stringify(body)}`;
+    const key = `${draft.goalId ?? "create"}:${draft.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(pending.current, key, () => body, newOperationId);
     pending.current.set(key, operation);
     const initiatingOwner = expectedOwnerUserId;
@@ -960,15 +992,15 @@ export function GoalsScreen({
         initiatingEpoch,
       );
     setSaving(true);
-    setMessage(builder.goalId ? "Publishing an immutable goal revision…" : "Creating goal…");
+    setMessage(draft.goalId ? "Publishing an immutable goal revision…" : "Creating goal…");
     try {
-      const path = builder.goalId ? `/v1/goals/${builder.goalId}/revisions` : "/v1/goals";
+      const path = draft.goalId ? `/v1/goals/${draft.goalId}/revisions` : "/v1/goals";
       const response = await mobileFetch(apiUrl(apiBase, path).toString(), {
         method: "POST",
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",
           "idempotency-key": operation.operationId,
-          ...(builder.revision ? { "if-match": `"${builder.revision}"` } : {}),
+          ...(draft.revision ? { "if-match": `"${draft.revision}"` } : {}),
         }),
         body: JSON.stringify(operation.body),
         signal: controller.signal,
@@ -987,14 +1019,14 @@ export function GoalsScreen({
         pending.current.delete(key);
         if (
           copyScope.current !== initiatingDraftScope ||
-          builderRef.current.goalId !== builder.goalId ||
-          builderRef.current.revision !== builder.revision
+          builderRef.current.goalId !== draft.goalId ||
+          builderRef.current.revision !== draft.revision
         )
           return;
         const conflict: GoalRevisionConflict = {
           scope: initiatingDraftScope,
-          goalId: builder.goalId,
-          revision: builder.revision,
+          goalId: draft.goalId,
+          revision: draft.revision,
         };
         revisionConflictRef.current = conflict;
         setRevisionConflict(conflict);
@@ -1343,25 +1375,28 @@ export function GoalsScreen({
             </Pressable>
           ) : null}
           <Field
-            editable={builder.goalId === null && !historicalGoal}
+            editable={builder.goalId === null && !builderDisabled}
             label="Effective from YYYY-MM-DD"
             value={builder.effectiveFrom}
             maxLength={10}
             onChange={(effectiveFrom) => {
+              if (!canEditBuilder() || builderRef.current.goalId !== null) return;
               effectiveDateRef.current = effectiveFrom;
               candidateController.current?.abort();
               setReferenceSets(null);
               setSelectedReferenceGroup("");
               setReferenceAcknowledged(false);
-              setBuilder({
-                ...builder,
+              editBuilder((current) => ({
+                ...current,
                 effectiveFrom,
-                ...(builder.reference ? { targets: [], reference: null } : {}),
-              });
+                ...(current.reference ? { targets: [], reference: null } : {}),
+              }));
             }}
             onEnd={() => {
-              if (isLocalDate(builder.effectiveFrom)) {
-                void loadCandidates(builder.effectiveFrom, profileRevisionRef.current);
+              if (!canEditBuilder()) return;
+              const effectiveFrom = builderRef.current.effectiveFrom;
+              if (isLocalDate(effectiveFrom)) {
+                void loadCandidates(effectiveFrom, profileRevisionRef.current);
               } else {
                 setMessage("Effective date must be a real YYYY-MM-DD local date.");
               }
@@ -1378,39 +1413,39 @@ export function GoalsScreen({
           <View accessibilityRole="radiogroup" style={styles.row}>
             <Choice
               active={builder.mode === "fixed"}
-              disabled={historicalGoal}
+              disabled={builderDisabled}
               label="Fixed target"
               onPress={() =>
-                setBuilder({
-                  ...builder,
+                editBuilder((current) => ({
+                  ...current,
                   mode: "fixed",
-                  fixedKcal: builder.mode === "derived" ? "" : builder.fixedKcal,
-                })
+                  fixedKcal: current.mode === "derived" ? "" : current.fixedKcal,
+                }))
               }
             />
             <Choice
               active={builder.mode === "derived"}
-              disabled={historicalGoal}
+              disabled={builderDisabled}
               label="Profile-derived estimate"
               onPress={() =>
-                setBuilder({
-                  ...builder,
+                editBuilder((current) => ({
+                  ...current,
                   mode: "derived",
-                  activityLevelCode: builder.mode === "fixed" ? "" : builder.activityLevelCode,
-                  activityFactor: builder.mode === "fixed" ? "" : builder.activityFactor,
-                  palAcknowledged: builder.mode === "fixed" ? false : builder.palAcknowledged,
-                })
+                  activityLevelCode: current.mode === "fixed" ? "" : current.activityLevelCode,
+                  activityFactor: current.mode === "fixed" ? "" : current.activityFactor,
+                  palAcknowledged: current.mode === "fixed" ? false : current.palAcknowledged,
+                }))
               }
             />
           </View>
           {builder.mode === "fixed" ? (
             <Field
-              editable={!historicalGoal}
+              editable={!builderDisabled}
               label="Your selected daily energy (kcal)"
               value={builder.fixedKcal}
               maxLength={19}
               numeric
-              onChange={(fixedKcal) => setBuilder({ ...builder, fixedKcal })}
+              onChange={(fixedKcal) => editBuilder((current) => ({ ...current, fixedKcal }))}
             />
           ) : (
             <View>
@@ -1418,68 +1453,73 @@ export function GoalsScreen({
               <View style={styles.row}>
                 <Choice
                   active={builder.activityLevelCode === "sedentary_or_light"}
-                  disabled={historicalGoal}
+                  disabled={builderDisabled}
                   label="Light 1.40–1.69"
                   onPress={() =>
-                    setBuilder({
-                      ...builder,
+                    editBuilder((current) => ({
+                      ...current,
                       activityLevelCode: "sedentary_or_light",
                       activityFactor: "",
                       palAcknowledged: false,
-                    })
+                    }))
                   }
                 />
                 <Choice
                   active={builder.activityLevelCode === "active_or_moderate"}
-                  disabled={historicalGoal}
+                  disabled={builderDisabled}
                   label="Moderate 1.70–1.99"
                   onPress={() =>
-                    setBuilder({
-                      ...builder,
+                    editBuilder((current) => ({
+                      ...current,
                       activityLevelCode: "active_or_moderate",
                       activityFactor: "",
                       palAcknowledged: false,
-                    })
+                    }))
                   }
                 />
                 <Choice
                   active={builder.activityLevelCode === "vigorous"}
-                  disabled={historicalGoal}
+                  disabled={builderDisabled}
                   label="Vigorous 2.00–2.40"
                   onPress={() =>
-                    setBuilder({
-                      ...builder,
+                    editBuilder((current) => ({
+                      ...current,
                       activityLevelCode: "vigorous",
                       activityFactor: "",
                       palAcknowledged: false,
-                    })
+                    }))
                   }
                 />
               </View>
               <Field
-                editable={!historicalGoal}
+                editable={!builderDisabled}
                 label="PAL factor"
                 value={builder.activityFactor}
                 maxLength={19}
                 numeric
                 onChange={(activityFactor) =>
-                  setBuilder({ ...builder, activityFactor, palAcknowledged: false })
+                  editBuilder((current) => ({ ...current, activityFactor, palAcknowledged: false }))
                 }
               />
               <Field
-                editable={!historicalGoal}
+                editable={!builderDisabled}
                 label="Adjustment kcal"
                 value={builder.adjustmentKcal}
                 maxLength={20}
                 numeric
-                onChange={(adjustmentKcal) => setBuilder({ ...builder, adjustmentKcal })}
+                onChange={(adjustmentKcal) =>
+                  editBuilder((current) => ({ ...current, adjustmentKcal }))
+                }
               />
               <Pressable
                 accessibilityRole="checkbox"
-                accessibilityState={{ checked: builder.palAcknowledged, disabled: historicalGoal }}
-                disabled={historicalGoal}
+                accessibilityState={{ checked: builder.palAcknowledged, disabled: builderDisabled }}
+                disabled={builderDisabled}
                 onPress={() =>
-                  setBuilder({ ...builder, palAcknowledged: !builder.palAcknowledged })
+                  editBuilder((current) => ({
+                    ...current,
+                    palAcknowledged: !current.palAcknowledged,
+                  }))
                 }
                 style={styles.check}
               >
@@ -1495,12 +1535,12 @@ export function GoalsScreen({
             </View>
           )}
           <Field
-            editable={!historicalGoal}
+            editable={!builderDisabled}
             label="Why this energy target?"
             value={builder.rationale}
             maxLength={1_000}
             multiline
-            onChange={(rationale) => setBuilder({ ...builder, rationale })}
+            onChange={(rationale) => editBuilder((current) => ({ ...current, rationale }))}
           />
           {nativeReferenceTargetSectionVisible(templatesSupported, referenceSets) ? (
             <View style={styles.candidate}>
@@ -1593,6 +1633,11 @@ export function GoalsScreen({
                                 key={candidate.groupCode}
                                 label={candidate.title}
                                 onPress={() => {
+                                  if (
+                                    !canEditBuilder() ||
+                                    (referenceLocked && !appliedProfileDrift)
+                                  )
+                                    return;
                                   setSelectedReferenceGroup(candidate.groupCode);
                                   setReferenceAcknowledged(false);
                                   const nextMessage = `${candidate.title} selected for preview. The goal draft is unchanged.`;
@@ -1631,7 +1676,11 @@ export function GoalsScreen({
                             disabled={
                               historicalGoal || saving || (referenceLocked && !appliedProfileDrift)
                             }
-                            onPress={() => setReferenceAcknowledged(!referenceAcknowledged)}
+                            onPress={() => {
+                              if (!canEditBuilder() || (referenceLocked && !appliedProfileDrift))
+                                return;
+                              setReferenceAcknowledged((current) => !current);
+                            }}
                             style={styles.check}
                           >
                             <Text style={styles.checkText}>
@@ -1787,7 +1836,7 @@ export function GoalsScreen({
                 {target.definition.name} ({target.definition.unit})
               </Text>
               <Field
-                editable={!historicalGoal && !referenceLocked}
+                editable={!builderDisabled && !referenceLocked}
                 label={`${target.definition.name} minimum`}
                 value={target.minimumAmount}
                 maxLength={31}
@@ -1795,7 +1844,7 @@ export function GoalsScreen({
                 onChange={(minimumAmount) => patchTarget(index, { minimumAmount })}
               />
               <Field
-                editable={!historicalGoal && !referenceLocked}
+                editable={!builderDisabled && !referenceLocked}
                 label={`${target.definition.name} target`}
                 value={target.targetAmount}
                 maxLength={31}
@@ -1803,7 +1852,7 @@ export function GoalsScreen({
                 onChange={(targetAmount) => patchTarget(index, { targetAmount })}
               />
               <Field
-                editable={!historicalGoal && !referenceLocked}
+                editable={!builderDisabled && !referenceLocked}
                 label={`${target.definition.name} maximum`}
                 value={target.maximumAmount}
                 maxLength={31}
@@ -1811,21 +1860,21 @@ export function GoalsScreen({
                 onChange={(maximumAmount) => patchTarget(index, { maximumAmount })}
               />
               <Field
-                editable={!historicalGoal && !referenceLocked}
+                editable={!builderDisabled && !referenceLocked}
                 label={`${target.definition.name} source (required)`}
                 value={target.sourceLabel}
                 maxLength={160}
                 onChange={(sourceLabel) => patchTarget(index, { sourceLabel })}
               />
               <Field
-                editable={!historicalGoal && !referenceLocked}
+                editable={!builderDisabled && !referenceLocked}
                 label={`${target.definition.name} source version`}
                 value={target.sourceVersion}
                 maxLength={100}
                 onChange={(sourceVersion) => patchTarget(index, { sourceVersion })}
               />
               <Field
-                editable={!historicalGoal && !referenceLocked}
+                editable={!builderDisabled && !referenceLocked}
                 label={`${target.definition.name} rationale`}
                 value={target.rationale}
                 maxLength={1_000}
@@ -1835,13 +1884,14 @@ export function GoalsScreen({
               <Pressable
                 accessibilityLabel={`Remove ${target.definition.name} target`}
                 accessibilityRole="button"
-                disabled={historicalGoal || referenceLocked}
-                onPress={() =>
-                  setBuilder({
-                    ...builder,
-                    targets: builder.targets.filter((_, candidate) => candidate !== index),
-                  })
-                }
+                disabled={builderDisabled || referenceLocked}
+                onPress={() => {
+                  if (referenceLocked || builderRef.current.reference !== null) return;
+                  editBuilder((current) => ({
+                    ...current,
+                    targets: current.targets.filter((row) => row.definition !== target.definition),
+                  }));
+                }}
               >
                 <Text style={styles.danger}>Remove target</Text>
               </Pressable>
