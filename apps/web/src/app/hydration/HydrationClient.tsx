@@ -308,6 +308,17 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           loadedTimeZone.current = next.timeZone;
           setSelectedAddOccurredAt(null);
           setEdit(null);
+        } else {
+          setEdit((current) => {
+            if (!current) return current;
+            const source = next.entries.find((entry) => entry.id === current.entry.id);
+            return source &&
+              Object.entries(current.entry).every(
+                ([key, value]) => source[key as keyof HydrationEntry] === value,
+              )
+              ? current
+              : null;
+          });
         }
         setDay(next);
         setState("ready");
@@ -521,7 +532,6 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
 
   async function retryDayView() {
     if (!canUseControls() || pendingRef.current) return;
-    setEdit(null);
     setReconcile(false);
     const accepted = acceptedRead.current;
     const owner = ownerRef.current;
@@ -605,8 +615,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
       assertHydrationMutationMatches(parseHydrationMutation(body), operation);
       pendingRef.current = null;
       setPending(null);
-      setEdit(null);
       if (operation.method === "POST") setAmount("");
+      else setEdit(null);
       const moved = operation.destinationDate !== operation.sourceDate;
       const successMessage = moved
         ? `Hydration entry moved to ${operation.destinationDate}. The selected source day ${operation.sourceDate} was refreshed.`

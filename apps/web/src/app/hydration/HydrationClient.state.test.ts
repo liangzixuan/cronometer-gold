@@ -2046,3 +2046,350 @@ describe("actual Hydration Add repeated-minute selection", () => {
     });
   });
 });
+
+describe("Hydration unrelated Add correction preservation", () => {
+  async function openCorrection() {
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await click("Edit entry");
+    await change("Milliliters at 01:30", "625");
+    await change("Correct date or time", true);
+    await change("Corrected local time", "11:12");
+    await change("Local time", "10:15");
+    await click("500 mL");
+  }
+
+  function expectCorrection() {
+    expect(field("Milliliters at 01:30").props.value).toBe("625");
+    expect(field("Correct date or time").props.checked).toBe(true);
+    expect(field("Corrected local date").props.value).toBe(original.localDate);
+    expect(field("Corrected local time").props.value).toBe("11:12");
+    expect(button("Save correction").props.disabled).toBe(false);
+  }
+
+  it("retains the exact correction after a separate Add and submits that correction once", async () => {
+    const writes: Array<{ url: string; init: RequestInit }> = [];
+    let reads = 0;
+    const corrected = {
+      ...original,
+      amountMilliliters: 625,
+      revision: "3",
+      occurredAt: "2026-11-01T16:12:00.000Z",
+      localTime: "11:12:00",
+      timeZone: "America/New_York",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST" || init?.method === "PATCH") {
+          writes.push({ url, init });
+          return Response.json(receipt(init.method === "POST" ? created(500) : corrected));
+        }
+        reads += 1;
+        return day(reads === 1 ? [original] : [reads === 2 ? original : corrected, created(500)]);
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    expect(writes).toHaveLength(1);
+    expectCorrection();
+    expect(field("Milliliters").props.value).toBe("");
+    await submit("Save correction");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.init.method).toBe("PATCH");
+    expect(JSON.parse(String(writes[1]?.init.body))).toEqual({
+      amountMilliliters: 625,
+      occurredAt: corrected.occurredAt,
+    });
+    expect(new Headers(writes[1]?.init.headers).get("if-match")).toBe('"2"');
+    expect(text()).not.toContain("Save correction");
+  });
+
+  it("preserves the correction through accepted Add read failure and read-only retry", async () => {
+    let reads = 0;
+    const writes: RequestInit[] = [];
+    const refreshed = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(created(500)));
+        }
+        reads += 1;
+        if (reads === 2) return refreshed.promise;
+        return day(reads === 1 ? [original] : [original, created(500)]);
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    expect(field("Milliliters").props.value).toBe("");
+    refreshed.resolve(Response.json({ error: "Read unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(text()).toContain("Retry day view");
+    expect(text()).not.toContain("Retry saved change");
+    await click("Retry day view");
+    expectCorrection();
+    expect(writes).toHaveLength(1);
+    expect(reads).toBe(3);
+  });
+
+  it("keeps the pending Add bytes and identity while retaining an unrelated correction", async () => {
+    const writes: Array<{ url: string; init: RequestInit }> = [];
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          writes.push({ url, init });
+          return writes.length === 1
+            ? Response.json({ error: "Uncertain." }, { status: 503 })
+            : Response.json(receipt(created(500), true));
+        }
+        reads += 1;
+        return day(reads === 1 ? [original] : [original, created(500)]);
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    await click("Retry saved change");
+    expectCorrection();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.url).toBe(writes[0]?.url);
+    expect(writes[1]?.init.body).toBe(writes[0]?.init.body);
+    expect(writes[1]?.init.headers).toEqual(writes[0]?.init.headers);
+    expect(reads).toBe(2);
+  });
+
+  it("compares parsed source values independently of JSON property order", async () => {
+    let reads = 0;
+    const reordered = Object.fromEntries(Object.entries(original).reverse()) as typeof original;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return Response.json(receipt(created(500)));
+        return day(++reads === 1 ? [original] : [created(500), reordered]);
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    expectCorrection();
+  });
+
+  it.each([
+    ["missing", null],
+    ["revision", { ...original, revision: "3" }],
+    ["amount with unchanged revision", { ...original, amountMilliliters: 376 }],
+    ["precise instant", { ...original, occurredAt: "2026-11-01T07:30:45.251Z" }],
+    ["local time", { ...original, localTime: "01:30:45.251" }],
+    ["entry time zone", { ...original, timeZone: "America/New_York" }],
+    ["creation timestamp", { ...original, createdAt: "2026-11-01T07:30:46.001Z" }],
+  ] as const)(
+    "invalidates a %s source after the unrelated Add refresh",
+    async (_label, refreshedEntry) => {
+      let reads = 0;
+      let writes = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes += 1;
+            return Response.json(receipt(created(500)));
+          }
+          return day(
+            ++reads === 1
+              ? [original]
+              : [...(refreshedEntry ? [refreshedEntry] : []), created(500)],
+          );
+        }),
+      );
+      await openCorrection();
+      const oldForm = elements().find(
+        (node) => node.type === "form" && text(node).includes("Save correction"),
+      )!;
+      await submit("Add entry");
+      expect(text()).not.toContain("Save correction");
+      invoke(oldForm, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes).toBe(1);
+    },
+  );
+
+  it("invalidates the correction when the refreshed profile day changes time zone", async () => {
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return Response.json(receipt(created(500)));
+        return ++reads === 1
+          ? day()
+          : day([original, created(500)], original.localDate, "America/Chicago");
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    expect(text()).not.toContain("Save correction");
+  });
+
+  it.each([401, 409])(
+    "closes the preserved draft for a current private read rejection %s",
+    async (status) => {
+      let reads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") return Response.json(receipt(created(500)));
+          if (++reads === 1) return day();
+          return Response.json(
+            { code: "HYDRATION_OWNER_CHANGED", error: "Private view retired." },
+            { status },
+          );
+        }),
+      );
+      await openCorrection();
+      await submit("Add entry");
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(text()).not.toContain("Save correction");
+      expect(text()).not.toContain("Signed in as");
+    },
+  );
+
+  it("does not restore a preserved draft from a read body after unmount", async () => {
+    let reads = 0;
+    const body = deferred<unknown>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return Response.json(receipt(created(500)));
+        if (++reads === 1) return day();
+        return { ok: true, status: 200, json: () => body.promise } as Response;
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    hooks.unmount();
+    body.resolve(await day([original, created(500)]).json());
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+  });
+
+  it.each(["missing", "changed"])(
+    "invalidates a %s source on accepted-read retry",
+    async (kind) => {
+      let reads = 0;
+      let writes = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes += 1;
+            return Response.json(receipt(created(500)));
+          }
+          if (++reads === 1) return day();
+          if (reads === 2) return Response.json({ error: "Read unavailable." }, { status: 503 });
+          return day(
+            kind === "missing"
+              ? [created(500)]
+              : [{ ...original, amountMilliliters: 376 }, created(500)],
+          );
+        }),
+      );
+      await openCorrection();
+      await submit("Add entry");
+      await click("Retry day view");
+      expect(text()).not.toContain("Save correction");
+      expect(writes).toBe(1);
+    },
+  );
+
+  it.each([409, 412])(
+    "retains existing known-rejection invalidation for Add %s",
+    async (status) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST")
+            return Response.json({ error: "Review the current profile." }, { status });
+          return day();
+        }),
+      );
+      await openCorrection();
+      await submit("Add entry");
+      await click("Reload and review entries");
+      expect(text()).not.toContain("Save correction");
+    },
+  );
+
+  it("retires a preserved correction on a user-selected date change", async () => {
+    let added = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          added = true;
+          return Response.json(receipt(created(500)));
+        }
+        const selected = new URL(url, "http://localhost").searchParams.get("date")!;
+        return day(
+          selected === original.localDate ? (added ? [original, created(500)] : [original]) : [],
+          selected,
+        );
+      }),
+    );
+    await openCorrection();
+    await submit("Add entry");
+    expectCorrection();
+    await click("Next day");
+    expect(text()).not.toContain("Save correction");
+    await click("Previous day");
+    expect(text()).not.toContain("Save correction");
+  });
+
+  it.each([owner, anotherOwner])(
+    "does not restore the original correction through a new route session %s",
+    async (nextOwner) => {
+      let route = original.localDate;
+      let authReads = 0;
+      let reads = 0;
+      const heldBody = deferred<unknown>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(++authReads === 1 ? owner : nextOwner);
+          if (init?.method === "POST") return Response.json(receipt(created(500)));
+          if (++reads === 2)
+            return { ok: true, status: 200, json: () => heldBody.promise } as Response;
+          const selected = new URL(url, "http://localhost").searchParams.get("date")!;
+          return day(selected === original.localDate ? [original] : [], selected);
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: route }));
+      await hooks.settle();
+      await click("Edit entry");
+      await change("Milliliters at 01:30", "625");
+      await change("Local time", "10:15");
+      await click("500 mL");
+      await submit("Add entry");
+      route = "2026-11-02";
+      hooks.render();
+      await hooks.settle();
+      heldBody.resolve(await day([original, created(500)]).json());
+      await hooks.settle();
+      expect(field("Local date").props.value).toBe(route);
+      expect(text()).not.toContain("Save amount");
+      expect(text()).not.toContain("625");
+      expect(field("Milliliters").props.value).toBe("");
+    },
+  );
+});
