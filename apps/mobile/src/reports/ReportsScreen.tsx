@@ -393,6 +393,17 @@ export function ReportsScreen({
     setMessage(`Loading ${from} through ${to}…`);
     setQuery(next);
   }
+  function retryRange() {
+    if (!currentDraftAction() || stateRef.current !== "error") return;
+    generationRef.current += 1;
+    controllerRef.current?.abort();
+    clearSnapshot();
+    const next = { ...query, refresh: query.refresh + 1 };
+    queryRef.current = next;
+    setLoadState("loading");
+    setMessage(`Loading ${next.from} through ${next.to}…`);
+    setQuery(next);
+  }
   function applyRange(from: string, to: string) {
     if (!currentDraftAction()) return;
     try {
@@ -619,9 +630,7 @@ export function ReportsScreen({
           <Pressable
             accessibilityRole="button"
             disabled={!scopeVisible}
-            onPress={() => {
-              if (currentDraftAction()) commitRange(query.from, query.to);
-            }}
+            onPress={retryRange}
             style={styles.secondaryButton}
           >
             <Text style={styles.secondaryText}>Retry this range</Text>

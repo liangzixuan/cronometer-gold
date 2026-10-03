@@ -1278,3 +1278,185 @@ describe("native report day inspector behavior", () => {
 vi.mock("../src/api/mobile-fetch", () => ({
   mobileFetch: (...arguments_) => globalThis.fetch(...arguments_),
 }));
+
+describe("mobile report retry date drafts", () => {
+  const applied = ["2026-09-01", "2026-09-07"];
+  async function failedAppliedRange() {
+    const control = { mode: "ready", held: deferred() };
+    const context = setup(() => {
+      if (control.mode === "error") return response({}, 503);
+      if (control.mode === "pending") return control.held.promise;
+      return undefined;
+    });
+    await applyRange(context.harness, ...applied);
+    await click(context.harness, "Protein");
+    await inspectDay(context.harness, "2026-09-02");
+    control.mode = "error";
+    const tree = await click(context.harness, "Update report");
+    expect(screenText(tree)).not.toContain("Snapshot captured");
+    expect(inspectors(tree)).toHaveLength(0);
+    expect(rangeValues(tree)).toEqual(applied);
+    return { ...context, control };
+  }
+  function requestRange(request) {
+    return [request.url.searchParams.get("from"), request.url.searchParams.get("to")];
+  }
+  async function editDates(harness, values) {
+    const tree = await harness.settle();
+    startInput(tree).props.onChangeText(values[0]);
+    endInput(tree).props.onChangeText(values[1]);
+    return harness.settle();
+  }
+
+  for (const [kind, drafts] of [
+    ["valid", ["2026-09-08", "2026-09-14"]],
+    ["incomplete", ["2026-", ""]],
+    ["invalid", ["not-a-date", "2026-02-30"]],
+  ]) {
+    it(`preserves exact ${kind} edits while retrying the applied range, then honors Update report`, async () => {
+      const { harness, requests, props, control } = await failedAppliedRange();
+      try {
+        let tree = await editDates(harness, drafts);
+        expect(rangeValues(tree)).toEqual(drafts);
+        const before = requests.length;
+        control.mode = "pending";
+        pressable(tree, "Retry this range").props.onPress();
+        tree = harness.renderWithoutEffects();
+        expect(rangeValues(tree)).toEqual(drafts);
+        expect(screenText(tree)).toContain(`Loading ${applied[0]} through ${applied[1]}`);
+        expect(screenText(tree)).not.toContain("Snapshot captured");
+        expect(inspectors(tree)).toHaveLength(0);
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(requests).toHaveLength(before + 1);
+        expect(requestRange(requests.at(-1))).toEqual(applied);
+        expect(requests.at(-1).method).toBe("GET");
+        expect(requests.at(-1).cache).toBe("no-store");
+        control.held.resolve(response(fixture(...applied, props)));
+        tree = await harness.settle();
+        expect(rangeValues(tree)).toEqual(drafts);
+        expect(screenText(tree)).toContain(`${applied[0]} through ${applied[1]}`);
+        expect(screenText(tree)).toContain("Snapshot captured");
+        expect(screenText(tree)).toContain("Choose Update report to apply these dates");
+        expect(pressable(tree, "Protein").props.accessibilityState.selected).toBe(true);
+        expect(pressable(tree, "Previous period").props.disabled).toBe(true);
+        expect(pressable(tree, "Next period").props.disabled).toBe(true);
+        expect(inspectors(tree)).toHaveLength(0);
+        const afterRetry = requests.length;
+        control.mode = "ready";
+        tree = await click(harness, "Update report");
+        expect(rangeValues(tree)).toEqual(drafts);
+        if (kind === "valid") {
+          expect(requests).toHaveLength(afterRetry + 1);
+          expect(requestRange(requests.at(-1))).toEqual(drafts);
+          expect(screenText(tree)).toContain(`${drafts[0]} through ${drafts[1]}`);
+          expect(pressable(tree, "Next period").props.disabled).toBe(false);
+        } else {
+          expect(requests).toHaveLength(afterRetry);
+          expect(screenText(tree)).not.toContain("Snapshot captured");
+          expect(pressable(tree, "Next period").props.disabled).toBe(true);
+        }
+        expect(props.onDiary).not.toHaveBeenCalled();
+        expect(props.onUnauthorized).not.toHaveBeenCalled();
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("preserves drafts through repeated failure and allows new edits during a held retry", async () => {
+    const { harness, requests, props, control } = await failedAppliedRange();
+    try {
+      const drafts = ["2026-09-08", "2026-09-14"];
+      await editDates(harness, drafts);
+      let tree = await click(harness, "Retry this range");
+      expect(rangeValues(tree)).toEqual(drafts);
+      expect(screenText(tree)).not.toContain("Snapshot captured");
+      control.mode = "pending";
+      tree = await click(harness, "Retry this range");
+      const updated = ["2026-09-15", "2026-09-21"];
+      tree = await editDates(harness, updated);
+      const before = requests.length;
+      control.held.resolve(response(fixture(...applied, props)));
+      tree = await harness.settle();
+      expect(requests).toHaveLength(before);
+      expect(requestRange(requests.at(-1))).toEqual(applied);
+      expect(rangeValues(tree)).toEqual(updated);
+      expect(pressable(tree, "Protein").props.accessibilityState.selected).toBe(true);
+      expect(pressable(tree, "Next period").props.disabled).toBe(true);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("retires duplicate and older retry/update callbacks before repaint and after another failure", async () => {
+    const { harness, requests, control } = await failedAppliedRange();
+    try {
+      const drafts = ["2026-09-08", "2026-09-14"];
+      let tree = await editDates(harness, drafts);
+      const retry = pressable(tree, "Retry this range").props.onPress;
+      const update = pressable(tree, "Update report").props.onPress;
+      control.mode = "pending";
+      const before = requests.length;
+      retry();
+      retry();
+      update();
+      tree = harness.renderWithoutEffects();
+      expect(rangeValues(tree)).toEqual(drafts);
+      harness.flushEffects();
+      await harness.settle();
+      expect(requests).toHaveLength(before + 1);
+      expect(requestRange(requests.at(-1))).toEqual(applied);
+      control.held.resolve(response({}, 503));
+      await harness.settle();
+      retry();
+      update();
+      tree = await harness.settle();
+      expect(requests).toHaveLength(before + 1);
+      expect(rangeValues(tree)).toEqual(drafts);
+      control.mode = "ready";
+      tree = await click(harness, "Retry this range");
+      expect(requests).toHaveLength(before + 2);
+      expect(rangeValues(tree)).toEqual(drafts);
+      expect(screenText(tree)).toContain("Snapshot captured");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["owner", "destination", "profile", "blur", "background", "unmount"]) {
+    it(`rejects a retained retry at the ${boundary} boundary`, async () => {
+      const { harness, requests, props, updateProps } = await failedAppliedRange();
+      let unmounted = false;
+      try {
+        let tree = await editDates(harness, ["2026-09-08", "2026-09-14"]);
+        const retry = pressable(tree, "Retry this range").props.onPress;
+        const before = requests.length;
+        if (boundary === "unmount") {
+          harness.unmount();
+          unmounted = true;
+        } else if (boundary === "background") background();
+        else {
+          updateProps(
+            boundary === "owner"
+              ? { expectedOwnerUserId: "049eb964-1327-49a1-ab4f-5c7c41a6b68a" }
+              : boundary === "destination"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : boundary === "profile"
+                  ? { profileRevision: "5" }
+                  : { isFocused: false },
+          );
+          tree = harness.renderWithoutEffects();
+          expect(screenText(tree)).not.toContain("Snapshot captured");
+        }
+        retry();
+        expect(requests).toHaveLength(before);
+        expect(harness.writesAfterUnmount).toBe(0);
+        expect(props.onDiary).not.toHaveBeenCalled();
+        expect(props.onUnauthorized).not.toHaveBeenCalled();
+      } finally {
+        if (!unmounted) harness.unmount();
+      }
+    });
+  }
+});
