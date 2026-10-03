@@ -1,13 +1,32 @@
 {
   "schemaVersion": 1,
-  "sourceCommit": "8afb38c4b5211055f83f803e32bd4e1ac0b066f3",
+  "sourceCommit": "b34b34f8133a1172fcce17c7e99f0e23f77985d1",
   "derivedOutputs": {
     "paths": [
       "repomix-output.md",
       "repomix-onboarding.md",
       "repomix-manifest.json"
     ],
-    "excluded": []
+    "excluded": [
+      {
+        "path": "repomix-manifest.json",
+        "mode": "100644",
+        "blob": "8f78ec12dbadbdde52491f5a9e6a51c6512846e8",
+        "reason": "derived-output"
+      },
+      {
+        "path": "repomix-onboarding.md",
+        "mode": "100644",
+        "blob": "4464f86f59ed9bf3536a64411a1352da1592121c",
+        "reason": "derived-output"
+      },
+      {
+        "path": "repomix-output.md",
+        "mode": "100644",
+        "blob": "c86174771330c590ab8a62b701fd1ceb3ebd75c4",
+        "reason": "derived-output"
+      }
+    ]
   },
   "repomixVersion": "1.18.1",
   "securityCheck": {
@@ -217,9 +236,9 @@
     {
       "path": ".gitleaksignore",
       "mode": "100644",
-      "blob": "fe86138dc22baae33f03e064b2cde7460a7401cd",
-      "bytes": 3081,
-      "sha256": "c498c3b60da72ee6aa89e4d117460eace2a97b8b3f544a39e47c976c9f1d54ef"
+      "blob": "02ef0f1244f921c3ebd7b9efdee4f4fcf9f2276c",
+      "bytes": 33004,
+      "sha256": "459ac910c8b36751525d746dc96a17db79b415adf1dd74df6912a6b3f1be071c"
     },
     {
       "path": "AGENTS.md",
@@ -1372,9 +1391,9 @@
     {
       "path": "apps/mobile/scripts/diary-group-collapse.test.mjs",
       "mode": "100644",
-      "blob": "0251f5462ea56e47fa3a1d21da26784ee3c7d9c4",
-      "bytes": 94218,
-      "sha256": "acd2ab30d37438bb575647975011143850edd4b1ebb5170e8603cd7e0ad4e016"
+      "blob": "01e9d176c3be37dfb1ba540df45ea4bb07e87c70",
+      "bytes": 110390,
+      "sha256": "f1a2da7770eac0653130ccc4ad19ec5cc3c3b065655bac2de6fb5603b6286ab9"
     },
     {
       "path": "apps/mobile/scripts/eas-build-contract.mjs",
@@ -1421,9 +1440,9 @@
     {
       "path": "apps/mobile/scripts/public-food-log-time.test.mjs",
       "mode": "100644",
-      "blob": "df63b3769c8bb52cc1fa43dfb4943623c5346d97",
-      "bytes": 28530,
-      "sha256": "34aa94f76c6387d9b8af8768a1d8f62a2b19f706f3699a176226e86398a86c53"
+      "blob": "cd2540cee39b1a30bab7a21d5a07dd16549fe659",
+      "bytes": 35925,
+      "sha256": "0d1cc4d2d18382c5c6e7b7fe4c871f9f0e19092aec0c0321ab228c08e5ae8987"
     },
     {
       "path": "apps/mobile/scripts/recipe-ingredient-review.test.mjs",
@@ -1442,9 +1461,9 @@
     {
       "path": "apps/mobile/scripts/reports-screen.test.mjs",
       "mode": "100644",
-      "blob": "1726e3d4bd8de23aff21f2e16a91353b8b428714",
-      "bytes": 50902,
-      "sha256": "0efec5a0b7f57c46a5bc8577bbf6b289b75b8fe07223c4d593829ce605856c49"
+      "blob": "b33d80f6a3fc2dd9272ba4c81e4d08dbae1648ff",
+      "bytes": 58892,
+      "sha256": "088780e03cbe5457039c1e4b74b5427e55f679ba2c17da0293edc764b96b2b93"
     },
     {
       "path": "apps/mobile/scripts/reviewer-trust.mjs",
@@ -1659,9 +1678,9 @@
     {
       "path": "apps/mobile/src/diary/DiaryScreen.tsx",
       "mode": "100644",
-      "blob": "8d5b5d8c11ff309ab429920977084920a7e621fc",
-      "bytes": 123262,
-      "sha256": "251f75386f033eed6e94403ae0464fc2f6fc85b56228ab375ecd98e73cf09ffd"
+      "blob": "8114941a7876b028b3ed62dca94140493a3b5e9d",
+      "bytes": 126463,
+      "sha256": "29edad311624dc036a404b4632b138cd434535ea605e369038b6db48e12185bc"
     },
     {
       "path": "apps/mobile/src/diary/diary.test.ts",
@@ -1841,9 +1860,9 @@
     {
       "path": "apps/mobile/src/reports/ReportsScreen.tsx",
       "mode": "100644",
-      "blob": "4e5ae45c2697fd7caccf9e3c2bd239801d690746",
-      "bytes": 39077,
-      "sha256": "caed0cbafe86eec6ac1cdd5833774c965699f30a25018152cc87f763083168f1"
+      "blob": "58815740da048ed269a46aff3e3adecdd082f333",
+      "bytes": 39380,
+      "sha256": "25f757323ee37737d720ebeebe75645a0658901f3e9e600dbeef3a983d8b972a"
     },
     {
       "path": "apps/mobile/src/reports/reports.test.ts",
@@ -2135,9 +2154,9 @@
     {
       "path": "apps/mobile/src/search/FoodSearchScreen.tsx",
       "mode": "100644",
-      "blob": "2b1b2a300ab2277c1a28799eb4d7154598401c41",
-      "bytes": 63211,
-      "sha256": "593a8cf12a65387ffbb0b64e8950ebf6ed9a35dc0a8fb45fbffa0c0a4c24f52c"
+      "blob": "1cf5daadea59a9c9cdc275fc08048f27562358d2",
+      "bytes": 63393,
+      "sha256": "99449eb89b4647ed79a1e3e959cd5462b705201b59616aee20ae16b46bf1e1ba"
     },
     {
       "path": "apps/mobile/src/search/barcode-scanner.test.ts",
@@ -2744,9 +2763,9 @@
     {
       "path": "apps/web/src/app/foods/FoodSearchClient.state.test.ts",
       "mode": "100644",
-      "blob": "c20e46f75290e8064e95e38201d6c3b8a05bf686",
-      "bytes": 32496,
-      "sha256": "456267ee8f60f2fd2b05faed364447d80802583abbf308c27b112321f4abdc0d"
+      "blob": "1f13365d05f8ed6ad28715fab0215cc79410c432",
+      "bytes": 41641,
+      "sha256": "28eec7ee21d54ae7dcd1ae5a1ba8a1800fce2feb8c9a552f985bd62b9166d610"
     },
     {
       "path": "apps/web/src/app/foods/FoodSearchClient.test.ts",
@@ -2758,9 +2777,9 @@
     {
       "path": "apps/web/src/app/foods/FoodSearchClient.tsx",
       "mode": "100644",
-      "blob": "26a6ed01c6ef4b7bfe75141c0de26911d98a24b9",
-      "bytes": 39670,
-      "sha256": "633877b377122abc5248fffb67dae0cabd08af280f01a1b1b52cbafe804d978a"
+      "blob": "dd4ff9fdcf3bb44bec1b50d69c0fd370f2fde094",
+      "bytes": 39843,
+      "sha256": "bb1cb345a63254056b1731ceb38b3037e01240517916ee81bc2b6d58730bb94f"
     },
     {
       "path": "apps/web/src/app/foods/custom/CustomFoodsClient.state.test.ts",
@@ -2968,9 +2987,9 @@
     {
       "path": "apps/web/src/app/recipes/RecipesClient.state.test.ts",
       "mode": "100644",
-      "blob": "ca71bc5bdcd6e6944697027781852a75f067ab94",
-      "bytes": 205736,
-      "sha256": "01d09005b0be319aabca4152a9e6f0d081e31f53f1bb0625debc20880f0a85bf"
+      "blob": "55e45c52a481bad84f5bdc2c8ab543b4a53633c6",
+      "bytes": 218447,
+      "sha256": "d81fd6f844b045bbceb7d38cf8f2d5b939a86825f5b6febca0c54600d1c55c98"
     },
     {
       "path": "apps/web/src/app/recipes/RecipesClient.test.ts",
@@ -2982,9 +3001,9 @@
     {
       "path": "apps/web/src/app/recipes/RecipesClient.tsx",
       "mode": "100644",
-      "blob": "9ca65e37d2d0351365a932587f5ca17c579ad7d1",
-      "bytes": 92706,
-      "sha256": "7c079635792cb0de986ec0c4adc8d727c7a9eaac43f8c31b62a9fedda75c75cb"
+      "blob": "e10d6ba2ee77d0ba2cff4938d33cbcd585feb34a",
+      "bytes": 94463,
+      "sha256": "ce357c354493353e7aa214a64217c0b54d045642bbb19db84723ee0bc4985da4"
     },
     {
       "path": "apps/web/src/app/recipes/SavedRecipeInspection.tsx",
@@ -4627,9 +4646,9 @@
     {
       "path": "docs/product/frontend-design.md",
       "mode": "100644",
-      "blob": "7c726c413c8970cde65a0cdca6c112d1c92e5bb0",
-      "bytes": 13467,
-      "sha256": "46a9d22178864bf3f8f6ffc5c66beb5ed61b7c2f378fae4d17a7d37b32bc6606"
+      "blob": "29ff779bde68cb591c14ec8aa04f9696ff4e1380",
+      "bytes": 13922,
+      "sha256": "453c31fe5bc1ec640d31212daf8052c6ff94bebb4780ba5e186723b1748bf567"
     },
     {
       "path": "docs/quality/container-supply-chain.md",
@@ -4991,9 +5010,9 @@
     {
       "path": "infra/development/azure/README.md",
       "mode": "100644",
-      "blob": "2676984e41f4bec902c4d033c9d2ef30af5899e6",
-      "bytes": 30443,
-      "sha256": "0588ec6f87026a9cf9509863275f851985a1b50f0879f8087cfd2ea5f36d5d6c"
+      "blob": "ef68700b8ca67955ed953e88b1fc8d2f68239805",
+      "bytes": 33712,
+      "sha256": "9606b55cbc5349ce5661e0852a9e02dc912ed49ec3cc15c4e2cdf5272bfd82c4"
     },
     {
       "path": "infra/development/azure/audit-plan.py",
@@ -5040,16 +5059,16 @@
     {
       "path": "infra/development/azure/session-policy.py",
       "mode": "100644",
-      "blob": "75d55a6e4180d55a454c997d65d3bd908b0aa46c",
-      "bytes": 49103,
-      "sha256": "c7ced33f861faef8ef4064520d2afcda2084544a885765839f8900ef1d151c80"
+      "blob": "7f31a3379af8f0211d5394917657e605999c032b",
+      "bytes": 62796,
+      "sha256": "da4612659d9450ba93a060b6627ff3b89d19eea5aaed7953a773a7d473c173d1"
     },
     {
       "path": "infra/development/azure/test-contract.py",
       "mode": "100644",
-      "blob": "5ad69d848a5c79b16de6ccd59b7216e4bbd002e2",
-      "bytes": 134848,
-      "sha256": "ab5e39ee0f857ceb19bbcba0734985e0470719dd8f04b03b7e454528cb6d717c"
+      "blob": "82110aca908ce072978fd09f52cfe09f9d5c248c",
+      "bytes": 164904,
+      "sha256": "fc307821dafdff506f2e8983d278476d92e4c4d4157af08cd8d6605809848c42"
     },
     {
       "path": "infra/development/azure/variables.tf",
@@ -8015,16 +8034,16 @@
     {
       "path": "scripts/azure-development-session.mjs",
       "mode": "100644",
-      "blob": "e64d9c7452cad2f6d8d9437a2c2d1c1b33d91858",
-      "bytes": 10922,
-      "sha256": "295cecc06656623487cf4ed645b3c389c3c287cfbd1e0d9d2d28ef242790b5e2"
+      "blob": "d98664d54d052d3d70afe0ed767a1aee91a1b694",
+      "bytes": 11549,
+      "sha256": "c779290923de3ef16de9b14257a5ae70c4c7813d4b15251fdc5057e829b048ad"
     },
     {
       "path": "scripts/azure-development-session.test.mjs",
       "mode": "100644",
-      "blob": "71b572ab263b1a07cddb0c1533d7273333da5f20",
-      "bytes": 20510,
-      "sha256": "672a21f995abf50a40d257dd56d33cfe4cd3bb4d698c171cbe759c336fea11ba"
+      "blob": "a25d143923ff3b74110dc4287cd46dc84fa38097",
+      "bytes": 36009,
+      "sha256": "d0b7abea32c5dc8e08ae14b2565d08192db67b30e17f9a6dab702fd7e6c330a8"
     },
     {
       "path": "scripts/branch-protection-contract.test.mjs",
@@ -8805,10 +8824,10 @@
     {
       "file": "repomix-output.md",
       "scope": "complete-non-derived-tracked-text",
-      "sha256": "c7e1a8cb9230f64bc14c3daf60272f1b7b57c7634ab86723b31e634ac9048d70",
-      "bytes": 21552484,
+      "sha256": "e5632e5fe6ebca61d082836b5089411aef6f0684c3e113384a5af8e17d7aaa6c",
+      "bytes": 21705035,
       "fileCount": 1230,
-      "tokens": 5308093,
+      "tokens": 5350495,
       "tokenEncoding": "o200k_base",
       "paths": [
         ".dockerignore",
@@ -10064,10 +10083,10 @@
     {
       "file": "repomix-onboarding.md",
       "scope": "partial-onboarding",
-      "sha256": "2e1e5f681db210287dd3ea299bca78eec66a14be7ebb971664444b8abca39744",
-      "bytes": 234783,
+      "sha256": "e3600151a111512be3e0ddfe038b4dde07b0098c803277d760c963b45f9629a8",
+      "bytes": 238052,
       "fileCount": 13,
-      "tokens": 48861,
+      "tokens": 49496,
       "tokenEncoding": "o200k_base",
       "paths": [
         "AGENTS.md",
