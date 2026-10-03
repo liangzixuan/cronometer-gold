@@ -157,17 +157,26 @@ exports, health records, OAuth tokens, or secrets in Git.
 
 ## Repository context artifacts
 
+The repository tracks [the full pack](repomix-output.md),
+[partial onboarding](repomix-onboarding.md) and [their manifest](repomix-manifest.json).
+These are reviewed snapshots of the exact source commit named in the manifest.
+
 The [Repomix source context](https://github.com/liangzixuan/cronometer-gold/actions/workflows/repomix.yml) workflow runs on default-branch pushes and ordinary
 pull requests. Its `repomix-<full source SHA>` artifact contains:
 
-- `repomix-output.md`: all committed text, including lockfiles, tests, migrations,
-  policy and documentation, without code compression or comment removal.
+- `repomix-output.md`: all non-derived committed text, including lockfiles, tests,
+  migrations, policy and documentation, without code compression or comment removal.
 - `repomix-onboarding.md`: a deliberately partial entry-point selection.
 - `repomix-manifest.json`: source commit, original Git blob/SHA-256 hashes, modes,
-  file coverage, explicit binary omissions and token counts for both packs.
+  file coverage, exact derived-output exclusions, binary omissions and token counts
+  for both packs.
 
-Artifacts expire after seven days and GitHub requires authentication to download
-them. Regenerate locally in the Linux checkout with the isolated tool:
+Actions artifacts expire after seven days and GitHub requires authentication to
+download them; tracked snapshots remain accessible in repository history. The
+workflow generates an artifact for its own input commit without modifying Git.
+The October 2, 2026 handoff records a blocked hosted dependency audit; tracking
+local snapshots does not change that result or waive the audit. Regenerate locally
+in the Linux checkout with the isolated tool:
 
 ```sh
 pnpm --dir tools/repomix install --frozen-lockfile --ignore-scripts --strict-peer-dependencies
@@ -178,9 +187,24 @@ pnpm --dir tools/repomix test
 pnpm --dir tools/repomix run pack
 ```
 
-Outputs appear at the repository root and are ignored by Git. Packing reads only
-`HEAD` blobs, so local edits and untracked files do not enter the result. Commit
-reviewed source before expecting it in the pack. The command has a five-minute
+Outputs appear at the repository root. Packing reads only `HEAD` source blobs,
+so local edits and untracked files do not enter the result. The three exact root
+output names are excluded before loading their contents; their tracked Git blob
+identities are recorded separately in the manifest. Nested or similarly named
+files remain ordinary scanned source. This prevents recursive packing and keeps
+the manifest from referring to its own new bytes.
+
+To refresh a tracked handoff, commit reviewed source as S, run the qualified pack
+command, then verify the manifest and both Markdown hashes. Commit only the three
+outputs as child C and verify that every other path and mode is identical to S.
+Scan the generated files with redacted Gitleaks output before publication. If
+independent review identifies only exact public fixtures or checksum metadata,
+record the generated commit’s specific path/rule/line fingerprints in a separate
+metadata-only `.gitleaksignore` commit. Never exclude whole packs or suppress
+unreviewed findings. Push the reviewed source, output and any fingerprint commits
+together. Keep `manifest.sourceCommit` equal to S; it names the packed source,
+not the later output or fingerprint commits. Do not regenerate just to make
+that identifier equal to a later commit. The command has a five-minute
 limit; tests have a three-minute limit. A failed command does not accept an older
 artifact still on disk. Match both Markdown hashes to the manifest before use.
 

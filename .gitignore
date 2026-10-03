@@ -45,8 +45,5 @@ __pycache__/
 .turbo/
 tmp/
 
-# committed-source context artifacts (generated, never committed)
-/repomix-output.md
-/repomix-onboarding.md
-/repomix-manifest.json
+# temporary publication files for tracked context snapshots
 /.repomix-*.tmp

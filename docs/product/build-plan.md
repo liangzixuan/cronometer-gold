@@ -119,6 +119,11 @@ ADR0106 qualification and its earlier failures are retained. Do not resume anoth
 catalogue service attempt or feature family by default. Existing action-specific
 approvals and the full M0/M1/M2 acceptance requirements remain in force.
 
+Known vulnerability remediation is the lowest work priority, with minimum
+follow-up effort. Product functionality, hosted integration and the daily workflow
+come first. Preserve automated findings and release requirements; do not repeatedly
+poll unchanged advisories or weaken an audit to clear the queue.
+
 ### Execution queue
 
 Use [current readiness](../quality/current-readiness.md) for dated source,
@@ -197,8 +202,9 @@ Develop and review the Next.js and Expo frontends on Windows against a hosted,
 isolated development backend that remains available independently of this PC.
 Retain Appwrite's selected web-hosting role and the existing Fastify API,
 PostgreSQL, Meilisearch, workers, storage and authentication design. This is a
-planned development capability; a host, a Windows frontend profile and their
-acceptance evidence are still required.
+partly implemented development capability: maintained Windows Next.js and Expo
+profiles are available within their runbooks. An accepted hosted backend, complete
+hosted journeys and signed-device evidence are still required.
 
 Deliver one working phase at a time, alongside the existing daily-product
 acceptance target. Reuse the reviewed backend, transport/domain packages,
@@ -231,18 +237,18 @@ The hosted profile must not silently switch to that stack or to production.
    migrations/readiness, worker and search operation, failure recovery, and an
    actual downloaded encrypted-backup restore with required erasure replay.
    Synthetic success does not establish live catalogue or production acceptance.
-3. **Implement the supported Windows frontend profile.** Document and validate
-   the Windows Node/package-manager prerequisites and maintained Next.js/Expo
-   frontend install/run commands. Reuse existing clients, BFF, domain logic and
+3. **Qualify the maintained Windows profiles against the hosted backend.** Use
+   the documented Windows Node/package-manager prerequisites and existing
+   Next.js/Expo frontend install/run commands. Reuse existing clients, BFF, domain logic and
    parsers; select the exact development HTTPS API explicitly and reject a
    production endpoint in this profile. Preserve authentication, origin/CORS,
    redirect, TLS, cookie, session-revocation and native secure-storage controls.
    Qualify the local web origin and its trust setup without disabling Secure
    cookies or TLS verification. Only intended public configuration belongs in
    browser/native bundles; server, database, search, storage, email and Doppler
-   workload secrets stay with their authorized server-side consumers. Current
-   Linux source/build instructions remain in force until the focused Windows
-   frontend workflow changes and their applicable checks are accepted. Native
+   workload secrets stay with their authorized server-side consumers. The scoped
+   Windows frontend exceptions coexist with Linux full-stack/build instructions;
+   source and local tooling qualification do not prove hosted journeys. Native
    signing, phone exposure and device acceptance retain their separate gates.
 4. **Accept the complete development workflow and operations.** With Ubuntu and
    Docker stopped, run the actual Windows frontends through registration/login,

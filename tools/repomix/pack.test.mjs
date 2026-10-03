@@ -368,3 +368,116 @@ test("text and synthetic credentials named as binary cannot bypass scanning", {
     });
   }
 });
+
+test("tracked handoffs are bounded exclusions and regenerate without recursive source", {
+  timeout: 60000,
+}, async (t) => {
+  const outputNames = ["repomix-output.md", "repomix-onboarding.md", "repomix-manifest.json"];
+  const directory = await fixture(t, {
+    "repomix-output.md": "OLD_DERIVED_CONTENT".repeat(150000),
+    "repomix-onboarding.md": "OLD_ONBOARDING_CONTENT",
+    "repomix-manifest.json": "OLD_MANIFEST_CONTENT",
+    "nested/repomix-output.md": "Nested source must remain in the pack.\n",
+    "repomix-output.md.source": "Lookalike source must remain in the pack.\n",
+  });
+  const sourceCommit = git(directory, "rev-parse", "HEAD").toString().trim();
+  const expected = outputNames.map((name) => ({
+    path: name,
+    mode: "100644",
+    blob: git(directory, "rev-parse", `HEAD:${name}`).toString().trim(),
+    reason: "derived-output",
+  }));
+  const first = await generate({ repository: directory });
+  assert.equal(first.sourceCommit, sourceCommit);
+  assert.deepEqual(first.derivedOutputs.paths, outputNames);
+  assert.deepEqual(
+    first.derivedOutputs.excluded,
+    expected.sort((a, b) => a.path.localeCompare(b.path)),
+  );
+  assert.equal(first.trackedFiles.length, 8);
+  assert(first.trackedFiles.every((entry) => !outputNames.includes(entry.path)));
+  assert.equal(first.packs[0].scope, "complete-non-derived-tracked-text");
+  const full = await readFile(path.join(directory, outputNames[0]), "utf8");
+  assert(!full.includes("OLD_DERIVED_CONTENT") && !full.includes("OLD_ONBOARDING_CONTENT"));
+  assert(
+    full.includes("Nested source must remain") && full.includes("Lookalike source must remain"),
+  );
+  git(directory, "add", "--", ...outputNames);
+  git(
+    directory,
+    "-c",
+    "user.name=Pack fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "Generated snapshot only",
+  );
+  const second = await generate({ repository: directory });
+  assert.notEqual(second.sourceCommit, sourceCommit);
+  assert.equal(second.sourceCommit, git(directory, "rev-parse", "HEAD").toString().trim());
+  assert.deepEqual(second.trackedFiles, first.trackedFiles);
+  assert.equal(second.packs[0].bytes, first.packs[0].bytes);
+  assert.equal(second.derivedOutputs.excluded.length, 3);
+});
+
+test("derived exclusions never hide nested or lookalike credentials", {
+  timeout: 60000,
+}, async (t) => {
+  for (const name of ["nested/repomix-output.md", "repomix-output.md.source"]) {
+    await t.test(name, async (caseTest) => {
+      const directory = await fixture(caseTest, { [name]: `token = ghp_${"aB3cD4".repeat(6)}\n` });
+      await assert.rejects(generate({ repository: directory }), /security check rejected/);
+      await assert.rejects(readFile(path.join(directory, "repomix-manifest.json")), {
+        code: "ENOENT",
+      });
+    });
+  }
+});
+
+test("excluded root output names still reject committed symlinks", async (t) => {
+  const directory = await fixture(t);
+  await symlink("/does-not-exist-private-target", path.join(directory, "repomix-output.md"));
+  git(directory, "add", "repomix-output.md");
+  git(
+    directory,
+    "-c",
+    "user.name=Pack fixture",
+    "-c",
+    "user.email=fixture@example.invalid",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-qm",
+    "Invalid linked output",
+  );
+  assert.throws(() => committedFiles(directory), /regular committed Git blobs/);
+});
+
+test("onboarding cannot select a tracked derived output", async (t) => {
+  const directory = await fixture(t, {
+    "repomix-output.md": "Previous public output",
+    "repomix.onboarding.config.json": JSON.stringify({ include: ["repomix-output.md"] }),
+  });
+  await assert.rejects(
+    generate({ repository: directory }),
+    /Onboarding must name unique committed files/,
+  );
+});
+
+test("onboarding opens with an explicit partial header without the full-repository summary", {
+  timeout: 60000,
+}, async (t) => {
+  const directory = await fixture(t);
+  const manifest = await generate({ repository: directory });
+  assert.deepEqual(manifest.derivedOutputs, {
+    paths: ["repomix-output.md", "repomix-onboarding.md", "repomix-manifest.json"],
+    excluded: [],
+  });
+  const partial = await readFile(path.join(directory, "repomix-onboarding.md"), "utf8");
+  assert(partial.startsWith("# User Provided Header\nSource commit: "));
+  assert(partial.includes("Partial onboarding subset"));
+  assert(!partial.includes("# File Summary") && !partial.includes("entire codebase"));
+});

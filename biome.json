@@ -11,7 +11,10 @@
       "!**/.expo",
       "!**/.turbo",
       "!**/*.tsbuildinfo",
-      "!**/pnpm-lock.yaml"
+      "!**/pnpm-lock.yaml",
+      "!repomix-output.md",
+      "!repomix-onboarding.md",
+      "!repomix-manifest.json"
     ]
   },
   "formatter": {

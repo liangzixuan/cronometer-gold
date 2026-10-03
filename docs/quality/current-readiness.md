@@ -1,6 +1,23 @@
 # Current readiness
 
-## October 2–3, 2026 snapshot
+## October 2, 2026 tracked-context update (America/Chicago)
+
+Repomix tooling and local packs were delivered at `6aeac6b5cb1807c575dbf6ab3ce9fe6f16ece8bd`.
+Its automatic context workflow stopped at the tool dependency audit on
+`GHSA-vfj7-8cjw-p6xm` in `braces` 3.0.3; no hosted pack was produced. The inspected
+registry had no published fixed version at the recorded observation. This is a
+dated blocker, not an instruction to repeat the same advisory research. The
+application's earlier `node-forge` audit failure remains distinct.
+
+The user placed known vulnerability remediation at the lowest priority with
+minimum effort. Product functionality, hosted integration and daily usability
+take precedence; automatic audit results and release requirements remain intact.
+Tracked root context snapshots name their reviewed source commit, exclude only
+the three derived root artifacts from input and preserve source scanning. Read
+the [refresh contract](../../README.md#repository-context-artifacts) and manifest
+before treating a snapshot as current. Hosted artifact acceptance remains open.
+
+## October 2–3, 2026 source snapshot
 
 The delivered source at `f7d78eddd51b9708c3eb48ad5c181f56d41140fe` includes
 maintained Windows frontend/Expo profiles, mobile API-origin state isolation and
