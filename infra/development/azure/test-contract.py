@@ -1678,4 +1678,179 @@ class Reconciliation(unittest.TestCase):
         self.assertTrue(S.private(self.directory/'result.json')[0]['reconciled'])
         self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
 
+
+
+PARTIAL_ADDRESSES = {
+    'group':'azurerm_resource_group.development', 'vnet':'azurerm_virtual_network.development',
+    'subnet':'azurerm_subnet.development', 'nsg':'azurerm_network_security_group.development',
+    'association':'azurerm_subnet_network_security_group_association.development',
+    'pip':'azurerm_public_ip.development', 'nic':'azurerm_network_interface.development',
+    'vm':'azurerm_linux_virtual_machine.development', 'data':'azurerm_managed_disk.data',
+    'attachment':'azurerm_virtual_machine_data_disk_attachment.data',
+    'schedule':'azurerm_dev_test_global_vm_shutdown_schedule.development'}
+PARTIAL_CASES = (
+    ('group',), ('group','data','pip'),
+    ('group','vnet','subnet','nsg','association','pip','nic'),
+    ('group','vnet','subnet','pip','nic','vm','data'),
+    ('group','vnet','subnet','nsg','association','pip','nic','vm','data','attachment'),
+    ('group','vnet','subnet','pip','nic','vm','schedule'))
+
+def partial_responses(document, names):
+    """Independent synthetic retained-state/ARM subset; no real resource observations."""
+    result=session_responses(document); chosen={PARTIAL_ADDRESSES[n] for n in names}
+    result['state']['values']['root_module']['resources']=[r for r in result['state']['values']['root_module']['resources'] if r['address'] in chosen]
+    result['raw']['resources']=[r for r in result['raw']['resources'] if r['type']+'.'+r['name'] in chosen]
+    result['destroy']['resource_changes']=[r for r in result['destroy']['resource_changes'] if r['address'] in chosen]
+    live=result['live'];keep=set(names)-{'association','attachment'}
+    if 'vm' in names:keep|={'os','extensions'}
+    keep.add('members');result['live']={k:v for k,v in live.items() if k in keep}
+    result['live']['members']['value']=[{'id':live[k]['id']} for k in sorted(keep-{'group','subnet','members','extensions'})]
+    if 'vnet' in names and 'subnet' not in names:live['vnet']['properties']['subnets']=[]
+    if 'subnet' in names:
+        if 'association' not in names:live['subnet']['properties'].pop('networkSecurityGroup')
+        if 'nic' not in names:live['subnet']['properties']['ipConfigurations']=[]
+    if 'nsg' in names and 'association' not in names:live['nsg']['properties']['subnets']=[]
+    if 'pip' in names and 'nic' not in names:live['pip']['properties'].pop('ipConfiguration')
+    if 'nic' in names and 'vm' not in names:live['nic']['properties'].pop('virtualMachine')
+    if 'data' in names and 'attachment' not in names:live['data'].pop('managedBy')
+    if 'vm' in names and 'attachment' not in names:live['vm']['properties']['storageProfile']['dataDisks']=[]
+    return result
+
+class PartialReconciliation(unittest.TestCase):
+    setUp=SessionPolicy.setUp
+    prepare=SessionPolicy.prepare
+    auth=SessionPolicy.auth
+    material=SessionPolicy.material
+    fresh=SessionPolicy.fresh
+    failed_execute=Reconciliation.failed_execute
+    request_reconciliation=Reconciliation.request_reconciliation
+    deletion_request=SessionPolicy.deletion_request
+
+    def failed_partial(self,names):
+        self.responses=partial_responses(json.loads(self.rendered_raw),names)
+        self.names=names;self.failed_execute();self.request_reconciliation()
+
+    def ready_partial(self):
+        self.description=S.prepare('reconcile-partial',self.input,NOW);self.directory=Path(self.description['directory'])
+        self.args=('reconcile-partial',self.input,self.directory,self.description['state_sha256'],NOW)
+        Q.write_json(self.directory/'version.json',{'terraform_version':'1.5.7','platform':'linux_amd64'})
+        self.auth();Q.write_json(self.directory/'state.json',self.responses['state'])
+        for name,value in self.responses['live'].items():Q.write_json(self.directory/('before-'+name+'.json'),value)
+        (self.directory/'rendered.json').write_bytes(self.rendered_raw);(self.directory/'rendered.json').chmod(0o600)
+        self.phase_receipt()
+
+    def phase_receipt(self,mode=None):
+        mode=mode or self.args[0];directory=self.directory;descriptor='/proc/123/fd/4'
+        tool=A.sha(self.tf.read_bytes())
+        rows=[('auth-'+n,P.CLI_SHA256,[*args,'--only-show-errors','--output','json'],'auth-'+n+'.json') for n,args in P.commands(self.expected)]
+        rows += [('version',tool,['version','-json'],'version.json'),('init',tool,['init','-backend=false','-lockfile=readonly','-input=false','-no-color'],'init.stdout'),('state',tool,['show','-json',str(directory/'work/terraform.tfstate')],'state.json')]
+        values={k:x['value'] for k,x in self.responses['create']['variables'].items()}
+        rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in S.read_commands(values,'resources') if r['label'] in self.responses['live']]
+        binary=self.plan_directory/'plan.tfplan'
+        if mode=='reconcile-partial':rows.append(('show',tool,['show','-json',descriptor],'rendered.json'))
+        elif mode=='prepare-dispose':
+            binary=directory/'destroy.tfplan';rows += [('prepare-dispose',tool,['plan','-destroy','-input=false','-no-color','-lock-timeout=0s','-parallelism=1','-var-file=inputs.tfvars.json','-out='+str(binary)],'prepare-dispose.stdout'),('show-dispose',tool,['show','-json',descriptor],'rendered.json')]
+        else:
+            binary=Path(json.loads(self.disposal.read_text())['binary_plan_path'])
+            rows += [('show',tool,['show','-json',descriptor],'rendered.json'),('apply',tool,['apply','-input=false','-no-color','-lock-timeout=0s','-parallelism=1',descriptor],'apply.stdout'),('state-after',tool,['show','-json',str(directory/'work/terraform.tfstate')],'final-state.json')]
+            rows += [('after-'+r['label'],P.CLI_SHA256,r['arguments'],'after-'+r['label']+'.json') for r in S.read_commands(values,'groups')]
+        phases=[]
+        for label,executable,args,output in rows:
+            file=directory/output
+            if output.endswith('.stdout') and not file.exists():Q.write_json(file,{'synthetic':True})
+            raw=file.read_bytes();phase={'phase':label,'completed':True,'exitCode':0,'startedAt':NOW.isoformat(),'endedAt':NOW.isoformat(),'executableSha256':executable,'arguments':args,'argumentsSha256':A.sha(json.dumps(args,separators=(',',':')).encode()),'stdoutBytes':len(raw),'stdoutSha256':A.sha(raw)}
+            if label in ('show','show-dispose','apply'):phase['binaryPlanSha256']=A.sha(binary.read_bytes())
+            phases.append(phase)
+        file=directory/'phases.json'
+        if file.exists():file.write_text(json.dumps(phases)+'\n')
+        else:Q.write_json(file,phases)
+
+    def complete_partial(self,names):
+        self.failed_partial(names);self.ready_partial();S.finish(*self.args)
+        receipt=S.private(self.directory/'result.json')[0]
+        self.assertEqual(receipt['mode'],'reconcile-partial');self.assertEqual(receipt['ownership_scope'],'partial')
+        self.assertEqual(receipt['state_addresses'],sorted(PARTIAL_ADDRESSES[n] for n in names))
+        self.assertEqual(receipt['original_execution_outcome'],'unconfirmed');self.assertFalse(receipt['external_quiescence_verified'])
+        self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
+        self.assertFalse((self.directory/'mutation-intent.json').exists());return receipt
+
+    def test_rg_only_partial_reconciliation(self): self.complete_partial(('group',))
+    def test_unattached_disk_and_ip_partial_reconciliation(self): self.complete_partial(('group','data','pip'))
+
+    def test_supported_network_and_vm_subsets(self):
+        for names in PARTIAL_CASES[2:]:
+            with self.subTest(names=names):
+                values={k:x['value'] for k,x in self.responses['create']['variables'].items()}
+                fixture=partial_responses(self.responses['create'],names)
+                resources=S.state_graph(fixture['state'],values,partial=True)
+                owned=S.live_graph(fixture['live'],values,addresses=set(resources))
+                self.assertEqual(set(owned['ids']),set(names)-{'association','attachment'}|({'os'} if 'vm' in names else set()))
+
+    def test_empty_full_unknown_and_orphaned_subsets_reject(self):
+        values={k:x['value'] for k,x in self.responses['create']['variables'].items()}
+        for names in [(),tuple(PARTIAL_ADDRESSES),('data',),('group','subnet'),('group','nic'),('group','vm'),('group','schedule'),('group','attachment'),('group','subnet','vnet','association')]:
+            fixture=partial_responses(self.responses['create'],names)
+            with self.subTest(names=names),self.assertRaises(S.A.Error):S.state_graph(fixture['state'],values,partial=True)
+        fixture=partial_responses(self.responses['create'],('group',));fixture['state']['values']['root_module']['resources'][0]['address']='azurerm_resource_group.foreign'
+        with self.assertRaises(S.A.Error):S.state_graph(fixture['state'],values,partial=True)
+        for names in PARTIAL_CASES:
+            with self.subTest(complete=names),self.assertRaises(S.A.Error):S.state_graph(partial_responses(self.responses['create'],names)['state'],values)
+
+    def test_raw_state_mismatch_tainted_deposed_and_ambiguous_instances_reject_before_reads(self):
+        self.failed_partial(('group','data'));self.ready_partial()
+        raw=self.responses['raw'];file=self.directory/'work/terraform.tfstate';original=file.read_bytes()
+        changes=[lambda d:d['resources'].pop(),lambda d:d['resources'][0]['instances'][0].update(status='tainted'),lambda d:d['resources'][0]['instances'][0].update(deposed='old'),lambda d:d['resources'][0]['instances'].append(copy.deepcopy(d['resources'][0]['instances'][0])),lambda d:d['resources'][0]['instances'][0].update(index_key=0),lambda d:d['resources'][0]['instances'][0]['attributes'].update(name='foreign')]
+        for change in changes:
+            value=copy.deepcopy(raw);change(value);file.write_text(json.dumps(value))
+            with self.subTest(change=change),self.assertRaises(S.A.Error):S.resource_reads('reconcile-partial',self.directory,{'values':{k:x['value'] for k,x in self.responses['create']['variables'].items()}},None)
+        file.write_bytes(original)
+
+    def test_absent_relationships_foreign_inventory_and_pending_resources_reject(self):
+        values={k:x['value'] for k,x in self.responses['create']['variables'].items()}
+        names=('group','vnet','subnet','nsg','pip','nic','vm','data')
+        fixture=partial_responses(self.responses['create'],names);addresses=set(PARTIAL_ADDRESSES[n] for n in names)
+        changes=[lambda d:d['members']['value'].append({'id':'/foreign'}),lambda d:d['members'].update(nextLink='https://foreign'),lambda d:d['data'].update(managedBy=d['vm']['id']),lambda d:d['subnet']['properties'].update(networkSecurityGroup={'id':d['nsg']['id']}),lambda d:d['nsg']['properties'].update(subnets=[{'id':d['subnet']['id']}]),lambda d:d['vm']['properties']['storageProfile']['dataDisks'].append({'lun':0,'managedDisk':{'id':d['data']['id']}}),lambda d:d['extensions']['value'].append({'id':'/foreign'}),lambda d:d['os']['properties'].update(provisioningState='Updating'),lambda d:d['vm']['properties'].update(vmId=None),lambda d:d['nic']['properties']['ipConfigurations'][0]['properties'].update(publicIPAddress={'id':'/foreign'}),lambda d:d['vnet']['properties']['subnets'].append({'id':'/foreign'}),lambda d:d['members']['value'].append({'id':d['os']['id']})]
+        for change in changes:
+            value=copy.deepcopy(fixture['live']);change(value)
+            with self.subTest(change=change),self.assertRaises(S.A.Error):S.live_graph(value,values,addresses)
+        bare=partial_responses(self.responses['create'],('group','data','pip'))
+        for key,prop in [('data','managedBy'),('pip','ipConfiguration')]:
+            value=copy.deepcopy(bare['live'])
+            if key=='data':value[key][prop]='/foreign'
+            else:value[key]['properties'][prop]={'id':'/foreign'}
+            with self.subTest(key=key),self.assertRaises(S.A.Error):S.live_graph(value,values,{PARTIAL_ADDRESSES[n] for n in ('group','data','pip')})
+
+    def test_partial_generation_conflict_rejects_current_ownership(self):
+        self.failed_partial(PARTIAL_CASES[3]);self.ready_partial()
+        for key,field in [('vm','vmId'),('vnet','resourceGuid')]:
+            file=self.directory/('before-'+key+'.json');original=file.read_bytes();value=json.loads(original);value['properties'][field]='ffffffff-ffff-ffff-ffff-ffffffffffff';file.write_text(json.dumps(value));self.phase_receipt()
+            with self.subTest(key=key),self.assertRaises(S.A.Error):S.finish(*self.args)
+            file.write_bytes(original)
+
+    def test_saved_subset_disposal_is_separate_and_exact(self):
+        self.complete_partial(PARTIAL_CASES[3]);ownership=self.directory/'result.json'
+        self.deletion_request('prepare-dispose',ownership);S.audit(*self.args)
+        Q.write_json(self.directory/'rendered.json',self.responses['destroy']);(self.directory/'destroy.tfplan').write_bytes(b'synthetic deletion plan');(self.directory/'destroy.tfplan').chmod(0o600)
+        self.phase_receipt();S.finish(*self.args);self.disposal=self.directory/'result.json'
+        self.assertFalse((self.directory/'mutation-intent.json').exists())
+        self.deletion_request('dispose',self.disposal);Q.write_json(self.directory/'rendered.json',self.responses['destroy']);S.intent(*self.args)
+        (self.directory/'work/terraform.tfstate').write_text(json.dumps({**self.responses['raw'],'serial':2,'resources':[]})+'\n')
+        Q.write_json(self.directory/'final-state.json',{'format_version':'1.0','terraform_version':'1.5.7'});Q.write_json(self.directory/'after-groups.json',{'value':[]});self.phase_receipt();S.finish(*self.args)
+        self.assertTrue(S.private(self.directory/'result.json')[0]['disposed']);self.assertEqual(Q.tree(self.failed_directory),self.failed_tree)
+
+    def test_subset_delete_plan_cannot_omit_add_replace_or_change_before_values(self):
+        fixture=partial_responses(self.responses['create'],PARTIAL_CASES[3]);original={'values':{k:x['value'] for k,x in fixture['create']['variables'].items()}}
+        changes=[lambda d:d['resource_changes'].pop(),lambda d:d['resource_changes'].append(copy.deepcopy(session_responses(self.responses['create'])['destroy']['resource_changes'][-1])),lambda d:d['resource_changes'][0]['change'].update(actions=['delete','create']),lambda d:d['resource_changes'][0]['change']['before'].update(name='foreign')]
+        S.audit_destroy(fixture['destroy'],fixture['state'],original,NOW,partial=True)
+        for change in changes:
+            value=copy.deepcopy(fixture['destroy']);change(value)
+            with self.subTest(change=change),self.assertRaises(S.A.Error):S.audit_destroy(value,fixture['state'],original,NOW,partial=True)
+
+    def test_subset_phase_missing_extra_read_and_output_changes_reject(self):
+        self.failed_partial(('group','data'));self.ready_partial();file=self.directory/'phases.json';phases=S.private(file)[0]
+        for change in [lambda p:p.pop(4),lambda p:p.insert(5,copy.deepcopy(p[4])),lambda p:p[4].update(stdoutSha256='0'*64),lambda p:p[0].update(exitCode=False)]:
+            value=copy.deepcopy(phases);change(value);file.write_text(json.dumps(value))
+            with self.subTest(change=change),self.assertRaises(S.A.Error):S.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists())
+
 if __name__ == '__main__': unittest.main(verbosity=2)

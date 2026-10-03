@@ -138,7 +138,7 @@ qualified invocations.
 
 ## Execute and dispose of an owned empty-host session
 
-The native Linux session command has four fixed modes. Select any real mutation
+The native Linux session command has five fixed modes. Select any real mutation
 separately after reviewing the exact plan and current resource budget. The local
 tests use synthetic Azure/Terraform responses and do not qualify a real allocation,
 shutdown or deletion.
@@ -147,6 +147,7 @@ shutdown or deletion.
 node scripts/azure-development-session.mjs --source-digest
 node scripts/azure-development-session.mjs execute --input /absolute/private/execute.json
 node scripts/azure-development-session.mjs reconcile --input /absolute/private/reconcile.json
+node scripts/azure-development-session.mjs reconcile-partial --input /absolute/private/reconcile-partial.json
 node scripts/azure-development-session.mjs prepare-dispose --input /absolute/private/prepare-dispose.json
 node scripts/azure-development-session.mjs dispose --input /absolute/private/dispose.json
 ```
@@ -160,7 +161,7 @@ the entire bound inside the authorized work window. Mode-specific fields are:
 
 - `execute`: `plan_request`, `plan_result`, `plan_result_sha256`, referring to the
   retained successful development plan and its original protected request.
-- `reconcile`: `execute_request`, `execute_directory`, `execute_session_sha256`
+- `reconcile` and `reconcile-partial`: `execute_request`, `execute_directory`, `execute_session_sha256`
   and `execute_intent_sha256`, binding the original protected execute request,
   private directory, session snapshot and durable unknown-outcome intent.
 - `prepare-dispose`: `ownership_result`, `ownership_result_sha256`, referring to
@@ -216,12 +217,30 @@ pending provisioning and foreign or replaced resources fail. No apply, plan,
 refresh, import or state repair runs. Original phases may be absent; they are not
 reconstructed. The new result says `mode: "reconcile"`, `reconciled: true` and
 `original_execution_outcome: "unconfirmed"`. It can feed the separately reviewed
-deletion workflow below. Partial-allocation recovery remains unsupported, and
-neither reconciliation nor schedule readback proves an actual shutdown occurred.
+deletion workflow below. Neither reconciliation nor schedule readback proves an actual shutdown occurred.
+
+`reconcile-partial` uses the same retained execution descriptor for a complete
+state file containing a nonempty proper subset of the approved addresses. The
+resource group must survive, and every surviving relationship must have its
+retained endpoint. Raw and rendered state must agree before subset GETs are
+derived. Each surviving resource must be terminal; the complete group inventory
+must contain exactly those real resources, including the VM’s implicit OS disk.
+Unattached disks/IPs must have no owner, absent associations must have no live
+link, and surviving attachments must agree in both directions. Unknown addresses,
+orphaned references, tainted/deposed/multiple instances, extra resources, pending
+operations and replacement evidence reject recovery. Failed GETs do not prove
+absence. Complete `execute` and `reconcile` still require all eleven addresses.
+
+A partial result records `mode: "reconcile-partial"`, `ownership_scope: "partial"`
+and the exact `state_addresses`, while keeping the original execution unconfirmed
+and external quiescence unverified. It proves current subset ownership only, not
+a complete deployment or shutdown protection. Missing/emergency state and remote
+operations that may still be running remain outside this recovery path.
 
 `prepare-dispose` authenticates the current native profile and rereads the owned
-graph before producing a saved delete-only plan for exactly the retained eleven
-Terraform addresses. It performs no apply. `dispose` authenticates again, requires
+graph before producing a saved delete-only plan for exactly the retained
+Terraform addresses (all eleven for complete ownership, or the recorded partial
+subset). It performs no apply. `dispose` authenticates again, requires
 unchanged state lineage/serial, binary and live ownership, then applies the exact
 reviewed deletion plan once. Success requires empty retained state and a complete
 resource-group inventory proving the owned group absent. Deallocation alone does
@@ -249,7 +268,7 @@ recovery is not established.
 The command retains its private operation directory: plan, original bindings,
 state/backups, any `errored.tfstate`, bounded stdout, mutation intent and available
 readbacks. It does not automatically retry, destroy, remove or reconcile an
-uncertain operation. Complete-state reconciliation requires its own explicit request. The unchanged supervisor discards raw stderr, so complete
+uncertain operation. Complete-state or partial reconciliation requires its own explicit request. The unchanged supervisor discards raw stderr, so complete
 emergency diagnostic or state recovery is not established. A failed process may
 have started a remote operation; local settlement is not Azure cancellation.
 Publication failure may leave a complete result with durability or verification

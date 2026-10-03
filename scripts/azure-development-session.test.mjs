@@ -29,12 +29,16 @@ async function json(path, value) {
   await writeFile(path, `${JSON.stringify(value)}\n`, { mode: 0o600, flag: "wx" });
 }
 
-async function fixture(t) {
+async function fixture(t, subset) {
   t.mock.timers.enable({ apis: ["Date"], now });
   const python = { path: await realpath("/usr/bin/python3") };
   python.sha256 = hash(await readFile(python.path));
   // Actual pure policy and private fixture constructors; no cloud/tool process is substituted here.
-  const setup = `import importlib.util,json\ns=importlib.util.spec_from_file_location('fixtures',${JSON.stringify(contract)});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nf=m.SessionPolicy('runTest');f.setUp();f.temporary._finalizer.detach()\npins={'terraform':m.S.A.TF_SHA256,'provider':m.S.A.PROVIDER_FILES};m.Q.write_json(f.root/'fixture-pins.json',pins)\nprint(json.dumps({'root':str(f.root),'input':str(f.input),'terraform':str(f.tf),'profile':str(f.profile),'source':m.S.source_digest(),'responses':f.responses,'rendered':f.rendered_raw.decode(),'native':m.native_fixture(),'oldProfile':m.PROFILE,'expected':f.expected}))`;
+  const responses =
+    subset === undefined
+      ? "f.responses"
+      : `m.partial_responses(json.loads(f.rendered_raw),${JSON.stringify(subset)})`;
+  const setup = `import importlib.util,json\ns=importlib.util.spec_from_file_location('fixtures',${JSON.stringify(contract)});m=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nf=m.SessionPolicy('runTest');f.setUp();f.temporary._finalizer.detach()\npins={'terraform':m.S.A.TF_SHA256,'provider':m.S.A.PROVIDER_FILES};m.Q.write_json(f.root/'fixture-pins.json',pins)\nprint(json.dumps({'root':str(f.root),'input':str(f.input),'terraform':str(f.tf),'profile':str(f.profile),'source':m.S.source_digest(),'responses':${responses},'rendered':f.rendered_raw.decode(),'native':m.native_fixture(),'oldProfile':m.PROFILE,'expected':f.expected}))`;
   const made = await runTool(python, ["-I", "-B", "-c", setup], {
     signal: AbortSignal.timeout(10000),
     env,
@@ -172,11 +176,11 @@ async function fixture(t) {
           assert.match(argv[2], /^\/proc\/[0-9]+\/fd\/[0-9]+$/u);
           assert.equal(
             await readFile(argv[2], "utf8"),
-            ["execute", "reconcile"].includes(state.mode)
+            ["execute", "reconcile", "reconcile-partial"].includes(state.mode)
               ? "private synthetic binary plan"
               : "synthetic destruction plan",
           );
-          if (["execute", "reconcile"].includes(state.mode)) text = f.rendered;
+          if (["execute", "reconcile", "reconcile-partial"].includes(state.mode)) text = f.rendered;
           else value = f.responses.destroy;
         }
       }
@@ -217,7 +221,7 @@ async function fixture(t) {
         // Preserve the actual state bytes across read-only sessions; create/apply alone writes state.
         const statePath = join(options.directory, "terraform.tfstate");
         await writeFile(statePath, `${JSON.stringify(raw)}\n`, { mode: 0o600 });
-        if (state.fail === "apply-complete")
+        if (["apply-complete", "apply-partial"].includes(state.fail))
           await runTool(
             python,
             [
@@ -485,6 +489,164 @@ for (const failure of ["apply-complete", "readback-child", "publication"]) {
       retained = join(result.directory, "result.json");
     }
     assert.equal(JSON.parse(await readFile(retained)).disposed, true);
+    assert.deepEqual(await snapshot(original), before);
+  });
+}
+
+for (const [label, subset] of [
+  ["group only", ["group"]],
+  ["unattached disk and IP", ["group", "data", "pip"]],
+  ["network before VM", ["group", "vnet", "subnet", "nsg", "association", "pip", "nic"]],
+  ["VM before attachment and schedule", ["group", "vnet", "subnet", "pip", "nic", "vm", "data"]],
+]) {
+  test(`partial reconciliation and separately reviewed disposal: ${label}`, {
+    timeout: 120000,
+  }, async (t) => {
+    const f = await fixture(t, subset);
+    f.state.fail = "apply-partial";
+    await assert.rejects(f.execute());
+    assert.equal(await readFile(join(f.root, "apply-child-started"), "utf8"), "started");
+    const original = join(f.root, "nourishing-session-0123456789ab");
+    await absent(join(original, "result.json"));
+    await absent(join(original, "phases.json"));
+    await absent(join(original, "work/errored.tfstate"));
+    const before = await snapshot(original);
+    const raw = JSON.parse(await readFile(join(original, "work/terraform.tfstate"), "utf8"));
+    assert.equal(raw.resources.length, subset.length);
+    const intent = JSON.parse(await readFile(join(original, "mutation-intent.json"), "utf8"));
+    assert.equal(intent.outcome, "unknown-until-reconciled");
+    f.state.fail = undefined;
+    f.state.mode = "reconcile-partial";
+    const input = join(f.root, "partial-request.json");
+    const request = {
+      schema_version: 1,
+      source_sha256: await sourceDigest(),
+      operation_name: `nourishing-session-${"c".repeat(12)}`,
+      not_after_utc: "2026-10-01T08:18:00Z",
+      execute_request: f.input,
+      execute_directory: original,
+      execute_session_sha256: hash(await readFile(join(original, "session.json"))),
+      execute_intent_sha256: hash(await readFile(join(original, "mutation-intent.json"))),
+    };
+    await json(input, request);
+    if (label === "group only") {
+      for (const [kind, suffix] of [
+        ["child", "d"],
+        ["abort", "e"],
+      ]) {
+        const failedInput = join(f.root, `partial-${kind}.json`);
+        const operation = `nourishing-session-${suffix.repeat(12)}`;
+        await json(failedInput, { ...request, operation_name: operation });
+        const stop = new AbortController();
+        const start = f.state.calls.length;
+        const reject = async (tool, args, options) => {
+          if (basename(options.outputPath ?? "") === "before-members.json") {
+            if (kind === "child") {
+              const python = { path: await realpath("/usr/bin/python3") };
+              python.sha256 = hash(await readFile(python.path));
+              return runTool(
+                python,
+                [
+                  "-I",
+                  "-B",
+                  "-c",
+                  `from pathlib import Path; Path(${JSON.stringify(join(f.root, "partial-child-started"))}).write_text('started'); raise SystemExit(7)`,
+                ],
+                { ...options, outputPath: undefined },
+              );
+            }
+            const result = await f.run(tool, args, options);
+            stop.abort(new Error("synthetic partial read interruption"));
+            return result;
+          }
+          return f.run(tool, args, options);
+        };
+        await assert.rejects(
+          runDevelopmentSession(
+            "reconcile-partial",
+            failedInput,
+            { environment: {}, signal: stop.signal },
+            reject,
+          ),
+        );
+        if (kind === "child")
+          assert.equal(await readFile(join(f.root, "partial-child-started"), "utf8"), "started");
+        await absent(join(f.root, operation, "result.json"));
+        await absent(join(f.root, operation, "mutation-intent.json"));
+        assert.ok(
+          f.state.calls
+            .slice(start)
+            .every((c) => !["apply", "plan", "refresh", "import"].includes(c.argv[0])),
+        );
+        assert.deepEqual(await snapshot(original), before);
+      }
+    }
+    const start = f.state.calls.length;
+    let result = await runDevelopmentSession(
+      "reconcile-partial",
+      input,
+      { environment: {} },
+      f.run,
+    );
+    const calls = f.state.calls.slice(start);
+    assert.ok(calls.every((c) => !["apply", "plan", "refresh", "import"].includes(c.argv[0])));
+    const labels = [
+      "group",
+      "vnet",
+      "subnet",
+      "nsg",
+      "pip",
+      "nic",
+      "vm",
+      "os",
+      "data",
+      "schedule",
+    ].filter((n) => subset.includes(n) || (n === "os" && subset.includes("vm")));
+    labels.push("members");
+    if (subset.includes("vm")) labels.push("extensions");
+    assert.deepEqual(
+      calls.filter((c) => c.output.startsWith("before-")).map((c) => c.output),
+      labels.map((n) => `before-${n}.json`),
+    );
+    let retained = join(result.directory, "result.json");
+    let receipt = JSON.parse(await readFile(retained));
+    assert.equal(receipt.mode, "reconcile-partial");
+    assert.equal(receipt.ownership_scope, "partial");
+    assert.equal(receipt.state_addresses.length, subset.length);
+    assert.deepEqual(
+      receipt.state_addresses,
+      raw.resources.map((r) => `${r.type}.${r.name}`).sort(),
+    );
+    assert.equal(receipt.original_execution_outcome, "unconfirmed");
+    assert.equal(receipt.external_quiescence_verified, false);
+    await absent(join(result.directory, "mutation-intent.json"));
+    assert.deepEqual(await snapshot(original), before);
+    for (const mode of ["prepare-dispose", "dispose"]) {
+      f.state.mode = mode;
+      const next = join(f.root, `${mode}-partial.json`);
+      const key = mode === "prepare-dispose" ? "ownership" : "disposal";
+      await json(next, {
+        schema_version: 1,
+        source_sha256: await sourceDigest(),
+        operation_name: `nourishing-session-${(mode === "prepare-dispose" ? "a" : "b").repeat(12)}`,
+        not_after_utc: "2026-10-01T08:18:00Z",
+        [`${key}_result`]: retained,
+        [`${key}_result_sha256`]: hash(await readFile(retained)),
+      });
+      const begin = f.state.calls.length;
+      result = await runDevelopmentSession(mode, next, { environment: {} }, f.run);
+      retained = join(result.directory, "result.json");
+      receipt = JSON.parse(await readFile(retained));
+      if (mode === "prepare-dispose") {
+        assert.ok(f.state.calls.slice(begin).every((c) => c.argv[0] !== "apply"));
+        assert.deepEqual(
+          receipt.state_addresses,
+          raw.resources.map((r) => `${r.type}.${r.name}`).sort(),
+        );
+        await absent(join(result.directory, "mutation-intent.json"));
+      }
+    }
+    assert.equal(receipt.disposed, true);
     assert.deepEqual(await snapshot(original), before);
   });
 }

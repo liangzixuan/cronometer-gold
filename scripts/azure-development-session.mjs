@@ -59,7 +59,9 @@ export async function runDevelopmentSession(
   execute = limitedTool,
 ) {
   requireValue(process.platform === "linux" && process.arch === "x64");
-  requireValue(["execute", "reconcile", "prepare-dispose", "dispose"].includes(mode));
+  requireValue(
+    ["execute", "reconcile", "reconcile-partial", "prepare-dispose", "dispose"].includes(mode),
+  );
   rejectAmbient(environment);
   requireValue(
     typeof inputPath === "string" &&
@@ -241,7 +243,7 @@ export async function runDevelopmentSession(
       await held.verify();
       phases.at(-1).binaryPlanSha256 = held.sha256;
       if (mode === "execute") await reads("groups", "before");
-      if (mode !== "reconcile") {
+      if (!["reconcile", "reconcile-partial"].includes(mode)) {
         // Publish unknown outcome durably before the only mutating command.
         await pure("intent", extra);
         await held.verify();
@@ -257,7 +259,7 @@ export async function runDevelopmentSession(
     } finally {
       await held.close();
     }
-    if (mode !== "reconcile") {
+    if (!["reconcile", "reconcile-partial"].includes(mode)) {
       await tool(
         "state-after",
         ["show", "-json", resolve(directory, "terraform.tfstate")],
@@ -298,7 +300,7 @@ async function main() {
     console.log(
       args[0] === "prepare-dispose"
         ? "Private deletion plan prepared for separate review; no deletion attempted."
-        : args[0] === "reconcile"
+        : ["reconcile", "reconcile-partial"].includes(args[0])
           ? "Private current ownership recorded; original execution outcome remains unconfirmed."
           : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
     );
