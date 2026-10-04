@@ -701,7 +701,6 @@ export const diaryRecipeEntrySchema = {
     },
     sources: {
       type: "array",
-      minItems: 1,
       maxItems: 256,
       items: foodSourceSnapshotSchema,
     },

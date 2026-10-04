@@ -494,3 +494,83 @@ describe("recipe routes", () => {
     expect(response.body).not.toContain("America/Chicago");
   });
 });
+
+describe("private-only recipe Diary sources", () => {
+  it.each([false, true])(
+    "serializes a private recipe Log receipt with replayed=%s",
+    async (replayed) => {
+      const privateEntry: DiaryRecipeEntry = { ...recipeDiaryEntry, sources: [] };
+      const service = recipeStub({
+        log: vi.fn(async () => ({
+          data: {
+            ...mutationResponse.data,
+            replayed,
+            entry: privateEntry,
+          },
+        })),
+      });
+      const response = await createTestApp(service).inject({
+        method: "POST",
+        url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+        headers: {
+          ...authHeaders,
+          "idempotency-key": operationId,
+          "x-expected-profile-time-zone": "America/Chicago",
+        },
+        payload: {
+          recipeVersionId,
+          portion: { kind: "serving", amount: "1" },
+          mealSlot: "breakfast",
+          occurredAt: "2026-08-16T12:00:00.000Z",
+        },
+      });
+      expect(response.statusCode, response.body).toBe(replayed ? 200 : 201);
+      expect(response.json().data).toEqual({
+        ...mutationResponse.data,
+        replayed,
+        entry: privateEntry,
+      });
+      expect(service.log).toHaveBeenCalledWith(
+        expect.objectContaining({ userId, recipeId, expectedProfileTimeZone: "America/Chicago" }),
+      );
+    },
+  );
+
+  it("keeps source uniqueness, ordering, serving and retention invariants", () => {
+    const source = recipeDiaryEntry.sources[0];
+    if (!source) throw new Error("Expected the existing public recipe fixture source");
+    for (const sources of [
+      [source, source],
+      [
+        { ...source, code: "ZZZ" },
+        { ...source, code: "AAA" },
+      ],
+    ]) {
+      expect(() => assertDiaryEntry({ ...recipeDiaryEntry, sources })).toThrow();
+    }
+    expect(() =>
+      assertDiaryEntry({
+        ...recipeDiaryEntry,
+        sources: [],
+        recipe: { ...recipeDiaryEntry.recipe, servingLabel: null },
+      }),
+    ).toThrow();
+    expect(() =>
+      assertDiaryEntry({
+        ...recipeDiaryEntry,
+        sources: [],
+        recipe: { ...recipeDiaryEntry.recipe, warnings: [] },
+      }),
+    ).toThrow();
+    expect(() =>
+      assertDiaryEntry({
+        ...recipeDiaryEntry,
+        sources: [],
+        recipe: {
+          ...recipeDiaryEntry.recipe,
+          retentionPolicy: { ...recipeDiaryEntry.recipe.retentionPolicy, assumption: " " },
+        },
+      }),
+    ).toThrow();
+  });
+});

@@ -727,3 +727,64 @@ describe("food and recipe diary entry union", () => {
     ).toBe(false);
   });
 });
+
+describe("private-only recipe Diary sources", () => {
+  const privateEntry = {
+    id: "40000000-0000-4000-8000-000000000001",
+    revision: "1",
+    mealSlot: "breakfast",
+    resolvedGrams: "100",
+    occurredAt: "2026-08-16T12:00:00.000Z",
+    localDate: "2026-08-16",
+    localTime: "07:00:00",
+    timeZone: "America/Chicago",
+    position: 0,
+    nutrients: [aggregate],
+    note: null,
+    entryKind: "recipe",
+    foodVersionId: null,
+    recipeVersionId: recipe.currentVersion.id,
+    portion: { kind: "serving", amount: "1", servingLabel: "bowl" },
+    food: null,
+    recipe: {
+      id: recipe.id,
+      name: recipe.currentVersion.name,
+      versionNumber: 1,
+      yieldGrams: "400",
+      yieldSource: "measured",
+      servingCount: "2",
+      servingLabel: "bowl",
+      calculationVersion: "nutrition-engine-v1",
+      retentionPolicy: recipe.currentVersion.retentionPolicy,
+      warnings: [warning],
+    },
+    sources: [],
+    source: null,
+  };
+
+  it("accepts an immutable private-only snapshot without inventing a public source", () => {
+    const validate = validator(diaryEntrySchema);
+    expect(validate(privateEntry), JSON.stringify(validate.errors)).toBe(true);
+    expect(privateEntry.sources).toEqual([]);
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    [null],
+    [{ ...source, releaseId: "invalid" }],
+    Array(257).fill(source),
+  ])("still rejects a missing, malformed, or oversized source list %#", (sources) => {
+    expect(validator(diaryEntrySchema)({ ...privateEntry, sources })).toBe(false);
+  });
+
+  it.each([
+    { source },
+    { foodVersionId: "1" },
+    { recipeVersionId: null },
+    { food: { name: "Food", brandName: null } },
+  ])("still rejects inconsistent recipe discriminants %#", (patch) => {
+    expect(validator(diaryEntrySchema)({ ...privateEntry, ...patch })).toBe(false);
+  });
+});

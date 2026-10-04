@@ -569,7 +569,6 @@ export function assertDiaryEntry(entry: DiaryEntry): void {
   }
   const sourceKeys = entry.sources.map((source) => `${source.code}\u0000${source.releaseId}`);
   if (
-    sourceKeys.length === 0 ||
     new Set(sourceKeys).size !== sourceKeys.length ||
     sourceKeys.some((key, index) => index > 0 && (sourceKeys[index - 1] ?? "") > key) ||
     entry.recipe.retentionPolicy.code !== "identity-retention-default" ||

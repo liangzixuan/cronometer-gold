@@ -939,7 +939,6 @@ function parseEntry(value: unknown): DiaryEntry {
     value.food === null &&
     value.source === null &&
     Array.isArray(value.sources) &&
-    value.sources.length >= 1 &&
     value.sources.length <= 256
   ) {
     const sources = value.sources.map(parseSource);

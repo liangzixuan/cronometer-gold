@@ -679,3 +679,132 @@ describe("web diary mutation proxy", () => {
     expect(headers.get("x-expected-profile-time-zone")).toBe("America/Denver");
   });
 });
+
+describe("private-only recipe Diary sources", () => {
+  function page(sources: unknown) {
+    const { foodProvenance: _provenance, ...common } = entry;
+    const privateEntry = {
+      ...common,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId: entry.id,
+      portion: { kind: "serving", amount: "1", servingLabel: "bowl" },
+      food: null,
+      source: null,
+      sources,
+      recipe: {
+        id: entry.id,
+        name: "Private recipe",
+        versionNumber: 1,
+        yieldGrams: "364",
+        yieldSource: "measured",
+        servingCount: "1",
+        servingLabel: "bowl",
+        calculationVersion: "nutrition-engine-v1",
+        retentionPolicy: {
+          code: "identity-retention-default",
+          version: "1",
+          assumption: "No retention factors applied.",
+        },
+        warnings: [
+          { code: "RETENTION_FACTORS_DEFAULTED", message: "Identity retention.", nutrientIds: [] },
+        ],
+      },
+    };
+    return {
+      data: {
+        id: entry.id,
+        localDate: entry.localDate,
+        timeZone: entry.timeZone,
+        status: "open",
+        revision: "8",
+        orderDigest: "a".repeat(64),
+        entries: [privateEntry],
+        totals: [],
+        updatedAt: "2026-08-15T13:30:01.000Z",
+      },
+      page: { nextCursor: null, totalEntries: 1 },
+    };
+  }
+
+  it("forwards a private-only recipe page with its version, portion, note and empty sources intact", async () => {
+    const upstream = page([]);
+    const fetchMock = vi.fn(async () => Response.json(upstream, { headers: { etag: '"8"' } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await proxyDiaryGet(
+      new Request("https://app.example.test/api/diary?date=2026-08-15&limit=20", {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(upstream);
+    expect(response.headers.get("etag")).toBe('"8"');
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still rejects a malformed source member from the upstream", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(page([{}]), { headers: { etag: '"8"' } })),
+    );
+    const response = await proxyDiaryGet(
+      new Request("https://app.example.test/api/diary?date=2026-08-15&limit=20", {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+    );
+    expect(response.status).toBe(502);
+  });
+
+  it("accepts a durable Repeat response retaining the private recipe version and source list", async () => {
+    const original = page([]).data.entries[0];
+    if (!original) throw new Error("Expected the selected private recipe entry");
+    const repeated = {
+      ...original,
+      id: "018f6f58-4e2c-7b62-8f0b-3d75491713b5",
+      revision: "1",
+      occurredAt: "2026-08-16T13:30:00.000Z",
+      localDate: "2026-08-16",
+    };
+    const affectedDays = [{ localDate: "2026-08-16", revision: "1" }];
+    const payload = {
+      data: {
+        replayed: false,
+        entry: repeated,
+        affectedDays,
+        receipt: {
+          protocol: "v1",
+          operationId: entry.id,
+          kind: "repeat",
+          expectedSubjects: [{ entryId: entry.id, revision: "4" }],
+          resultSubjects: [{ entryId: repeated.id, revision: "1", state: "active" }],
+          affectedDays,
+        },
+      },
+    };
+    const fetchMock = vi.fn(async () => Response.json(payload));
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await proxyDiaryRepeat(
+      new Request(
+        `https://app.example.test/api/diary/entries/${entry.id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+        {
+          method: "POST",
+          headers: {
+            cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+            "content-type": "application/json",
+            "idempotency-key": entry.id,
+            "if-match": '"4"',
+            origin: "https://app.example.test",
+            "sec-fetch-site": "same-origin",
+            "x-expected-profile-time-zone": "America/Chicago",
+          },
+          body: JSON.stringify({ occurredAt: repeated.occurredAt, mealSlot: "breakfast" }),
+        },
+      ),
+      entry.id,
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

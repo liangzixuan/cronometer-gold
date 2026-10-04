@@ -766,3 +766,84 @@ describe("diary routes", () => {
     expect(response.json()).toMatchObject({ code: "INTERNAL_ERROR" });
   });
 });
+
+describe("private-only recipe Diary sources", () => {
+  function privateRecipeEntry(): DiaryRecipeEntry {
+    const recipeVersionId = "d696b6c8-782a-4783-b459-af4698470cf0";
+    const { foodProvenance: _foodProvenance, ...diaryEntryWithoutFoodProvenance } = diaryEntry;
+    const recipeEntry: DiaryRecipeEntry = {
+      ...diaryEntryWithoutFoodProvenance,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId,
+      portion: { kind: "serving", amount: "1", servingLabel: "bowl" },
+      food: null,
+      recipe: {
+        id: "2a29e851-eab0-4af6-82f2-5ac633420c2b",
+        name: "Porridge",
+        versionNumber: 1,
+        yieldGrams: "100",
+        yieldSource: "measured",
+        servingCount: "1",
+        servingLabel: "bowl",
+        calculationVersion: "nutrition-engine-v1",
+        retentionPolicy: {
+          code: "identity-retention-default",
+          version: "1",
+          assumption:
+            "No cooking-retention dataset was applied; omitted factors remain exactly one.",
+        },
+        warnings: [
+          {
+            code: "RETENTION_FACTORS_DEFAULTED",
+            message: "No cooking-retention dataset was applied.",
+            nutrientIds: ["1008"],
+          },
+        ],
+      },
+      sources: [],
+      source: null,
+    };
+    return recipeEntry;
+  }
+
+  it("serializes the private-only recipe page without changing pinned facts", async () => {
+    const privateEntry = privateRecipeEntry();
+    const day = { ...diaryDay, entries: [privateEntry] };
+    const response = await createTestApp(
+      diaryStub({
+        getDayPage: vi.fn(async () => ({ data: day, page: { nextCursor: null, totalEntries: 1 } })),
+      }),
+    ).inject({
+      method: "GET",
+      url: `/v1/diary?date=${day.localDate}&limit=20`,
+      headers: authHeaders,
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().data.entries).toEqual([privateEntry]);
+    expect(response.json().page).toEqual({ nextCursor: null, totalEntries: 1 });
+  });
+
+  it("serializes a correction and durable receipt for a private-only recipe", async () => {
+    const privateEntry = privateRecipeEntry();
+    const service = diaryStub({
+      updateEntryCorrection: vi.fn(async (input) =>
+        correctionResponse(input, "update", privateEntry),
+      ),
+    });
+    const response = await createTestApp(service).inject({
+      method: "PATCH",
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
+      headers: { ...authHeaders, "idempotency-key": operationId, "if-match": '"3"' },
+      payload: { portion: { kind: "serving", amount: "1" } },
+    });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual(
+      correctionResponse(
+        { entryId, expectedRevision: "3", clientOperationId: operationId },
+        "update",
+        privateEntry,
+      ),
+    );
+  });
+});

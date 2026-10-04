@@ -1250,3 +1250,59 @@ describe("local diary dates", () => {
     ).toThrow(RangeError);
   });
 });
+
+describe("private-only recipe Diary sources", () => {
+  function mutation(candidate: unknown, replayed = false) {
+    return {
+      data: {
+        replayed,
+        entry: candidate,
+        affectedDays: [{ localDate: "2026-08-15", revision: "4" }],
+      },
+    };
+  }
+
+  it.each([false, true])(
+    "preserves every pinned recipe fact in a receipt with replayed=%s",
+    (replayed) => {
+      const original = parseDiaryMutation(mutation(recipeEntry, replayed));
+      const parsed = parseDiaryMutation(mutation({ ...recipeEntry, sources: [] }, replayed));
+      expect(parsed).toEqual({ ...original, entry: { ...original.entry, sources: [] } });
+    },
+  );
+
+  it("accepts private-only recipe snapshots in paged mixed diary reads", () => {
+    const original = parseDiaryPage(diaryPageFixture([entry, recipeEntry], null, 2));
+    const parsed = parseDiaryPage(
+      diaryPageFixture([entry, { ...recipeEntry, sources: [] }], null, 2),
+    );
+    expect(parsed).toEqual({
+      ...original,
+      data: {
+        ...original.data,
+        entries: [original.data.entries[0], { ...original.data.entries[1], sources: [] }],
+      },
+    });
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    [null],
+    [{ ...entry.source, releaseId: "invalid" }],
+    [entry.source, entry.source],
+    Array(257).fill(entry.source),
+  ])("rejects a missing, malformed, duplicate, or oversized source list %#", (sources) => {
+    expect(() => parseDiaryMutation(mutation({ ...recipeEntry, sources }))).toThrow();
+  });
+
+  it.each([
+    { source: entry.source },
+    { foodVersionId: "1" },
+    { recipeVersionId: null },
+    { food: { name: "Food", brandName: null } },
+  ])("keeps private recipe discriminants strict %#", (patch) => {
+    expect(() => parseDiaryMutation(mutation({ ...recipeEntry, sources: [], ...patch }))).toThrow();
+  });
+});
