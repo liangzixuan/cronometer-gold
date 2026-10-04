@@ -220,7 +220,20 @@ export function HealthClient() {
     trendNutrientFilterRef.current = next;
     setTrendNutrientFilterState(next);
   }, []);
-  const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
+  const [definitions, setDefinitionsState] = useState<readonly BiometricDefinition[]>([]);
+  const definitionsRef = useRef(definitions);
+  const setDefinitions = useCallback(
+    (
+      change:
+        | readonly BiometricDefinition[]
+        | ((current: readonly BiometricDefinition[]) => readonly BiometricDefinition[]),
+    ) => {
+      const next = typeof change === "function" ? change(definitionsRef.current) : change;
+      definitionsRef.current = next;
+      setDefinitionsState(next);
+    },
+    [],
+  );
   const [history, setHistoryState] = useState<BiometricHistory>(emptyHistory);
   const historyRef = useRef(history);
   const [historyMetric, setHistoryMetric] = useState("");
@@ -562,6 +575,7 @@ export function HealthClient() {
     router,
     setSession,
     setEditingEvent,
+    setDefinitions,
     setReminders,
     replaceReminder,
     replaceDefinitionDraft,
@@ -840,6 +854,7 @@ export function HealthClient() {
       invalidateHistory,
       revalidateHealthSession,
       setSession,
+      setDefinitions,
       setReminders,
       replaceTrendRange,
       setSelectedDefinition,
@@ -1274,6 +1289,9 @@ export function HealthClient() {
     [definitions, selectedDefinition],
   );
 
+  const newEventUnavailable =
+    editingEvent === null && selectedDefinitionRecord?.status !== "active";
+
   const renderedDefinitionGeneration = definitionGeneration.current;
   const definitionScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
   function definitionViewCurrent(generation = renderedDefinitionGeneration) {
@@ -1461,6 +1479,14 @@ export function HealthClient() {
 
   async function saveEvent() {
     if (!eventWriteAvailable()) return;
+    if (
+      editingEvent === null &&
+      definitionsRef.current.find((definition) => definition.id === selectedDefinition)?.status !==
+        "active"
+    )
+      return setMessage(
+        "Choose an active metric to log a new reading. Your entered values are preserved.",
+      );
     if (
       !session ||
       !selectedDefinitionRecord ||
@@ -2249,6 +2275,13 @@ export function HealthClient() {
                       )
                     }
                   >
+                    {selectedDefinitionRecord?.status !== "active" ? (
+                      <option value={selectedDefinition} disabled>
+                        {selectedDefinitionRecord
+                          ? `${selectedDefinitionRecord.name} (${selectedDefinitionRecord.canonicalUnit}) · archived`
+                          : "Selected metric unavailable"}
+                      </option>
+                    ) : null}
                     {definitions
                       .filter((item) => item.status === "active")
                       .map((item) => (
@@ -2258,6 +2291,11 @@ export function HealthClient() {
                       ))}
                   </select>
                 </label>
+                {newEventUnavailable ? (
+                  <p className="finePrint">
+                    Choose an active metric to log a new reading. Your entered values are preserved.
+                  </p>
+                ) : null}
                 <div className="inlineFields">
                   <label>
                     Exact value
@@ -2298,6 +2336,7 @@ export function HealthClient() {
                 <div className="entryActions">
                   <button
                     disabled={
+                      newEventUnavailable ||
                       eventWriting ||
                       historyController.current !== null ||
                       sectionControllers.current.biometrics !== undefined ||

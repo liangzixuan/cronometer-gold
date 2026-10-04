@@ -4473,3 +4473,227 @@ describe("Health deleted reminder editor", () => {
     expect(writes()[0]?.[1]?.method).toBe("PATCH");
   });
 });
+
+describe("Health archived metric new Log admission", () => {
+  const other = { ...emptyHistoryDefinition, name: "Second active metric" };
+  const archived = { ...historyDefinition, status: "archived" as const, revision: "2" };
+  function setup() {
+    const result = historyWorkspace();
+    result.state.definitions = [historyDefinition, other];
+    vi.stubGlobal("window", { confirm: vi.fn(() => true) });
+    result.state.write = (_url, init) =>
+      init.method === "DELETE"
+        ? Response.json({ data: { definition: archived } })
+        : Response.json({ data: { event: reading(), replayed: false } });
+    return result;
+  }
+  function metric() {
+    return requiredHistory(elements(eventForm()).find((node) => node.type === "select"));
+  }
+  function archiveButton() {
+    const row = requiredHistory(
+      elements(biometricSection()).find(
+        (node) => node.type === "li" && text(node).startsWith("Weight (kg)"),
+      ),
+    );
+    return button("Archive", row);
+  }
+  function draft() {
+    return [
+      metric().props.value,
+      ...["Exact value", "Local date", "Local time"].map((label) => eventField(label).props.value),
+    ];
+  }
+  async function raw(value = "71.200000") {
+    await changeEvent("Exact value", value);
+    await changeEvent("Local date", "2026-09-09");
+    await changeEvent("Local time", "07:23");
+  }
+  async function archive() {
+    invoke(archiveButton(), "onClick");
+    await hooks.settle();
+  }
+
+  it("blocks actual new POST after ordinary Archive and keeps its original metric and raw fields", async () => {
+    const { writes } = setup();
+    await mount();
+    await raw();
+    const before = draft();
+    await archive();
+    expect(status()).toContain("Metric archived");
+    await saveReading();
+    expect(writes().map(([, init]) => init?.method)).toEqual(["DELETE"]);
+    expect(draft()).toEqual(before);
+    expect(button("Log event").props.disabled).toBe(true);
+  });
+
+  it("represents the archived selection explicitly without reassigning an invalid raw draft", async () => {
+    setup();
+    await mount();
+    await raw(" 003x ");
+    const before = draft();
+    await archive();
+    expect(draft()).toEqual(before);
+    const option = elements(metric()).find(
+      (node) => node.type === "option" && node.props.value === historyDefinition.id,
+    );
+    expect(option).toBeDefined();
+    expect(text(option)).toContain("archived");
+    expect(text(eventForm())).toContain("Choose an active metric");
+    expect(button("Log event").props.disabled).toBe(true);
+  });
+
+  it("rejects the pre-Archive submit callback after acceptance before React paints", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    const before = draft(),
+      form = eventForm(),
+      pending = deferred<Response>();
+    state.write = (_url, init) =>
+      init.method === "DELETE"
+        ? pending.promise
+        : Response.json({ data: { event: reading(), replayed: false } });
+    invoke(archiveButton(), "onClick");
+    pending.resolve(Response.json({ data: { definition: archived } }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes().map(([, init]) => init?.method)).toEqual(["DELETE"]);
+    expect(draft()).toEqual(before);
+  });
+
+  it("keeps archived trend selection available while blocking new Log", async () => {
+    const { state, writes, fetcher } = setup();
+    state.definitions = [other, archived];
+    await mount();
+    await raw();
+    const label = requiredHistory(
+      elements().find((node) => node.type === "label" && text(node).startsWith("BiometricNone")),
+    );
+    const select = requiredHistory(elements(label).find((node) => node.type === "select"));
+    invoke(select, "onChange", { target: { value: archived.id } });
+    await hooks.settle();
+    await saveReading();
+    expect(writes()).toHaveLength(0);
+    expect(metric().props.value).toBe(archived.id);
+    expect(
+      fetcher.mock.calls.some(
+        ([url]) => url.startsWith("/api/retention/trends/biometrics?") && url.includes(archived.id),
+      ),
+    ).toBe(true);
+  });
+
+  it("logs retained exact values only after deliberately choosing an active metric", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    await archive();
+    invoke(metric(), "onChange", { target: { value: other.id } });
+    await hooks.settle();
+    state.write = () =>
+      Response.json({
+        data: {
+          event: {
+            ...reading(),
+            definitionId: other.id,
+            value: "71.200000",
+            measuredAt: "2026-09-09T07:23:00.000Z",
+            localDate: "2026-09-09",
+          },
+          replayed: false,
+        },
+      });
+    expect(button("Log event").props.disabled).toBe(false);
+    await saveReading();
+    expect(writes()).toHaveLength(2);
+    expect(JSON.parse(String(writes()[1]?.[1]?.body))).toEqual({
+      definitionId: other.id,
+      value: "71.200000",
+      measuredAt: "2026-09-09T07:23:00.000Z",
+    });
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBeNull();
+  });
+
+  it("preserves an unrelated active selection and its enabled raw draft", async () => {
+    const { writes } = setup();
+    await mount();
+    invoke(metric(), "onChange", { target: { value: other.id } });
+    await hooks.settle();
+    await raw("00x");
+    const before = draft();
+    await archive();
+    expect(draft()).toEqual(before);
+    expect(button("Log event").props.disabled).toBe(false);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("leaves a canceled Archive and the new reading unchanged", async () => {
+    const { writes } = setup();
+    vi.stubGlobal("window", { confirm: vi.fn(() => false) });
+    await mount();
+    await raw();
+    const before = draft();
+    await archive();
+    expect(writes()).toHaveLength(0);
+    expect(draft()).toEqual(before);
+    expect(button("Log event").props.disabled).toBe(false);
+  });
+
+  it.each(["rejected", "malformed", "transport"])(
+    "preserves the new draft after %s Archive and exact archive retry identity",
+    async (failure) => {
+      const { state, writes } = setup();
+      await mount();
+      await raw();
+      const before = draft();
+      state.write = () => {
+        if (failure === "transport") throw new Error("Lost archive receipt");
+        return failure === "rejected"
+          ? Response.json({ error: "No archive" }, { status: 400 })
+          : Response.json({ data: { id: historyDefinition.id } });
+      };
+      await archive();
+      expect(draft()).toEqual(before);
+      expect(button("Log event").props.disabled).toBe(false);
+      const first = requiredHistory(writes()[0]);
+      await archive();
+      const retry = requiredHistory(writes()[1]);
+      expect(retry[0]).toBe(first[0]);
+      expect(retry[1]?.body).toBe(first[1]?.body);
+      expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(first[1]?.headers).get("idempotency-key"),
+      );
+      expect(new Headers(retry[1]?.headers).get("if-match")).toBe('"1"');
+    },
+  );
+
+  it("keeps an archived historical correction and exact uncertain PATCH retry available", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.200000");
+    await archive();
+    expect(button("Save event").props.disabled).toBe(false);
+    state.write = () => Response.json({ error: "Unknown outcome" }, { status: 503 });
+    await saveReading();
+    const first = requiredHistory(writes()[1]);
+    state.write = () =>
+      Response.json({
+        data: { event: { ...reading(), revision: "2", value: "71.200000" }, replayed: true },
+      });
+    await saveReading();
+    const retry = requiredHistory(writes()[2]);
+    expect(retry[0]).toBe(`/api/retention/biometrics/events/${reading().id}`);
+    expect(retry[1]?.method).toBe("PATCH");
+    expect(retry[1]?.body).toBe(JSON.stringify({ value: "71.200000" }));
+    expect(retry[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(retry[1]?.headers).get("if-match")).toBe('"1"');
+    expect(text(eventRows()[0])).toContain("12:34:56");
+    expect(button("Log event").props.disabled).toBe(true);
+  });
+});
