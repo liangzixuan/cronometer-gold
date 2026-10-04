@@ -3517,3 +3517,203 @@ describe("batched Health trend restoration", () => {
     },
   );
 });
+
+describe("Health manual-event editor replacement protection", () => {
+  function replacementWorkspace() {
+    const result = historyWorkspace();
+    const first = reading(1);
+    const second = reading(2, "2026-09-10T11:22:33.456Z");
+    result.state.eventRead = () => eventPage([first, second]);
+    return { ...result, first, second };
+  }
+
+  function replacementDraft() {
+    return [
+      ["Metric", elements(eventForm()).find((node) => node.type === "select")?.props.value],
+      ...["Exact value", "Local date", "Local time"].map((label) => [
+        label,
+        eventField(label).props.value,
+      ]),
+    ];
+  }
+
+  it.each([0, 1])(
+    "preserves every raw correction field when row %s Edit is invoked",
+    async (row) => {
+      const { fetcher } = replacementWorkspace();
+      await mount();
+      await click("Edit", eventRows()[0]);
+      await changeEvent("Exact value", "  invalid raw decimal  ");
+      await changeEvent("Local date", "2026-09-09");
+      await changeEvent("Local time", "00:45");
+      const before = replacementDraft();
+      const count = fetcher.mock.calls.length;
+      invoke(button("Edit", eventRows()[row]), "onClick");
+      await hooks.settle();
+      expect(replacementDraft()).toEqual(before);
+      expect(fetcher.mock.calls).toHaveLength(count);
+      expect(eventRows().map((node) => button("Edit", node).props.disabled)).toEqual([true, true]);
+    },
+  );
+
+  it("keeps the first opened editor when a second retained row Edit runs before paint", async () => {
+    const { first, fetcher } = replacementWorkspace();
+    await mount();
+    const firstEdit = button("Edit", eventRows()[0]);
+    const secondEdit = button("Edit", eventRows()[1]);
+    const count = fetcher.mock.calls.length;
+    invoke(firstEdit, "onClick");
+    invoke(secondEdit, "onClick");
+    await hooks.settle();
+    expect(eventField("Exact value").props.value).toBe(first.value);
+    expect(eventField("Local time").props.value).toBe("12:34");
+    expect(fetcher.mock.calls).toHaveLength(count);
+  });
+
+  it("retires an editor-era callback across raw changes and Cancel while fresh Edit resumes", async () => {
+    const { second, fetcher } = replacementWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    const stale = button("Edit", eventRows()[1]);
+    await changeEvent("Exact value", "71.200000");
+    await click("Cancel", eventForm());
+    const before = replacementDraft();
+    const count = fetcher.mock.calls.length;
+    invoke(stale, "onClick");
+    await hooks.settle();
+    expect(text(eventForm())).toContain("Log event");
+    expect(replacementDraft()).toEqual(before);
+    expect(fetcher.mock.calls).toHaveLength(count);
+    await click("Edit", eventRows()[1]);
+    expect(eventField("Exact value").props.value).toBe(second.value);
+    expect(eventField("Local time").props.value).toBe("11:22");
+  });
+
+  it("restores current Edit after accepted Save and preserves unchanged seconds and milliseconds", async () => {
+    const { state, first, second, writes } = replacementWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.200000");
+    state.write = () =>
+      Response.json({
+        data: { event: { ...first, revision: "2", value: "71.200000" }, replayed: false },
+      });
+    await saveReading();
+    const saved = requiredHistory(writes()[0]);
+    expect(saved[0]).toBe(`/api/retention/biometrics/events/${first.id}`);
+    expect(saved[1]?.method).toBe("PATCH");
+    expect(saved[1]?.body).toBe(JSON.stringify({ value: "71.200000" }));
+    expect(new Headers(saved[1]?.headers).get("if-match")).toBe('"1"');
+    expect(text(eventForm())).toContain("Log event");
+    expect(eventRows().map((node) => button("Edit", node).props.disabled)).toEqual([false, false]);
+    await click("Edit", eventRows()[1]);
+    expect(eventField("Exact value").props.value).toBe(second.value);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("retains the original ambiguous PATCH body and key after a blocked replacement", async () => {
+    const { state, first, writes } = replacementWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.200000");
+    state.write = () => Response.json({ error: "Unknown outcome" }, { status: 503 });
+    await saveReading();
+    const original = requiredHistory(writes()[0]);
+    const before = replacementDraft();
+    invoke(button("Edit", eventRows()[1]), "onClick");
+    await hooks.settle();
+    expect(replacementDraft()).toEqual(before);
+    await saveReading();
+    const retry = requiredHistory(writes()[1]);
+    expect(writes()).toHaveLength(2);
+    expect(retry[0]).toBe(`/api/retention/biometrics/events/${first.id}`);
+    expect(retry[1]?.body).toBe(original[1]?.body);
+    expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(original[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(retry[1]?.headers).get("if-match")).toBe('"1"');
+  });
+
+  it.each(["read", "write"])(
+    "preserves existing admission fences during a pending %s",
+    async (phase) => {
+      const { state, first, second, fetcher, writes } = replacementWorkspace();
+      await mount();
+      await click("Edit", eventRows()[0]);
+      await changeEvent("Exact value", "71.200000");
+      const oldEdit = button("Edit", eventRows()[1]);
+      const pending = deferred<Response>();
+      if (phase === "read") {
+        state.eventRead = () => pending.promise;
+        invoke(button("Reload history"), "onClick");
+      } else {
+        state.write = () => pending.promise;
+        invoke(eventForm(), "onSubmit", { preventDefault() {} });
+      }
+      const before = replacementDraft();
+      const count = fetcher.mock.calls.length;
+      invoke(oldEdit, "onClick");
+      await hooks.settle();
+      expect(replacementDraft()).toEqual(before);
+      expect(fetcher.mock.calls).toHaveLength(count);
+      pending.resolve(
+        phase === "read"
+          ? eventPage([first, second])
+          : Response.json({ error: "Unknown outcome" }, { status: 503 }),
+      );
+      await hooks.settle();
+      expect(replacementDraft()).toEqual(before);
+      expect(writes()).toHaveLength(phase === "read" ? 0 : 1);
+    },
+  );
+
+  it("keeps the later repeated-minute instant and exact value-only retry while Edit is blocked", async () => {
+    const { state, writes } = historyWorkspace("2026-11-01T12:00:00.000Z");
+    state.timeZone = "America/Chicago";
+    const first = {
+      ...reading(1, "2026-11-01T07:34:56.789Z"),
+      localDate: "2026-11-01",
+      timeZone: "America/Chicago",
+    };
+    const second = {
+      ...reading(2, "2026-11-01T08:22:33.456Z"),
+      localDate: "2026-11-01",
+      timeZone: "America/Chicago",
+    };
+    state.eventRead = () => eventPage([first, second]);
+    const rows = () =>
+      elements(biometricSection()).filter(
+        (node) =>
+          node.type === "li" &&
+          elements(node).some(
+            (child) => child.type === "small" && text(child).includes(" · America/Chicago · "),
+          ),
+      );
+    await mount();
+    await click("Edit", rows()[0]);
+    expect(eventField("Local time").props.value).toBe("01:34");
+    await changeEvent("Exact value", "71.200000");
+    state.write = () => Response.json({ error: "Unknown outcome" }, { status: 503 });
+    await saveReading();
+    const original = requiredHistory(writes()[0]);
+    invoke(button("Edit", rows()[1]), "onClick");
+    await hooks.settle();
+    state.write = () =>
+      Response.json({
+        data: { event: { ...first, revision: "2", value: "71.200000" }, replayed: true },
+      });
+    await saveReading();
+    const retry = requiredHistory(writes()[1]);
+    expect(writes()).toHaveLength(2);
+    expect(retry[0]).toBe(original[0]);
+    expect(retry[1]?.body).toBe(JSON.stringify({ value: "71.200000" }));
+    expect(retry[1]?.body).toBe(original[1]?.body);
+    expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(original[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(retry[1]?.headers).get("if-match")).toBe('"1"');
+    expect(text(rows()[0])).toContain("01:34:56");
+    expect(text(eventForm())).toContain("Log event");
+    expect(button("Edit", rows()[1]).props.disabled).toBe(false);
+  });
+});

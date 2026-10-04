@@ -1341,7 +1341,7 @@ export function HealthClient() {
     );
   }
   function editEvent(event: BiometricEvent) {
-    if (!canUseEventRow(event)) return;
+    if (editingEvent !== null || !canEditEventDraft() || !canUseEventRow(event)) return;
     eventDraftGeneration.current += 1;
     setEditingEvent(event);
     setSelectedDefinition(event.definitionId);
@@ -2355,7 +2355,9 @@ export function HealthClient() {
                       {event.source.kind === "manual" ? (
                         <div className="entryActions">
                           <button
-                            disabled={historyUnavailable || !history.verified}
+                            disabled={
+                              editingEvent !== null || historyUnavailable || !history.verified
+                            }
                             onClick={() => editEvent(event)}
                             type="button"
                           >
