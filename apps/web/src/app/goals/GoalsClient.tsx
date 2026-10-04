@@ -1206,7 +1206,7 @@ export function GoalsClient() {
         requestedDate && isLocalDate(requestedDate) ? requestedDate : undefined,
         actionSession?.user.id,
       );
-    else requestReplacement("reload");
+    else requestReplacement("reload", date, true);
   }
 
   function builderHasEdits() {
@@ -1304,14 +1304,18 @@ export function GoalsClient() {
       void refreshSessionAndGoals(targetDate, sessionRef.current.user.id, "replace");
   }
 
-  function requestReplacement(action: "new" | "date" | "reload", targetDate = date) {
+  function requestReplacement(
+    action: "new" | "date" | "reload",
+    targetDate = date,
+    discardConflict = false,
+  ) {
     if (
       !canUseGoalControls(action !== "new") ||
       !isLocalDate(targetDate) ||
       (action === "new" && dateProposalPending.current)
     )
       return;
-    if (action === "reload" && conflictRef.current !== null) {
+    if (action === "reload" && discardConflict && conflictRef.current !== null) {
       performReplacement(action, targetDate);
     } else if (builderHasEdits()) openDraftChoice(action, targetDate);
     else performReplacement(action, targetDate);
@@ -2159,7 +2163,10 @@ export function GoalsClient() {
                 type="date"
                 disabled={!canUseGoalControls(true)}
                 onChange={(event) => changeProgressDate(event.target.value)}
-                onBlur={() => requestReplacement(dateDraft === date ? "reload" : "date", dateDraft)}
+                onBlur={() => {
+                  if (conflict && dateDraft === date && !dateProposalPending.current) return;
+                  requestReplacement(dateDraft === date ? "reload" : "date", dateDraft);
+                }}
                 value={dateDraft}
               />
             </label>

@@ -2380,3 +2380,172 @@ describe("goal progress limit labels", () => {
     expect(markup).toContain('style="width:50%"');
   });
 });
+
+describe("goal conflict date-blur protection", () => {
+  it.each([412, 409])(
+    "preserves the exact rejected %s draft on passive unchanged date blur",
+    async (code) => {
+      const { calls, setGoal } = await copyWorkspace({
+        intercept: ({ init }) =>
+          init?.method === "POST" ? Response.json({}, { status: code }) : undefined,
+      });
+      await editGoalDraft();
+      await submit();
+      await hooks.settle();
+      const before = rawEditor(),
+        count = calls.length;
+      setGoal(savedGoal(undefined, "4"));
+      expect(field("Progress date").props.disabled).toBe(false);
+      invoke(field("Progress date"), "onBlur");
+      await hooks.settle();
+      expect(rawEditor()).toEqual(before);
+      expect(calls).toHaveLength(count);
+      expect(text()).toContain("GOAL REVISION 3");
+      expect(hasButton(discardReloadGoalLabel)).toBe(true);
+      expect(hasButton("Keep editing")).toBe(false);
+    },
+  );
+
+  it("asks before replacing a conflicted draft after a genuine A-to-B-to-A date proposal", async () => {
+    const { calls, setGoal } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST" ? Response.json({}, { status: 412 }) : undefined,
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const before = goalDraftValues(),
+      count = calls.length;
+    setGoal(savedGoal(undefined, "4"));
+    await change("Progress date", "2026-09-12");
+    await change("Progress date", day);
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    expect(goalDraftValues()).toEqual(before);
+    expect(calls).toHaveLength(count);
+    expect(hasButton("Keep editing")).toBe(true);
+    await click("Keep editing");
+    expect(goalDraftValues()).toEqual(before);
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    expect(calls).toHaveLength(count);
+    await change("Progress date", "2026-09-12");
+    await change("Progress date", day);
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    const discardChoices = elements().filter(
+      (node) => node.type === "button" && text(node) === discardReloadGoalLabel,
+    );
+    expect(discardChoices).toHaveLength(2);
+    invoke(required(discardChoices.at(-1)), "onClick");
+    await hooks.settle();
+    expect(text()).toContain("GOAL REVISION 4");
+    assertSavedRows();
+    expect(button(copyLabel).props.disabled).toBe(false);
+    expect(writes(calls)).toHaveLength(1);
+  });
+
+  it("keeps a real changed-date choice explicit during conflict", async () => {
+    const { calls } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST" ? Response.json({}, { status: 412 }) : undefined,
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const before = goalDraftValues(),
+      count = calls.length;
+    await askGoalReplacement("date");
+    expect(goalDraftValues()).toEqual(before);
+    expect(calls).toHaveLength(count);
+    await click("Keep editing");
+    expect(field("Progress date").props.value).toBe(day);
+    expect(goalDraftValues()).toEqual(before);
+    await askGoalReplacement("date");
+    await click(discardGoalDateLabel);
+    expect(field("Progress date").props.value).toBe("2026-09-12");
+    assertSavedRows();
+    expect(writes(calls)).toHaveLength(1);
+  });
+
+  it("retains explicit conflict reload, failed-read preservation and later accepted recovery", async () => {
+    let failRead = false;
+    const { calls, setGoal } = await copyWorkspace({
+      intercept: ({ path, init }) => {
+        if (init?.method === "POST") return Response.json({}, { status: 412 });
+        if (failRead && path.startsWith("/api/goals/current?"))
+          return Response.json({}, { status: 503 });
+        return undefined;
+      },
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const before = goalDraftValues();
+    failRead = true;
+    await click(discardReloadGoalLabel);
+    expect(goalDraftValues()).toEqual(before);
+    expect(status()).toBe("The current goal could not be loaded.");
+    failRead = false;
+    setGoal(savedGoal(undefined, "4"));
+    await click(discardReloadGoalLabel);
+    expect(text()).toContain("GOAL REVISION 4");
+    assertSavedRows();
+    expect(writes(calls)).toHaveLength(1);
+  });
+
+  it("preserves an uncertain exact request across a later conflict and passive date blur", async () => {
+    let posts = 0;
+    const { calls } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST"
+          ? Response.json({}, { status: ++posts === 2 ? 412 : 503 })
+          : undefined,
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const first = required(writes(calls)[0]);
+    await change("Why this energy target?", "Different rejected body");
+    await submit();
+    await hooks.settle();
+    const before = goalDraftValues(),
+      count = calls.length;
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    expect(goalDraftValues()).toEqual(before);
+    expect(calls).toHaveLength(count);
+    await change("Why this energy target?", "  Raw energy rationale\nkeep spacing  ");
+    await submit();
+    await hooks.settle();
+    const replay = required(writes(calls)[2]);
+    expect(replay.init?.body).toBe(first.init?.body);
+    expect(new Headers(replay.init?.headers).get("idempotency-key")).toBe(
+      new Headers(first.init?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(replay.init?.headers).get("if-match")).toBe('"3"');
+  });
+
+  it("rejects an earlier date blur before paint and after unmount without private reloads", async () => {
+    const { calls } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST" ? Response.json({}, { status: 412 }) : undefined,
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const old = field("Progress date"),
+      count = calls.length;
+    invoke(old, "onChange", { target: { value: "2026-09-12" } });
+    invoke(old, "onBlur");
+    await hooks.settle();
+    expect(field("Progress date").props.value).toBe("2026-09-12");
+    expect(calls).toHaveLength(count);
+    const current = field("Progress date");
+    hooks.unmount();
+    invoke(current, "onBlur");
+    await hooks.settle();
+    expect(calls).toHaveLength(count);
+    expect(hooks.afterClose()).toBe(0);
+  });
+});
