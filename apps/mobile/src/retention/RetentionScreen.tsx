@@ -824,9 +824,14 @@ export function RetentionScreen({
   const customLogOrigin = useRef<typeof customLogDateContext | null>(null);
   const [customLog, setCustomLogState] = useState<CustomLogDraft | null>(null);
   const customLogRef = useRef(customLog);
+  const customLogGeneration = useRef(0);
+  const renderedCustomLogGeneration = customLogGeneration.current;
   const setCustomLog = useCallback((value: CustomLogDraft | null) => {
     customLogRef.current = value;
-    if (value === null) customLogOrigin.current = null;
+    if (value === null) {
+      customLogOrigin.current = null;
+      customLogGeneration.current += 1;
+    }
     setCustomLogState(value);
   }, []);
   const [definitionDraft, setDefinitionDraft] = useState<DefinitionDraft>(initialDefinition);
@@ -2314,9 +2319,34 @@ export function RetentionScreen({
     }
   }
 
+  function currentCustomLogContext() {
+    return (
+      currentCustomScope(renderedCustomEpoch) &&
+      customLogDateContextRef.current === customLogDateContext &&
+      customLogGeneration.current === renderedCustomLogGeneration &&
+      !customLogEnqueueInFlight.current &&
+      !customLogPending
+    );
+  }
   function openCustomLog(food: CustomFood) {
+    if (!currentCustomLogContext()) return;
+    customLogGeneration.current += 1;
     customLogOrigin.current = customLogDateContext;
     setCustomLog(initialCustomLog(food, profileTimeZone));
+  }
+  function canChangeCustomLog() {
+    return (
+      currentCustomLogContext() &&
+      customLogOrigin.current === customLogDateContext &&
+      customLogRef.current !== null
+    );
+  }
+  function changeCustomLog(patch: Partial<CustomLogDraft>) {
+    if (!canChangeCustomLog() || !customLogRef.current) return;
+    setCustomLog({ ...customLogRef.current, ...patch });
+  }
+  function cancelCustomLog() {
+    if (canChangeCustomLog()) setCustomLog(null);
   }
   function canChooseCustomLogDate() {
     return (
@@ -2340,11 +2370,10 @@ export function RetentionScreen({
   }
 
   async function logCustomFood() {
+    if (!canChangeCustomLog()) return;
+    const customLog = customLogRef.current;
     if (!customLog || !isPositiveDecimal(customLog.quantity)) {
       return setMessage("Enter a positive custom-food quantity.");
-    }
-    if (customLogEnqueueInFlight.current) {
-      return setMessage("Wait for the current custom-food log to be secured on this device.");
     }
     const serving = customLog.food.currentVersion.serving;
     if (customLog.kind === "serving" && !serving)
@@ -2375,6 +2404,7 @@ export function RetentionScreen({
     } catch (error) {
       return setMessage(error instanceof Error ? error.message : "Log time was invalid.");
     }
+    customLogGeneration.current += 1;
     customLogEnqueueInFlight.current = true;
     setBusy("custom-log");
     try {
@@ -3795,6 +3825,7 @@ export function RetentionScreen({
     );
   });
 
+  const customLogPending = customLogEnqueueInFlight.current;
   const customLogDateDisabled = !canChooseCustomLogDate();
   const customLogUnavailable =
     busy !== null ||
@@ -4337,7 +4368,12 @@ export function RetentionScreen({
                   onPress={() => reviseCustom(food)}
                   secondary
                 />
-                <Button label="Log exact version" onPress={() => openCustomLog(food)} secondary />
+                <Button
+                  label="Log exact version"
+                  disabled={customLogPending}
+                  onPress={() => openCustomLog(food)}
+                  secondary
+                />
                 {food.status === "active" ? (
                   <Button
                     label="Archive"
@@ -4363,28 +4399,28 @@ export function RetentionScreen({
                     : []),
                 ]}
                 selected={customLog.kind}
-                onSelect={(kind) =>
-                  setCustomLog({ ...customLog, kind: kind as "grams" | "serving" })
-                }
+                disabled={customLogPending}
+                onSelect={(kind) => changeCustomLog({ kind: kind as "grams" | "serving" })}
               />
               <LabeledInput
                 label="Quantity"
                 value={customLog.quantity}
-                onChangeText={(quantity) => setCustomLog({ ...customLog, quantity })}
+                disabled={customLogPending}
+                onChangeText={(quantity) => changeCustomLog({ quantity })}
                 keyboardType="decimal-pad"
                 maxLength={19}
               />
               <ChipRow
                 items={diaryGroups.map(({ mealSlot, label }) => ({ key: mealSlot, label }))}
                 selected={customLog.mealSlot}
-                onSelect={(mealSlot) =>
-                  setCustomLog({ ...customLog, mealSlot: mealSlot as MealSlot })
-                }
+                disabled={customLogPending}
+                onSelect={(mealSlot) => changeCustomLog({ mealSlot: mealSlot as MealSlot })}
               />
               <LabeledInput
                 label="Local date"
                 value={customLog.localDate}
-                onChangeText={(localDate) => setCustomLog({ ...customLog, localDate })}
+                disabled={customLogPending}
+                onChangeText={(localDate) => changeCustomLog({ localDate })}
                 maxLength={10}
               />
               <View style={styles.actions}>
@@ -4404,7 +4440,8 @@ export function RetentionScreen({
               <LabeledInput
                 label="Local time"
                 value={customLog.localTime}
-                onChangeText={(localTime) => setCustomLog({ ...customLog, localTime })}
+                disabled={customLogPending}
+                onChangeText={(localTime) => changeCustomLog({ localTime })}
                 maxLength={5}
               />
               {quickAddOutboxState.pendingCount > 0 ? (
@@ -4426,7 +4463,12 @@ export function RetentionScreen({
                   }
                   onPress={() => void logCustomFood()}
                 />
-                <Button label="Cancel" onPress={() => setCustomLog(null)} secondary />
+                <Button
+                  label="Cancel"
+                  disabled={customLogPending}
+                  onPress={cancelCustomLog}
+                  secondary
+                />
               </View>
             </View>
           ) : null}

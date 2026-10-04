@@ -11296,3 +11296,241 @@ describe("native Archive integration with private logging and closure", () => {
     }
   });
 });
+
+describe("custom-food pending secure enqueue editor protection", () => {
+  function pendingLogSetup() {
+    const held = deferred();
+    const second = {
+      ...archivedFood,
+      status: "active",
+      currentVersion: { ...archivedFood.currentVersion, name: "Second private food" },
+    };
+    const value = setup(
+      (request) =>
+        request.url.pathname === "/v1/custom-foods"
+          ? response({ data: [sourceFood, second], page: { nextCursor: null } })
+          : undefined,
+      {
+        diaryGroups: [
+          { mealSlot: "breakfast", label: "Breakfast" },
+          { mealSlot: "lunch", label: "Lunch" },
+        ],
+      },
+    );
+    value.props.quickAddOutboxController.enqueueOperation.mockImplementation(() =>
+      held.promise.then((result) => {
+        if (result instanceof Error) throw result;
+        return result;
+      }),
+    );
+    return { ...value, held };
+  }
+  function logButtons(tree) {
+    return nodes(tree, (node) => node.type === "Pressable" && text(node) === "Log exact version");
+  }
+  function rawLog(tree) {
+    const editor = nodes(
+      tree,
+      (node) =>
+        node.type === "View" &&
+        React.Children.toArray(node.props.children).some(
+          (child) =>
+            child.type === "Text" &&
+            text(child).startsWith("Log ") &&
+            text(child).includes("private food v"),
+        ),
+    )[0];
+    return nodes(
+      editor,
+      (node) =>
+        node.type === "TextInput" &&
+        ["Quantity", "Local date", "Local time"].includes(node.props.accessibilityLabel),
+    ).map((node) => [node.props.accessibilityLabel, node.props.value]);
+  }
+  async function openPendingDraft(harness) {
+    logButtons(await harness.settle())[0].props.onPress();
+    await changeCustomLogField(harness, "Quantity", "1.230000");
+    await changeCustomLogField(harness, "Local date", "2026-09-01");
+    return changeCustomLogField(harness, "Local time", "14:35");
+  }
+  for (const action of [
+    "Quantity",
+    "Local date",
+    "Local time",
+    "Grams",
+    "Lunch",
+    "Cancel",
+    "replacement",
+  ]) {
+    it(
+      "freezes ordinary " + action + " until accepted enqueue closes only the submitted draft",
+      async () => {
+        const { harness, props, held } = pendingLogSetup();
+        try {
+          const ready = await openPendingDraft(harness);
+          const before = rawLog(ready);
+          button(ready, "Secure & log pinned version").props.onPress();
+          let tree = await harness.settle();
+          const field = ["Quantity", "Local date", "Local time"].includes(action);
+          const target =
+            action === "replacement"
+              ? logButtons(tree)[1]
+              : field
+                ? input(logEditor(tree), action)
+                : button(logEditor(tree), action);
+          const disabled = field ? target.props.editable === false : target.props.disabled === true;
+          if (field)
+            target.props.onChangeText(
+              action === "Quantity" ? "9.8700" : action === "Local date" ? "2026-09-02" : "15:46",
+            );
+          else target.props.onPress();
+          tree = await harness.settle();
+          const during = rawLog(tree);
+          const secondOpened = text(tree).includes("Log Second private food v");
+          const gramsChosen = nodes(
+            tree,
+            (node) => node.type === "Pressable" && text(node) === "Grams",
+          ).some((node) => node.props.accessibilityState?.selected);
+          const lunchChosen = nodes(
+            tree,
+            (node) => node.type === "Pressable" && text(node) === "Lunch",
+          ).some((node) => node.props.accessibilityState?.selected);
+          held.resolve({ operationId: "selected-log" });
+          tree = await harness.settle();
+          expect(rawLog(tree)).toEqual([]);
+          expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+            operationKind: "custom_food",
+            customFoodName: sourceFood.currentVersion.name,
+            customFoodId: foodId,
+            customFoodVersionId: "123",
+            customFoodVersionNumber: 1,
+            portion: {
+              kind: "serving",
+              servingId: "456",
+              amount: "1.230000",
+              servingLabel: "scoop",
+            },
+            mealSlot: "breakfast",
+            localDate: "2026-09-01",
+            occurredAt: "2026-09-01T19:35:00.000Z",
+          });
+          expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+            "selected-log",
+          );
+          expect({ during, secondOpened, gramsChosen, lunchChosen, disabled }).toEqual({
+            during: before,
+            secondOpened: false,
+            gramsChosen: false,
+            lunchChosen: false,
+            disabled: true,
+          });
+        } finally {
+          harness.unmount();
+        }
+      },
+    );
+  }
+  it("rejects prepaint edits, cancel, replacement and duplicate submission, then retires captured callbacks", async () => {
+    const { harness, props, held } = pendingLogSetup();
+    try {
+      const ready = await openPendingDraft(harness);
+      const editor = logEditor(ready);
+      const editQuantity = input(editor, "Quantity").props.onChangeText;
+      const editTime = input(editor, "Local time").props.onChangeText;
+      const cancel = button(editor, "Cancel").props.onPress;
+      const replace = logButtons(ready)[1].props.onPress;
+      const save = button(editor, "Secure & log pinned version").props.onPress;
+      save();
+      editQuantity("9");
+      editTime("15:00");
+      cancel();
+      replace();
+      save();
+      const during = rawLog(await harness.settle());
+      held.resolve({ operationId: "prepaint-log" });
+      await harness.settle();
+      editQuantity("8");
+      editTime("16:00");
+      cancel();
+      save();
+      expect(rawLog(await harness.settle())).toEqual([]);
+      expect(during).toEqual(rawLog(ready));
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "prepaint-log",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps raw submitted fields after definite failure and restores current edits, cancel and another Log", async () => {
+    const { harness, props, held } = pendingLogSetup();
+    try {
+      const ready = await openPendingDraft(harness);
+      button(ready, "Secure & log pinned version").props.onPress();
+      held.resolve(new Error("Synthetic secure-store rejection"));
+      let tree = await harness.settle();
+      expect(rawLog(tree)).toEqual(rawLog(ready));
+      expect(text(tree)).toContain("The custom food was not queued.");
+      expect(input(logEditor(tree), "Quantity").props.editable).not.toBe(false);
+      tree = await changeCustomLogField(harness, "Quantity", "2.3400");
+      expect(input(logEditor(tree), "Quantity").props.value).toBe("2.3400");
+      button(logEditor(tree), "Cancel").props.onPress();
+      tree = await harness.settle();
+      logButtons(tree)[1].props.onPress();
+      expect(text(await harness.settle())).toContain("Log Second private food v 1");
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("preserves ambiguous enqueue policy without resubmitting or resurrecting the retired editor", async () => {
+    const { QuickAddEnqueueAmbiguousError } = await import("../src/diary/quick-add-outbox");
+    const { harness, props, held } = pendingLogSetup();
+    try {
+      const ready = await openPendingDraft(harness);
+      const quantity = input(logEditor(ready), "Quantity").props.onChangeText;
+      const save = button(ready, "Secure & log pinned version").props.onPress;
+      save();
+      held.resolve(
+        new QuickAddEnqueueAmbiguousError("ambiguous-log", new Error("Synthetic uncertainty")),
+      );
+      let tree = await harness.settle();
+      expect(rawLog(tree)).toEqual([]);
+      expect(text(tree)).toContain("Do not submit it again until the queue status recovers.");
+      quantity("7");
+      save();
+      tree = await harness.settle();
+      expect(rawLog(tree)).toEqual([]);
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "ambiguous-log",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps successive same-render ordinary fields and captures the latest draft on Save", async () => {
+    const { harness, props, held } = pendingLogSetup();
+    try {
+      const ready = await openPendingDraft(harness);
+      const editor = logEditor(ready);
+      const quantity = input(editor, "Quantity").props.onChangeText;
+      quantity("2");
+      quantity("2.3400");
+      input(editor, "Local time").props.onChangeText("15:46");
+      button(editor, "Secure & log pinned version").props.onPress();
+      held.resolve({ operationId: "latest-log" });
+      await harness.settle();
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          portion: expect.objectContaining({ amount: "2.3400" }),
+          occurredAt: "2026-09-01T20:46:00.000Z",
+        }),
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+});
