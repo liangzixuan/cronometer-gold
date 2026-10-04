@@ -3202,6 +3202,8 @@ export function RetentionScreen({
           revision: reminder.revision,
         }),
       );
+      if (reminderDraftRef.current.reminder?.id === saved.id)
+        installReminderDraft(initialReminder(), true);
       await refreshReminderSchedules([saved, ...reminders.filter((item) => item.id !== saved.id)]);
       setMessage("Reminder consent revoked and local schedules removed.");
     } catch (error) {

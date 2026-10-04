@@ -11747,3 +11747,242 @@ describe("native accepted Delete reading editor retirement", () => {
     });
   }
 });
+
+describe("native accepted Revoke reminder editor retirement", () => {
+  const other = {
+    ...savedReminder,
+    id: "218f6f58-4e2c-7b62-8f0b-3d75491713b5",
+    label: "Other reminder",
+  };
+  const revoked = (replayed = false) =>
+    response({
+      data: {
+        replayed,
+        reminder: {
+          ...savedReminder,
+          revision: "4",
+          status: "revoked",
+          consent: { ...savedReminder.consent, revokedAt: timestamp },
+        },
+      },
+    });
+  const draft = (tree) => ({
+    label: input(tree, "Private in-app label").props.value,
+    time: input(tree, "Local time in America/Chicago").props.value,
+    days: reminderDays(tree),
+    editing:
+      nodes(
+        reminderSection(tree),
+        (node) => node.type === "Pressable" && text(node) === "Save reminder",
+      ).length === 1,
+  });
+  const clean = {
+    label: "Daily check-in",
+    time: "20:00",
+    days: [1, 2, 3, 4, 5, 6, 7],
+    editing: false,
+  };
+  async function raw(harness, invalid = false) {
+    await pressReminder(harness, "Edit / pause", true);
+    await type(harness, "Private in-app label", " Raw correction ");
+    await type(harness, "Local time in America/Chicago", invalid ? "invalid" : "07:08");
+    return pressReminder(harness, "Weekdays");
+  }
+  for (const invalid of [false, true]) {
+    it(`retires the same reminder after accepted Revoke with ${invalid ? "invalid" : "valid"} raw fields`, async () => {
+      const { harness, requests } = setupReminders((request) =>
+        request.method === "DELETE" ? revoked() : undefined,
+      );
+      try {
+        const before = await raw(harness, invalid);
+        expect(button(reminderCard(before), "Revoke").props.disabled).toBe(false);
+        const effects = reminderEffects(requests);
+        const tree = await pressReminder(harness, "Revoke", true);
+        const [write] = reminderWrites(requests);
+        expect(write.method).toBe("DELETE");
+        expect(write.url.pathname).toBe(`/v1/reminders/${savedReminder.id}`);
+        expect(write.body).toBeUndefined();
+        expect(write.headers["if-match"]).toBe('"3"');
+        expect(text(reminderCard(tree))).toContain("revoked");
+        expect(reconcileLocalReminderSchedules.mock.calls.at(-1)[0][0]).toEqual({
+          ...savedReminder,
+          revision: "4",
+          status: "revoked",
+          consent: { ...savedReminder.consent, revokedAt: timestamp },
+        });
+        expect(reminderEffects(requests).reconcile).toBe(effects.reconcile + 1);
+        expect(hooks.notificationPermission).not.toHaveBeenCalled();
+        expect(hooks.scheduleNotification).not.toHaveBeenCalled();
+        expect(draft(tree)).toEqual(clean);
+        expect(button(reminderSection(tree), "Grant access and create").props.disabled).toBe(false);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("keeps pre-Revoke Save/Edit callbacks retired after acceptance and revoked row actions absent", async () => {
+    const pending = deferred();
+    const { harness, requests } = setupReminders((request) =>
+      request.method === "DELETE" ? pending.promise : undefined,
+    );
+    try {
+      const tree = await raw(harness);
+      const save = button(reminderSection(tree), "Save reminder").props.onPress;
+      const edit = button(reminderCard(tree), "Edit / pause").props.onPress;
+      button(reminderCard(tree), "Revoke").props.onPress();
+      save();
+      edit();
+      await harness.settle();
+      expect(reminderWrites(requests)).toHaveLength(1);
+      pending.resolve(revoked());
+      const after = await harness.settle();
+      save();
+      edit();
+      await harness.settle();
+      expect(reminderWrites(requests)).toHaveLength(1);
+      expect(nodes(reminderCard(after), (node) => node.type === "Pressable")).toHaveLength(0);
+      expect(draft(after)).toEqual(clean);
+    } finally {
+      pending.resolve(revoked());
+      harness.unmount();
+    }
+  });
+  it("retires the current same-ID editor after fields change while Revoke waits", async () => {
+    const pending = deferred();
+    const { harness, requests } = setupReminders((request) =>
+      request.method === "DELETE" ? pending.promise : undefined,
+    );
+    try {
+      await raw(harness);
+      await pressReminder(harness, "Revoke", true);
+      await type(harness, "Private in-app label", " newer raw draft ");
+      await type(harness, "Local time in America/Chicago", "25:99");
+      await pressReminder(harness, "Weekends");
+      pending.resolve(revoked());
+      expect(draft(await harness.settle())).toEqual(clean);
+      expect(reminderWrites(requests)).toHaveLength(1);
+    } finally {
+      pending.resolve(revoked());
+      harness.unmount();
+    }
+  });
+  it("preserves an unrelated reminder correction through accepted Revoke", async () => {
+    const { harness, requests } = setupReminders(
+      (request) => (request.method === "DELETE" ? revoked() : undefined),
+      [savedReminder, other],
+    );
+    try {
+      let tree = await harness.settle();
+      button(reminderCard(tree, other.id), "Edit / pause").props.onPress();
+      await harness.settle();
+      await type(harness, "Private in-app label", " Other raw correction ");
+      await type(harness, "Local time in America/Chicago", "invalid");
+      const before = draft(await pressReminder(harness, "Weekdays"));
+      tree = await pressReminder(harness, "Revoke", true);
+      expect(draft(tree)).toEqual(before);
+      expect(reminderWrites(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const next of ["new", "other"]) {
+    it(`preserves an independent ${next} draft installed while Revoke waits`, async () => {
+      const pending = deferred();
+      const { harness, requests } = setupReminders(
+        (request) => (request.method === "DELETE" ? pending.promise : undefined),
+        [savedReminder, other],
+      );
+      try {
+        await raw(harness);
+        await pressReminder(harness, "Revoke", true);
+        await pressReminder(harness, "Cancel");
+        let tree = await pressReminder(harness, "Discard draft and cancel reminder edit");
+        if (next === "other") {
+          button(reminderCard(tree, other.id), "Edit / pause").props.onPress();
+          await harness.settle();
+        }
+        await type(harness, "Private in-app label", " Independent raw draft ");
+        await type(harness, "Local time in America/Chicago", "09:10");
+        const before = draft(await pressReminder(harness, "Weekdays"));
+        pending.resolve(revoked());
+        tree = await harness.settle();
+        expect(draft(tree)).toEqual(before);
+        expect(reminderWrites(requests)).toHaveLength(1);
+      } finally {
+        pending.resolve(revoked());
+        harness.unmount();
+      }
+    });
+  }
+  for (const failure of [400, 412, "malformed", "transport"]) {
+    it(`preserves the raw editor and existing ${failure} retry policy until accepted Revoke`, async () => {
+      let attempt = 0;
+      const { harness, requests } = setupReminders((request) => {
+        if (request.method !== "DELETE") return undefined;
+        if (++attempt > 1) return revoked(true);
+        if (failure === "transport") throw new Error("Synthetic lost Revoke response");
+        if (failure === "malformed") return response({ data: {} });
+        return response({ error: { message: "Synthetic Revoke rejection" } }, failure);
+      });
+      try {
+        const before = draft(await raw(harness));
+        const effects = reminderEffects(requests);
+        let tree = await pressReminder(harness, "Revoke", true);
+        expect(draft(tree)).toEqual(before);
+        expect(reminderEffects(requests).reconcile).toBe(effects.reconcile);
+        const first = reminderWrites(requests)[0];
+        tree = await pressReminder(harness, "Revoke", true);
+        const retry = reminderWrites(requests)[1];
+        expect(retry.url.pathname).toBe(first.url.pathname);
+        expect(retry.method).toBe(first.method);
+        expect(retry.body).toBe(first.body);
+        expect(retry.headers["if-match"]).toBe(first.headers["if-match"]);
+        // Shared request retires known 412 and successful HTTP keys before parsing the envelope.
+        if (failure === 412 || failure === "malformed")
+          expect(retry.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+        else expect(retry.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+        expect(draft(tree)).toEqual(clean);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("retires on server acceptance before delayed reconciliation and preserves a later new draft", async () => {
+    const pending = deferred();
+    const { harness, requests } = setupReminders((request) =>
+      request.method === "DELETE" ? revoked() : undefined,
+    );
+    try {
+      await raw(harness);
+      reconcileLocalReminderSchedules.mockImplementationOnce(() => pending.promise);
+      const tree = await pressReminder(harness, "Revoke", true);
+      expect(draft(tree)).toEqual(clean);
+      await type(harness, "Private in-app label", " New draft during reconciliation ");
+      const before = draft(await harness.settle());
+      pending.resolve({ permission: "granted" });
+      expect(draft(await harness.settle())).toEqual(before);
+      expect(reminderWrites(requests)).toHaveLength(1);
+      expect(hooks.notificationPermission).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve({ permission: "granted" });
+      harness.unmount();
+    }
+  });
+  it("retires an accepted revocation even if local reconciliation fails", async () => {
+    const { harness, requests } = setupReminders((request) =>
+      request.method === "DELETE" ? revoked() : undefined,
+    );
+    try {
+      await raw(harness);
+      reconcileLocalReminderSchedules.mockRejectedValueOnce(
+        new Error("Synthetic local schedule failure"),
+      );
+      const tree = await pressReminder(harness, "Revoke", true);
+      expect(text(reminderCard(tree))).toContain("revoked");
+      expect(draft(tree)).toEqual(clean);
+      expect(reminderWrites(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
