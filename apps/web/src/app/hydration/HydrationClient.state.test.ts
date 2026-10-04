@@ -2631,3 +2631,269 @@ describe("Hydration editor replacement protection", () => {
     },
   );
 });
+
+describe("Hydration unrelated Delete correction preservation", () => {
+  const other = created(500);
+  const deletion = (replayed = false) =>
+    Response.json({
+      data: {
+        replayed,
+        entry: null,
+        affectedDays: [{ localDate: original.localDate, revision: "5" }],
+      },
+    });
+  function rowAction(id: string, label: string): ElementNode {
+    const row = elements().find(
+      (node) => node.type === "li" && (node as ElementNode & { key?: string }).key === id,
+    );
+    const result = elements(row ?? null).find(
+      (node) => node.type === "button" && text(node) === label,
+    );
+    if (!result) throw new Error(`Missing ${label} for ${id}`);
+    return result;
+  }
+  function draftFields() {
+    const form = elements().find(
+      (node) => node.type === "form" && node.props.className === "hydrationEditor",
+    );
+    return elements(form ?? null)
+      .filter((node) => node.type === "input")
+      .map((node) => ({ value: node.props.value, checked: node.props.checked }));
+  }
+  async function openDraft(occurrence = false) {
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    invoke(rowAction(original.id, "Edit entry"), "onClick");
+    await hooks.settle();
+    await change("Milliliters at 01:30", occurrence ? "625" : "003x");
+    await change("Correct date or time", true);
+    await change("Corrected local time", occurrence ? "01:31" : "");
+    if (occurrence) {
+      invoke(field("Later occurrence · UTC−06:00"), "onChange");
+      await hooks.settle();
+    } else await change("Corrected local date", "");
+  }
+  async function removeOther() {
+    const control = rowAction(other.id, "Delete");
+    expect(control.props.disabled).toBe(false);
+    invoke(control, "onClick");
+    await hooks.settle();
+  }
+
+  it.each([false, true])(
+    "preserves the ordinary raw correction after accepted other-row Delete (occurrence %s)",
+    async (occurrence) => {
+      const writes: Array<{ url: string; init: RequestInit }> = [];
+      let entries = [original, other];
+      const confirm = vi.fn(() => true);
+      vi.stubGlobal("window", { confirm });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(owner, "America/Chicago");
+          if (init?.method === "DELETE") {
+            writes.push({ url, init });
+            entries = [original];
+            return deletion();
+          }
+          return day(entries, original.localDate, "America/Chicago");
+        }),
+      );
+      await openDraft(occurrence);
+      const before = draftFields();
+      expect(before.length).toBeGreaterThan(0);
+      await removeOther();
+      expect(confirm).toHaveBeenCalledTimes(1);
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.url).toBe(`/api/hydration/entries/${other.id}`);
+      expect(writes[0]?.init.body).toBeUndefined();
+      expect(new Headers(writes[0]?.init.headers).get("if-match")).toBe('"1"');
+      expect(text()).toContain("Hydration entry deleted and the exact total refreshed.");
+      expect(draftFields()).toEqual(before);
+    },
+  );
+
+  it("restores the exact draft after accepted Delete read failure using a read-only retry", async () => {
+    let reads = 0;
+    let deletes = 0;
+    const held = deferred<Response>();
+    vi.stubGlobal("window", { confirm: () => true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "DELETE") {
+          deletes += 1;
+          return deletion();
+        }
+        if (++reads === 2) return held.promise;
+        return day(reads === 1 ? [original, other] : [original]);
+      }),
+    );
+    await openDraft();
+    const before = draftFields();
+    await removeOther();
+    held.resolve(Response.json({ error: "Read unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(text()).toContain("Retry day view");
+    expect(text()).not.toContain("Retry saved change");
+    await click("Retry day view");
+    expect(deletes).toBe(1);
+    expect(reads).toBe(3);
+    expect(draftFields()).toEqual(before);
+  });
+
+  it("replays the exact pending Delete and preserves a later-occurrence correction for Save", async () => {
+    const writes: Array<{ url: string; init: RequestInit }> = [];
+    let entries = [original, other];
+    vi.stubGlobal("window", { confirm: () => true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "DELETE" || init?.method === "PATCH") {
+          writes.push({ url, init });
+          if (writes.length === 1)
+            return Response.json({ error: "Unknown outcome." }, { status: 503 });
+          if (init.method === "DELETE") {
+            entries = [original];
+            return deletion(true);
+          }
+          const corrected = {
+            ...original,
+            amountMilliliters: 625,
+            revision: "3",
+            occurredAt: "2026-11-01T07:31:00.000Z",
+            localTime: "01:31:00",
+          };
+          entries = [corrected];
+          return Response.json(receipt(corrected));
+        }
+        return day(entries, original.localDate, "America/Chicago");
+      }),
+    );
+    await openDraft(true);
+    const before = draftFields();
+    await removeOther();
+    await click("Retry saved change");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.url).toBe(writes[0]?.url);
+    expect(writes[1]?.init.body).toBe(writes[0]?.init.body);
+    expect(writes[1]?.init.headers).toEqual(writes[0]?.init.headers);
+    expect(draftFields()).toEqual(before);
+    await submit("Save correction");
+    expect(writes).toHaveLength(3);
+    expect(writes[2]?.init.method).toBe("PATCH");
+    expect(JSON.parse(String(writes[2]?.init.body))).toEqual({
+      amountMilliliters: 625,
+      occurredAt: "2026-11-01T07:31:00.000Z",
+    });
+    expect(draftFields()).toEqual([]);
+  });
+
+  it.each(["missing", "changed-source", "changed-zone"])(
+    "retires the correction after other-row Delete when readback is %s",
+    async (kind) => {
+      let deleted = false;
+      let writes = 0;
+      vi.stubGlobal("window", { confirm: () => true });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "DELETE") {
+            writes += 1;
+            deleted = true;
+            return deletion();
+          }
+          if (!deleted) return day([original, other]);
+          return day(
+            kind === "missing"
+              ? []
+              : [
+                  {
+                    ...original,
+                    ...(kind === "changed-source" ? { createdAt: "2026-11-01T07:30:46.001Z" } : {}),
+                  },
+                ],
+            original.localDate,
+            kind === "changed-zone" ? "America/Chicago" : "America/New_York",
+          );
+        }),
+      );
+      await openDraft();
+      await removeOther();
+      expect(writes).toBe(1);
+      expect(draftFields()).toEqual([]);
+      expect(text()).not.toContain("Save correction");
+    },
+  );
+
+  it("keeps the existing same-entry Delete retirement and no-editor Delete behavior", async () => {
+    const held = deferred<Response>();
+    let reads = 0;
+    let writes = 0;
+    vi.stubGlobal("window", { confirm: () => true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "DELETE") {
+          writes += 1;
+          return deletion();
+        }
+        if (++reads === 2) return held.promise;
+        return day(reads === 1 ? [original, other] : []);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    const ownDelete = rowAction(original.id, "Delete");
+    invoke(rowAction(original.id, "Edit entry"), "onClick");
+    await hooks.settle();
+    await change("Milliliters at 01:30", "003x");
+    invoke(ownDelete, "onClick");
+    await hooks.settle();
+    held.resolve(day([other]));
+    await hooks.settle();
+    expect(draftFields()).toEqual([]);
+    expect(writes).toBe(1);
+    await removeOther();
+    expect(writes).toBe(2);
+    expect(text()).toContain("No hydration entries for this local day.");
+  });
+
+  it("keeps the draft and makes no request when the ordinary Delete confirmation is cancelled", async () => {
+    vi.stubGlobal("window", { confirm: () => false });
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? session() : day([original, other]),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    await openDraft();
+    const before = draftFields();
+    await removeOther();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(draftFields()).toEqual(before);
+  });
+
+  it("retains known-rejected Delete invalidation rather than preserving a stale correction", async () => {
+    let writes = 0;
+    vi.stubGlobal("window", { confirm: () => true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "DELETE") {
+          writes += 1;
+          return Response.json({ error: "Changed entry." }, { status: 412 });
+        }
+        return day([original, other]);
+      }),
+    );
+    await openDraft();
+    await removeOther();
+    await click("Reload and review entries");
+    expect(writes).toBe(1);
+    expect(draftFields()).toEqual([]);
+  });
+});

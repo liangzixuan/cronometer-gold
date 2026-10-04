@@ -616,7 +616,12 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
       pendingRef.current = null;
       setPending(null);
       if (operation.method === "POST") setAmount("");
-      else setEdit(null);
+      else
+        setEdit((current) =>
+          operation.method === "DELETE" && current?.entry.id !== operation.originalEntry?.id
+            ? current
+            : null,
+        );
       const moved = operation.destinationDate !== operation.sourceDate;
       const successMessage = moved
         ? `Hydration entry moved to ${operation.destinationDate}. The selected source day ${operation.sourceDate} was refreshed.`
