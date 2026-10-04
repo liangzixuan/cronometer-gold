@@ -709,6 +709,18 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     }
   }
 
+  function beginEdit(entry: HydrationEntry) {
+    if (!canEditAddDraft() || !day?.entries.includes(entry)) return;
+    setEdit(
+      (current) =>
+        current ?? {
+          entry,
+          amount: String(entry.amountMilliliters),
+          time: hydrationTimeDraft(entry, day.timeZone),
+        },
+    );
+  }
+
   async function updateEntry() {
     if (!edit) return;
     try {
@@ -1225,14 +1237,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                       <div className="entryActions">
                         <button
                           className="buttonQuiet"
-                          disabled={controlsDisabled}
-                          onClick={() =>
-                            setEdit({
-                              entry,
-                              amount: String(entry.amountMilliliters),
-                              time: hydrationTimeDraft(entry, day.timeZone),
-                            })
-                          }
+                          disabled={controlsDisabled || edit !== null}
+                          onClick={() => beginEdit(entry)}
                           type="button"
                         >
                           Edit entry

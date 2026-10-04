@@ -2393,3 +2393,241 @@ describe("Hydration unrelated Add correction preservation", () => {
     },
   );
 });
+
+describe("Hydration editor replacement protection", () => {
+  const second = created(500);
+  function editButton(id: string): ElementNode {
+    const row = elements().find(
+      (node) => node.type === "li" && (node as ElementNode & { key?: string }).key === id,
+    );
+    const found = elements(row ?? null).find(
+      (node) => node.type === "button" && text(node) === "Edit entry",
+    );
+    if (!found) throw new Error(`Missing Edit entry for ${id}`);
+    return found;
+  }
+  function correctionFields() {
+    const form = elements().find(
+      (node) => node.type === "form" && node.props.className === "hydrationEditor",
+    );
+    return elements(form ?? null)
+      .filter((node) => node.type === "input")
+      .map((node) => ({ value: node.props.value, checked: node.props.checked }));
+  }
+  async function ready() {
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? session() : day([original, second]),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    return fetcher;
+  }
+  async function rawCorrection() {
+    invoke(editButton(original.id), "onClick");
+    await hooks.settle();
+    await change("Milliliters at 01:30", "003x");
+    await change("Correct date or time", true);
+    await change("Corrected local date", "");
+    await change("Corrected local time", "");
+  }
+
+  it("keeps the ordinary other-row Edit action from replacing a complete raw correction", async () => {
+    const fetcher = await ready();
+    await rawCorrection();
+    const before = correctionFields();
+    const other = editButton(second.id);
+    // Follow the ordinary enabled-button action on the original production code.
+    if (!other.props.disabled) invoke(other, "onClick");
+    await hooks.settle();
+    expect(correctionFields()).toEqual(before);
+    expect(other.props.disabled).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps current-render Edit callbacks inert even when invoked directly", async () => {
+    const fetcher = await ready();
+    await rawCorrection();
+    const before = correctionFields();
+    invoke(editButton(second.id), "onClick");
+    await hooks.settle();
+    expect(correctionFields()).toEqual(before);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("admits only the first queued editor before another render", async () => {
+    const fetcher = await ready();
+    const first = editButton(original.id);
+    const other = editButton(second.id);
+    invoke(first, "onClick");
+    invoke(other, "onClick");
+    await hooks.settle();
+    expect(field("Milliliters at 01:30").props.value).toBe("375");
+    await change("Milliliters at 01:30", "625");
+    invoke(first, "onClick");
+    await hooks.settle();
+    expect(field("Milliliters at 01:30").props.value).toBe("625");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a selected occurrence and exact pending correction retry through held Edit callbacks", async () => {
+    const writes: RequestInit[] = [];
+    const response = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "PATCH") {
+          writes.push(init);
+          return writes.length === 1
+            ? response.promise
+            : Response.json({ error: "Still unavailable." }, { status: 503 });
+        }
+        return day([original, second], original.localDate, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    invoke(editButton(original.id), "onClick");
+    await hooks.settle();
+    await change("Milliliters at 01:30", "625");
+    await change("Correct date or time", true);
+    await change("Corrected local time", "01:31");
+    const later = field("Later occurrence · UTC−06:00");
+    invoke(later, "onChange");
+    await hooks.settle();
+    const before = correctionFields();
+    const heldOther = editButton(second.id);
+    invoke(heldOther, "onClick");
+    await hooks.settle();
+    expect(correctionFields()).toEqual(before);
+    await submit("Save correction");
+    expect(writes).toHaveLength(1);
+    invoke(heldOther, "onClick");
+    await hooks.settle();
+    expect(correctionFields()).toEqual(before);
+    response.resolve(Response.json({ error: "Unavailable." }, { status: 503 }));
+    await hooks.settle();
+    invoke(heldOther, "onClick");
+    await click("Retry saved change");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(new Headers(writes[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes[0]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"2"');
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({
+      amountMilliliters: 625,
+      occurredAt: "2026-11-01T07:31:00.000Z",
+    });
+  });
+
+  it.each(["Cancel", "Save"])(
+    "restores ordinary other-row editing after %s and keeps the independent Add draft",
+    async (action) => {
+      let saved = original;
+      const writes: RequestInit[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "PATCH") {
+            writes.push(init);
+            saved = { ...original, amountMilliliters: 625, revision: "3" };
+            return Response.json(receipt(saved));
+          }
+          return day([saved, second]);
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      await change("Milliliters", "012x");
+      invoke(editButton(original.id), "onClick");
+      await hooks.settle();
+      await change("Milliliters at 01:30", "625");
+      if (action === "Cancel") await click("Cancel");
+      else await submit("Save amount");
+      expect(writes).toHaveLength(action === "Save" ? 1 : 0);
+      expect(editButton(second.id).props.disabled).toBe(false);
+      invoke(editButton(second.id), "onClick");
+      await hooks.settle();
+      expect(field("Milliliters at 10:15").props.value).toBe("500");
+      expect(field("Milliliters").props.value).toBe("012x");
+    },
+  );
+
+  it("does not admit a held editor while an independent Add is pending or awaiting exact retry", async () => {
+    const response = deferred<Response>();
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          writes.push(init);
+          return writes.length === 1
+            ? response.promise
+            : Response.json({ error: "Unavailable." }, { status: 503 });
+        }
+        return day([original, second]);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "10:15");
+    await click("250 mL");
+    const held = editButton(original.id);
+    await submit("Add entry");
+    invoke(held, "onClick");
+    await hooks.settle();
+    expect(correctionFields()).toEqual([]);
+    response.resolve(Response.json({ error: "Unavailable." }, { status: 503 }));
+    await hooks.settle();
+    invoke(held, "onClick");
+    await click("Retry saved change");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(new Headers(writes[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes[0]?.headers).get("idempotency-key"),
+    );
+  });
+
+  it.each(["route", "owner", "unmount"])(
+    "rejects an old Edit callback at the %s boundary",
+    async (boundary) => {
+      let route = original.localDate;
+      let nextOwner = owner;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/api/auth/me") return session(nextOwner);
+          const selected = new URL(url, "http://localhost").searchParams.get("date") ?? route;
+          return day(selected === original.localDate ? [original, second] : [], selected);
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: route }));
+      await hooks.settle();
+      const held = editButton(original.id);
+      if (boundary === "unmount") hooks.unmount();
+      else {
+        route = "2026-11-02";
+        if (boundary === "owner") nextOwner = anotherOwner;
+        hooks.renderWithoutEffects();
+      }
+      invoke(held, "onClick");
+      if (boundary === "unmount") expect(hooks.afterClose()).toBe(0);
+      else {
+        hooks.renderWithoutEffects();
+        expect(correctionFields()).toEqual([]);
+        hooks.render();
+        await hooks.settle();
+        invoke(held, "onClick");
+        await hooks.settle();
+        expect(correctionFields()).toEqual([]);
+        expect(text()).toContain(
+          boundary === "owner" ? "other@example.test" : "owner@example.test",
+        );
+      }
+    },
+  );
+});
