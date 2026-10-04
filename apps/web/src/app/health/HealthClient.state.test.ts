@@ -4273,3 +4273,203 @@ describe("Health pending definition editor", () => {
     expect(status()).toContain("Metric definition saved");
   });
 });
+
+describe("Health deleted reminder editor", () => {
+  function setup() {
+    const result = reminderWorkspace();
+    vi.stubGlobal("window", { confirm: vi.fn(() => true) });
+    return result;
+  }
+  function deleted(index = 1, replayed = false) {
+    return Response.json({
+      data: {
+        reminder: { ...savedReminder(index, [1, 3, 5], "revoked"), revision: "4" },
+        replayed,
+      },
+    });
+  }
+  function draft() {
+    return {
+      label: reminderField("Private in-app label").props.value,
+      time: reminderField("Local time").props.value,
+      days: selectedReminderDays(),
+      editing: text(reminderForm()).includes("Save reminder"),
+    };
+  }
+  async function raw(index = 1) {
+    await click("Edit", reminderCard(`Saved reminder ${index}`));
+    await changeReminderInput("Private in-app label", " Raw correction ");
+    await changeReminderInput("Local time", "07:08");
+    await click("Weekends");
+  }
+
+  it("retires the accepted same-reminder editor and its retained controls before ordinary new Create", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    const form = reminderForm(),
+      input = reminderField("Private in-app label");
+    state.write = () => deleted();
+    await click("Delete", reminderCard("Saved reminder 1"));
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]?.[0]).toBe(`/api/retention/reminders/${savedReminder().id}`);
+    expect(writes()[0]?.[1]?.method).toBe("DELETE");
+    expect(writes()[0]?.[1]?.body).toBeUndefined();
+    expect(new Headers(writes()[0]?.[1]?.headers).get("if-match")).toBe('"3"');
+    expect(text(reminderCard("Saved reminder 1"))).toContain("revoked");
+    expect(draft()).toEqual({ label: "", time: "20:00", days: reminderDayNames, editing: false });
+    invoke(input, "onChange", { target: { value: "retired" } });
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes()).toHaveLength(1);
+    expect(draft().label).toBe("");
+    await changeReminderInput("Private in-app label", "New reminder");
+    state.write = () =>
+      Response.json({
+        data: { reminder: { ...savedReminder(4), label: "New reminder" }, replayed: false },
+      });
+    await saveReminderForm();
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[0]).toBe("/api/retention/reminders");
+    expect(writes()[1]?.[1]?.method).toBe("POST");
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBeNull();
+  });
+
+  it("retires the same reminder even after raw fields change during pending Delete", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await click("Delete", reminderCard("Saved reminder 1"));
+    await changeReminderInput("Private in-app label", " newer raw correction ");
+    await changeReminderInput("Local time", "");
+    await click("Every day");
+    const form = reminderForm();
+    pending.resolve(deleted());
+    await hooks.settle();
+    expect(draft()).toEqual({ label: "", time: "20:00", days: reminderDayNames, editing: false });
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("disables Edit for a revoked reminder returned by the list", async () => {
+    setup();
+    await mount();
+    expect(button("Edit", reminderCard("Saved reminder 3")).props.disabled).toBe(true);
+  });
+
+  it("rejects a retained revoked-row Edit callback without replacing a raw draft", async () => {
+    const { writes } = setup();
+    await mount();
+    await raw(2);
+    const before = draft();
+    invoke(button("Edit", reminderCard("Saved reminder 3")), "onClick");
+    await hooks.settle();
+    expect(draft()).toEqual(before);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("keeps an old active-row Edit callback rejected after the row is replaced by a revoked receipt", async () => {
+    const { state, writes } = setup();
+    await mount();
+    const retained = button("Edit", reminderCard("Saved reminder 1"));
+    state.write = () => deleted();
+    await click("Delete", reminderCard("Saved reminder 1"));
+    const before = draft();
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(draft()).toEqual(before);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("preserves an unrelated raw editor when another reminder is deleted", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw(2);
+    const before = draft();
+    state.write = () => deleted();
+    await click("Delete", reminderCard("Saved reminder 1"));
+    expect(draft()).toEqual(before);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it.each(["new", "other"])(
+    "preserves the independent%s draft installed while same-reminder Delete is pending",
+    async (next) => {
+      const { state, writes } = setup();
+      await mount();
+      await raw();
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      await click("Delete", reminderCard("Saved reminder 1"));
+      await click("Cancel edit", reminderForm());
+      if (next === "other") await click("Edit", reminderCard("Saved reminder 2"));
+      await changeReminderInput("Private in-app label", " independent raw label ");
+      await changeReminderInput("Local time", "09:10");
+      await click("Weekdays");
+      const before = draft();
+      pending.resolve(deleted());
+      await hooks.settle();
+      expect(draft()).toEqual(before);
+      expect(writes()).toHaveLength(1);
+    },
+  );
+
+  it.each(["rejected", "malformed", "transport"])(
+    "preserves raw fields and exact Delete identity after%s failure until accepted retry",
+    async (failure) => {
+      const { state, writes } = setup();
+      await mount();
+      await raw();
+      const before = draft();
+      state.write = () => {
+        if (failure === "transport") throw new Error("Synthetic lost response");
+        return failure === "rejected"
+          ? Response.json({ error: "Synthetic rejection" }, { status: 400 })
+          : Response.json({ data: { reminder: { id: savedReminder().id }, replayed: false } });
+      };
+      await click("Delete", reminderCard("Saved reminder 1"));
+      expect(draft()).toEqual(before);
+      expect(text(reminderCard("Saved reminder 1"))).toContain("active");
+      const first = requiredHistory(writes()[0]);
+      state.write = () => deleted(1, true);
+      await click("Delete", reminderCard("Saved reminder 1"));
+      const second = requiredHistory(writes()[1]);
+      expect(second[0]).toBe(first[0]);
+      expect(second[1]).toEqual(first[1]);
+      expect(writes()).toHaveLength(2);
+      expect(draft().editing).toBe(false);
+      expect(draft().label).toBe("");
+    },
+  );
+
+  it("preserves the editor and sends nothing when normal Delete confirmation is declined", async () => {
+    const { writes } = setup();
+    vi.stubGlobal("window", { confirm: vi.fn(() => false) });
+    await mount();
+    await raw();
+    const before = draft();
+    await click("Delete", reminderCard("Saved reminder 1"));
+    expect(draft()).toEqual(before);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("leaves existing Pause behavior and its open editor unchanged", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    const before = draft();
+    state.write = () =>
+      Response.json({
+        data: {
+          reminder: { ...savedReminder(1, [1, 3, 5], "paused"), revision: "4" },
+          replayed: false,
+        },
+      });
+    await click("Pause", reminderCard("Saved reminder 1"));
+    expect(draft()).toEqual(before);
+    expect(writes()[0]?.[1]?.method).toBe("PATCH");
+  });
+});

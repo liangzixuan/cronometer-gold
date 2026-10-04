@@ -1630,7 +1630,8 @@ export function HealthClient() {
     replaceReminder({ ...reminder, daysOfWeek: days });
   }
   function editReminder(item: Reminder) {
-    if (!canEditReminder() || !remindersRef.current.includes(item)) return;
+    if (item.status === "revoked" || !canEditReminder() || !remindersRef.current.includes(item))
+      return;
     replaceReminder(reminderDraft(item));
   }
 
@@ -1740,6 +1741,8 @@ export function HealthClient() {
       );
       operations.current.delete(key);
       setReminders((items) => items.map((item) => (item.id === saved.id ? saved : item)));
+      if (action === "delete" && reminderRef.current.id === saved.id)
+        replaceReminder(reminderDraft());
       setMessage(
         action === "delete" ? "Reminder deleted and consent revoked." : `Reminder ${action}d.`,
       );
@@ -2608,7 +2611,7 @@ export function HealthClient() {
                   </div>
                   <div className="entryActions">
                     <button
-                      disabled={!canEditReminder()}
+                      disabled={item.status === "revoked" || !canEditReminder()}
                       onClick={() => editReminder(item)}
                       type="button"
                     >
