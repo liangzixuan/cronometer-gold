@@ -259,7 +259,12 @@ export function HealthClient() {
   const [eventValue, setEventValue] = useState("");
   const [eventDate, setEventDate] = useState("");
   const [eventTime, setEventTime] = useState("");
-  const [editingEvent, setEditingEvent] = useState<BiometricEvent | null>(null);
+  const [editingEvent, setEditingEventState] = useState<BiometricEvent | null>(null);
+  const editingEventRef = useRef(editingEvent);
+  const setEditingEvent = useCallback((next: BiometricEvent | null) => {
+    editingEventRef.current = next;
+    setEditingEventState(next);
+  }, []);
   const [reminder, setReminderState] = useState<ReminderDraft>(() => reminderDraft());
   const reminderRef = useRef(reminder);
   const reminderGeneration = useRef(0);
@@ -541,6 +546,7 @@ export function HealthClient() {
     resetHistoryMetric,
     router,
     setSession,
+    setEditingEvent,
     setReminders,
     replaceReminder,
     replaceTrendRange,
@@ -1505,6 +1511,11 @@ export function HealthClient() {
           ...current,
           events: current.events.filter((item) => item.id !== event.id),
         });
+      if (editingEventRef.current?.id === event.id) {
+        eventDraftGeneration.current += 1;
+        setEditingEvent(null);
+        setEventValue("");
+      }
       setMessage("Manual biometric event deleted.");
     } catch (error) {
       if (!ownsWrite()) return;

@@ -3717,3 +3717,176 @@ describe("Health manual-event editor replacement protection", () => {
     expect(button("Edit", rows()[1]).props.disabled).toBe(false);
   });
 });
+
+describe("Health accepted Delete editor retirement", () => {
+  function deletionWorkspace() {
+    const result = historyWorkspace();
+    const first = reading(1);
+    const second = reading(2, "2026-09-10T11:22:33.456Z");
+    result.state.eventRead = () => eventPage([first, second]);
+    vi.stubGlobal("window", { confirm: vi.fn(() => true) });
+    return { ...result, first, second };
+  }
+  const deleted = (replayed = false) => Response.json({ data: { event: null, replayed } });
+  function draftValues() {
+    return ["Exact value", "Local date", "Local time"].map(
+      (label) => eventField(label).props.value,
+    );
+  }
+  async function rawCorrection() {
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.200000");
+    await changeEvent("Local date", "2026-09-09");
+    await changeEvent("Local time", "00:45");
+  }
+
+  it("retires the same reading correction after ordinary confirmed Delete succeeds", async () => {
+    const { state, first, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    state.write = () => deleted();
+    const remove = button("Delete", eventRows()[0]);
+    expect(remove.props.disabled).toBe(false);
+    await click("Delete", eventRows()[0]);
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]?.[0]).toBe(`/api/retention/biometrics/events/${first.id}`);
+    expect(writes()[0]?.[1]?.method).toBe("DELETE");
+    expect(eventRows()).toHaveLength(1);
+    expect(status()).toContain("Manual biometric event deleted.");
+    expect(text(eventForm())).toContain("Log event");
+    expect(text(eventForm())).not.toContain("Save event");
+    expect(eventField("Exact value").props.value).toBe("");
+  });
+
+  it("retires the pre-delete Save callback instead of PATCHing the deleted identity", async () => {
+    const { state, first, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    const oldForm = eventForm();
+    state.write = (_url, init) =>
+      init.method === "DELETE"
+        ? deleted()
+        : Response.json({ data: { event: first, replayed: false } });
+    await click("Delete", eventRows()[0]);
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes()).toHaveLength(1);
+    expect(eventRows()).toHaveLength(1);
+  });
+
+  it("preserves all raw fields while deleting another reading", async () => {
+    const { state, second, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    await changeEvent("Exact value", " invalid raw decimal ");
+    const before = draftValues();
+    state.write = () => deleted();
+    await click("Delete", eventRows()[1]);
+    expect(writes()[0]?.[0]).toBe(`/api/retention/biometrics/events/${second.id}`);
+    expect(draftValues()).toEqual(before);
+    expect(text(eventForm())).toContain("Save event");
+    expect(eventRows()).toHaveLength(1);
+  });
+
+  it("retains the correction when the ordinary confirmation is cancelled", async () => {
+    const { writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    const before = draftValues();
+    vi.stubGlobal("window", { confirm: vi.fn(() => false) });
+    await click("Delete", eventRows()[0]);
+    expect(writes()).toHaveLength(0);
+    expect(draftValues()).toEqual(before);
+    expect(eventRows()).toHaveLength(2);
+  });
+
+  it.each([400, 412])("retains the correction after rejected Delete %s", async (statusCode) => {
+    const { state, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    const before = draftValues();
+    state.write = () => Response.json({ error: "Not deleted." }, { status: statusCode });
+    await click("Delete", eventRows()[0]);
+    expect(writes()).toHaveLength(1);
+    expect(draftValues()).toEqual(before);
+    expect(text(eventForm())).toContain("Save event");
+    expect(eventRows()).toHaveLength(2);
+  });
+
+  it("retains uncertain Delete bytes and key, then retires its unchanged editor after exact replay", async () => {
+    const { state, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    const before = draftValues();
+    state.write = () => Response.json({ error: "Unknown outcome." }, { status: 503 });
+    await click("Delete", eventRows()[0]);
+    expect(draftValues()).toEqual(before);
+    expect(eventRows()).toHaveLength(2);
+    state.write = () => deleted(true);
+    await click("Delete", eventRows()[0]);
+    expect(writes()).toHaveLength(2);
+    const original = requiredHistory(writes()[0]);
+    const replay = requiredHistory(writes()[1]);
+    expect(replay[0]).toBe(original[0]);
+    expect(replay[1]?.method).toBe("DELETE");
+    expect(replay[1]?.body).toBe(original[1]?.body);
+    expect(replay[1]?.headers).toEqual(original[1]?.headers);
+    expect(new Headers(replay[1]?.headers).get("if-match")).toBe('"1"');
+    expect(text(eventForm())).toContain("Log event");
+    expect(eventField("Exact value").props.value).toBe("");
+    expect(eventRows()).toHaveLength(1);
+  });
+
+  it("retires the same reading after raw fields change during pending Delete", async () => {
+    const { state, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await click("Delete", eventRows()[0]);
+    await changeEvent("Exact value", " newer invalid correction ");
+    await changeEvent("Local date", "2026-09-08");
+    await changeEvent("Local time", "02:34");
+    const pendingForm = eventForm();
+    pending.resolve(deleted());
+    await hooks.settle();
+    expect(text(eventForm())).toContain("Log event");
+    expect(eventField("Exact value").props.value).toBe("");
+    expect(eventRows()).toHaveLength(1);
+    invoke(pendingForm, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("preserves a newer independent Log draft after Cancel during pending same-reading Delete", async () => {
+    const { state, writes } = deletionWorkspace();
+    await mount();
+    await rawCorrection();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await click("Delete", eventRows()[0]);
+    await click("Cancel", eventForm());
+    await changeEvent("Exact value", " new invalid value ");
+    await changeEvent("Local date", "2026-09-08");
+    await changeEvent("Local time", "02:34");
+    const before = draftValues();
+    pending.resolve(deleted());
+    await hooks.settle();
+    expect(draftValues()).toEqual(before);
+    expect(text(eventForm())).toContain("Log event");
+    expect(writes()).toHaveLength(1);
+    expect(eventRows()).toHaveLength(1);
+  });
+
+  it("preserves a new Log draft when Delete started with no correction open", async () => {
+    const { state, writes } = deletionWorkspace();
+    await mount();
+    await changeEvent("Exact value", " untouched Log draft ");
+    const before = draftValues();
+    state.write = () => deleted();
+    await click("Delete", eventRows()[0]);
+    expect(draftValues()).toEqual(before);
+    expect(text(eventForm())).toContain("Log event");
+    expect(writes()).toHaveLength(1);
+  });
+});
