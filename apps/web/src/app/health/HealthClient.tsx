@@ -248,12 +248,27 @@ export function HealthClient() {
     [],
   );
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
-  const [definitionName, setDefinitionName] = useState("Weight");
-  const [definitionDimension, setDefinitionDimension] = useState<
-    "mass" | "length" | "temperature" | "duration" | "count" | "other"
-  >("mass");
-  const [definitionUnit, setDefinitionUnit] = useState("kg");
-  const [editingDefinition, setEditingDefinition] = useState<BiometricDefinition | null>(null);
+  const [definitionDraft, setDefinitionDraft] = useState<{
+    name: string;
+    dimension: BiometricDefinition["dimension"];
+    unit: string;
+    editing: BiometricDefinition | null;
+  }>({ name: "Weight", dimension: "mass", unit: "kg", editing: null });
+  const definitionRef = useRef(definitionDraft);
+  const definitionGeneration = useRef(0);
+  const definitionWrite = useRef<object | null>(null);
+  const [definitionSaving, setDefinitionSaving] = useState(false);
+  const replaceDefinitionDraft = useCallback((next: typeof definitionDraft) => {
+    definitionGeneration.current += 1;
+    definitionRef.current = next;
+    setDefinitionDraft(next);
+  }, []);
+  const {
+    name: definitionName,
+    dimension: definitionDimension,
+    unit: definitionUnit,
+    editing: editingDefinition,
+  } = definitionDraft;
   const [selectedDefinition, setSelectedDefinitionState] = useState("");
   const selectedDefinitionRef = useRef(selectedDefinition);
   const [eventValue, setEventValue] = useState("");
@@ -462,6 +477,7 @@ export function HealthClient() {
             JSON.stringify([next.user.id, next.profile]))
       ) {
         trendControls.current += 1;
+        definitionGeneration.current += 1;
         abortTrendRequests();
         reminderControls.current += 1;
         resetHistoryMetric();
@@ -514,10 +530,9 @@ export function HealthClient() {
     eventDraftGeneration.current += 1;
     setReminders([]);
     setIntegrations([]);
-    setDefinitionName("Weight");
-    setDefinitionDimension("mass");
-    setDefinitionUnit("kg");
-    setEditingDefinition(null);
+    definitionWrite.current = null;
+    setDefinitionSaving(false);
+    replaceDefinitionDraft({ name: "Weight", dimension: "mass", unit: "kg", editing: null });
     setSelectedDefinition("");
     setEventValue("");
     setEventDate("");
@@ -549,6 +564,7 @@ export function HealthClient() {
     setEditingEvent,
     setReminders,
     replaceReminder,
+    replaceDefinitionDraft,
     replaceTrendRange,
     setSelectedDefinition,
     setSelectedNutrient,
@@ -1056,6 +1072,7 @@ export function HealthClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      definitionGeneration.current += 1;
       trendControls.current += 1;
       reminderControls.current += 1;
       invalidateHistory();
@@ -1065,6 +1082,7 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      definitionGeneration.current += 1;
       trendControls.current += 1;
       reminderControls.current += 1;
       historyController.current?.abort();
@@ -1256,44 +1274,93 @@ export function HealthClient() {
     [definitions, selectedDefinition],
   );
 
+  const renderedDefinitionGeneration = definitionGeneration.current;
+  const definitionScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+  function definitionViewCurrent(generation = renderedDefinitionGeneration) {
+    const current = installedSession.current;
+    return (
+      mounted.current &&
+      !privateUiClosed.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      current !== null &&
+      ownerUserId.current === current.user.id &&
+      definitionScope === JSON.stringify([current.user.id, current.profile]) &&
+      generation === definitionGeneration.current
+    );
+  }
+  function canEditDefinition() {
+    return definitionViewCurrent() && definitionWrite.current === null;
+  }
+  function changeDefinition(change: Partial<Omit<typeof definitionDraft, "editing">>) {
+    if (!canEditDefinition()) return;
+    if (definitionRef.current.editing && ("dimension" in change || "unit" in change)) return;
+    const next = { ...definitionRef.current, ...change };
+    definitionRef.current = next;
+    setDefinitionDraft(next);
+  }
   async function saveDefinition() {
-    if (!definitionName.trim() || !definitionUnit.trim())
+    if (!canEditDefinition()) return;
+    const draft = definitionRef.current;
+    const editing = draft.editing;
+    if (!draft.name.trim() || !draft.unit.trim())
       return setMessage("Metric name and unit are required.");
-    const body = editingDefinition
-      ? { name: definitionName.trim(), notes: null }
+    const body = editing
+      ? { name: draft.name.trim(), notes: null }
       : {
-          name: definitionName.trim(),
-          dimension: definitionDimension,
-          canonicalUnit: definitionUnit.trim(),
+          name: draft.name.trim(),
+          dimension: draft.dimension,
+          canonicalUnit: draft.unit.trim(),
           notes: null,
         };
-    const key = `definition:${editingDefinition?.id ?? "new"}:${editingDefinition?.revision ?? "0"}:${JSON.stringify(body)}`;
+    const key = `definition:${editing?.id ?? "new"}:${editing?.revision ?? "0"}:${JSON.stringify(body)}`;
+    const write = {};
+    definitionWrite.current = write;
+    const generation = ++definitionGeneration.current;
+    const ownsWrite = () => definitionWrite.current === write && definitionViewCurrent(generation);
+    setDefinitionSaving(true);
     setBusy("definition");
     try {
-      const saved = parseBiometricDefinitionResponse(
-        await request(
-          editingDefinition
-            ? `biometrics/definitions/${editingDefinition.id}`
-            : "biometrics/definitions",
-          {
-            method: editingDefinition ? "PATCH" : "POST",
-            body,
-            key,
-            ...(editingDefinition ? { revision: editingDefinition.revision } : {}),
+      const response = await fetch(
+        `/api/retention/biometrics/definitions${editing ? `/${editing.id}` : ""}`,
+        {
+          method: editing ? "PATCH" : "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "idempotency-key": operation(key),
+            ...(editing ? { "if-match": quoteRevision(editing.revision) } : {}),
           },
-        ),
+          body: JSON.stringify(body),
+          cache: "no-store",
+        },
       );
+      if (!ownsWrite()) return;
+      if (response.status === 401) return signInAgain();
+      const result = await json(response);
+      if (!ownsWrite()) return;
+      if (!response.ok)
+        throw new PrivateRequestFailure(
+          responseError(result, "The private health request failed."),
+          response.status,
+          result,
+        );
+      const saved = parseBiometricDefinitionResponse(result);
       operations.current.delete(key);
       setDefinitions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
-      setEditingDefinition(null);
-      setDefinitionName("Weight");
-      setDefinitionDimension("mass");
-      setDefinitionUnit("kg");
+      replaceDefinitionDraft({ name: "Weight", dimension: "mass", unit: "kg", editing: null });
       setMessage("Metric definition saved; historical events keep their canonical unit.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Metric could not be created.");
+      if (ownsWrite())
+        setMessage(error instanceof Error ? error.message : "Metric could not be created.");
     } finally {
-      setBusy(null);
+      if (definitionWrite.current === write) {
+        definitionWrite.current = null;
+        if (mounted.current && !privateUiClosed.current) {
+          setDefinitionSaving(false);
+          setBusy((current) => (current === "definition" ? null : current));
+        }
+      }
     }
   }
 
@@ -2059,18 +2126,21 @@ export function HealthClient() {
                   <label>
                     Name
                     <input
+                      disabled={definitionSaving}
                       maxLength={120}
                       value={definitionName}
-                      onChange={(event) => setDefinitionName(event.target.value)}
+                      onChange={(event) => changeDefinition({ name: event.target.value })}
                     />
                   </label>
                   <label>
                     Dimension
                     <select
-                      disabled={editingDefinition !== null}
+                      disabled={definitionSaving || editingDefinition !== null}
                       value={definitionDimension}
                       onChange={(event) =>
-                        setDefinitionDimension(event.target.value as typeof definitionDimension)
+                        changeDefinition({
+                          dimension: event.target.value as typeof definitionDimension,
+                        })
                       }
                     >
                       <option value="mass">Mass</option>
@@ -2084,24 +2154,28 @@ export function HealthClient() {
                   <label>
                     Canonical unit
                     <input
-                      disabled={editingDefinition !== null}
+                      disabled={definitionSaving || editingDefinition !== null}
                       maxLength={32}
                       value={definitionUnit}
-                      onChange={(event) => setDefinitionUnit(event.target.value)}
+                      onChange={(event) => changeDefinition({ unit: event.target.value })}
                     />
                   </label>
                 </div>
                 <div className="entryActions">
-                  <button disabled={busy === "definition"} type="submit">
+                  <button disabled={definitionSaving} type="submit">
                     {editingDefinition ? "Save definition revision" : "Add metric"}
                   </button>
                   {editingDefinition ? (
                     <button
+                      disabled={definitionSaving}
                       onClick={() => {
-                        setEditingDefinition(null);
-                        setDefinitionName("Weight");
-                        setDefinitionDimension("mass");
-                        setDefinitionUnit("kg");
+                        if (!canEditDefinition()) return;
+                        replaceDefinitionDraft({
+                          name: "Weight",
+                          dimension: "mass",
+                          unit: "kg",
+                          editing: null,
+                        });
                       }}
                       type="button"
                     >
@@ -2123,11 +2197,15 @@ export function HealthClient() {
                     </div>
                     <div className="entryActions">
                       <button
+                        disabled={definitionSaving}
                         onClick={() => {
-                          setEditingDefinition(definition);
-                          setDefinitionName(definition.name);
-                          setDefinitionDimension(definition.dimension);
-                          setDefinitionUnit(definition.canonicalUnit);
+                          if (!canEditDefinition()) return;
+                          replaceDefinitionDraft({
+                            editing: definition,
+                            name: definition.name,
+                            dimension: definition.dimension,
+                            unit: definition.canonicalUnit,
+                          });
                         }}
                         type="button"
                       >

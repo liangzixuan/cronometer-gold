@@ -3890,3 +3890,386 @@ describe("Health accepted Delete editor retirement", () => {
     expect(writes()).toHaveLength(1);
   });
 });
+
+describe("Health pending definition editor", () => {
+  const secondDefinition: BiometricDefinition = {
+    ...historyDefinition,
+    id: "4bcfa2bf-4950-43f7-9f24-000000000002",
+    name: "Height",
+    dimension: "length",
+    canonicalUnit: "cm",
+  };
+  function definitionForm() {
+    const form = elements().find(
+      (node) => node.type === "form" && text(node).includes("metric definition"),
+    );
+    if (!form) throw new Error("Missing definition form");
+    return form;
+  }
+  function definitionField(label: string) {
+    const parent = elements(definitionForm()).find(
+      (node) => node.type === "label" && text(node).startsWith(label),
+    );
+    const node = elements(parent ?? null).find((item) =>
+      ["input", "select"].includes(String(item.type)),
+    );
+    if (!node) throw new Error(`Missing definition field ${label}`);
+    return node;
+  }
+  function revise(index: number) {
+    const node = elements().filter(
+      (item) => item.type === "button" && text(item) === "Revise name",
+    )[index];
+    if (!node) throw new Error("Missing definition revision control");
+    return node;
+  }
+  function definitionDraft() {
+    return ["Name", "Dimension", "Canonical unit"].map(
+      (label) => definitionField(label).props.value,
+    );
+  }
+  async function setup(revision = false) {
+    const result = workspace();
+    result.state.definitions = [historyDefinition, secondDefinition];
+    await mount();
+    if (revision) {
+      invoke(revise(0), "onClick");
+      await hooks.settle();
+    }
+    invoke(definitionField("Name"), "onChange", { target: { value: "  Raw metric  " } });
+    if (!revision) {
+      invoke(definitionField("Dimension"), "onChange", { target: { value: "count" } });
+      invoke(definitionField("Canonical unit"), "onChange", { target: { value: "  reps  " } });
+    }
+    await hooks.settle();
+    return result;
+  }
+  function saved(revision = false) {
+    return Response.json({
+      data: {
+        replayed: false,
+        definition: {
+          ...historyDefinition,
+          id: revision ? historyDefinition.id : "4bcfa2bf-4950-43f7-9f24-000000000003",
+          revision: revision ? "2" : "1",
+          name: "Raw metric",
+          dimension: revision ? "mass" : "count",
+          canonicalUnit: revision ? "kg" : "reps",
+        },
+      },
+    });
+  }
+  function submit(form = definitionForm()) {
+    invoke(form, "onSubmit", { preventDefault: () => undefined });
+  }
+  function requestIdentity(
+    call: ReturnType<ReturnType<typeof workspace>["writes"]>[number] | undefined,
+  ) {
+    if (!call) throw new Error("Missing definition write");
+    return {
+      url: call[0],
+      method: call[1]?.method,
+      body: call[1]?.body,
+      key: new Headers(call[1]?.headers).get("idempotency-key"),
+      revision: new Headers(call[1]?.headers).get("if-match"),
+    };
+  }
+
+  for (const revision of [false, true]) {
+    const mode = revision ? "PATCH" : "POST";
+    it(`${mode} freezes ordinary controls and preserves the submitted draft`, async () => {
+      const { state, writes } = await setup(revision);
+      const before = definitionDraft();
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      submit();
+      await hooks.settle();
+      expect(definitionField("Name").props.disabled).toBe(true);
+      expect(definitionField("Dimension").props.disabled).toBe(true);
+      expect(definitionField("Canonical unit").props.disabled).toBe(true);
+      expect(revise(1).props.disabled).toBe(true);
+      if (revision) expect(button("Cancel", definitionForm()).props.disabled).toBe(true);
+      expect(definitionDraft()).toEqual(before);
+      expect(writes()).toHaveLength(1);
+      pending.resolve(saved(revision));
+      await hooks.settle();
+      expect(definitionDraft()).toEqual(["Weight", "mass", "kg"]);
+      expect(status()).toContain("Metric definition saved");
+      expect(revise(1).props.disabled).not.toBe(true);
+    });
+
+    it(`${mode} blocks retained changes, replacement and duplicate Submit before repaint`, async () => {
+      const { state, writes } = await setup(revision);
+      const before = definitionDraft();
+      const form = definitionForm();
+      const fields = ["Name", "Dimension", "Canonical unit"].map(definitionField);
+      const replacement = revise(1);
+      const cancel = revision ? button("Cancel", form) : null;
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      submit(form);
+      fields.forEach((node, index) => {
+        invoke(node, "onChange", { target: { value: ["discarded", "other", "unit"][index] } });
+      });
+      if (cancel) invoke(cancel, "onClick");
+      invoke(replacement, "onClick");
+      submit(form);
+      await hooks.settle();
+      expect(definitionDraft()).toEqual(before);
+      expect(writes()).toHaveLength(1);
+      const first = requestIdentity(writes()[0]);
+      expect(first.method).toBe(mode);
+      expect(first.revision).toBe(revision ? '"1"' : null);
+      expect(first.body).toBe(
+        JSON.stringify(
+          revision
+            ? { name: "Raw metric", notes: null }
+            : { name: "Raw metric", dimension: "count", canonicalUnit: "reps", notes: null },
+        ),
+      );
+      pending.resolve(saved(revision));
+      await hooks.settle();
+    });
+
+    for (const code of [400, 412, 503]) {
+      it(`${mode} ${code} reopens exact raw fields and retries the exact operation`, async () => {
+        const { state, writes } = await setup(revision);
+        const before = definitionDraft();
+        state.write = () => Response.json({ error: "Definition failed" }, { status: code });
+        submit();
+        await hooks.settle();
+        expect(definitionDraft()).toEqual(before);
+        expect(definitionField("Name").props.disabled).not.toBe(true);
+        const original = requestIdentity(writes()[0]);
+        submit();
+        await hooks.settle();
+        expect(requestIdentity(writes()[1])).toEqual(original);
+        invoke(definitionField("Name"), "onChange", { target: { value: "  Reopened  " } });
+        await hooks.settle();
+        expect(definitionField("Name").props.value).toBe("  Reopened  ");
+        if (revision) {
+          await click("Cancel", definitionForm());
+          expect(definitionDraft()).toEqual(["Weight", "mass", "kg"]);
+        }
+        invoke(revise(1), "onClick");
+        await hooks.settle();
+        expect(definitionDraft()).toEqual(["Height", "length", "cm"]);
+      });
+    }
+  }
+
+  it("merges ordinary same-render field changes and submits the latest complete draft", async () => {
+    const { state, writes } = await setup();
+    const form = definitionForm();
+    const name = definitionField("Name");
+    invoke(name, "onChange", { target: { value: "2" } });
+    invoke(name, "onChange", { target: { value: "23" } });
+    invoke(definitionField("Dimension"), "onChange", { target: { value: "duration" } });
+    invoke(definitionField("Canonical unit"), "onChange", { target: { value: " min " } });
+    state.write = () => Response.json({ error: "Held draft" }, { status: 400 });
+    submit(form);
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(["23", "duration", " min "]);
+    expect(requestIdentity(writes()[0]).body).toBe(
+      JSON.stringify({ name: "23", dimension: "duration", canonicalUnit: "min", notes: null }),
+    );
+  });
+
+  it("rejects old editor callbacks after Cancel and replacement without blocking fresh revision", async () => {
+    const { state, writes } = await setup(true);
+    const form = definitionForm();
+    const name = definitionField("Name");
+    const replacement = revise(1);
+    await click("Cancel", form);
+    invoke(revise(1), "onClick");
+    await hooks.settle();
+    const before = definitionDraft();
+    invoke(name, "onChange", { target: { value: "stale" } });
+    invoke(replacement, "onClick");
+    submit(form);
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(before);
+    expect(writes()).toHaveLength(0);
+    state.write = () => Response.json({ error: "Current revision" }, { status: 400 });
+    submit();
+    await hooks.settle();
+    expect(requestIdentity(writes()[0]).url).toContain(secondDefinition.id);
+  });
+
+  it("keeps canonical dimension and unit immutable for retained revision handlers", async () => {
+    const { state, writes } = await setup(true);
+    invoke(definitionField("Dimension"), "onChange", { target: { value: "other" } });
+    invoke(definitionField("Canonical unit"), "onChange", { target: { value: "changed" } });
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(["  Raw metric  ", "mass", "kg"]);
+    state.write = () => Response.json({ error: "Current revision" }, { status: 400 });
+    submit();
+    await hooks.settle();
+    expect(requestIdentity(writes()[0]).body).toBe(
+      JSON.stringify({ name: "Raw metric", notes: null }),
+    );
+  });
+
+  it("retires successful Submit and input callbacks before a fresh editor is opened", async () => {
+    const { state, writes } = await setup();
+    const form = definitionForm();
+    const name = definitionField("Name");
+    state.write = () => saved();
+    submit(form);
+    await hooks.settle();
+    invoke(name, "onChange", { target: { value: "stale success" } });
+    submit(form);
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(["Weight", "mass", "kg"]);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("preserves raw draft and uncertain identity after a malformed successful response", async () => {
+    const { state, writes } = await setup();
+    const before = definitionDraft();
+    state.write = () => Response.json({ data: {} });
+    submit();
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(before);
+    expect(status()).not.toContain("Metric definition saved");
+    const original = requestIdentity(writes()[0]);
+    state.write = () => saved();
+    submit();
+    await hooks.settle();
+    expect(requestIdentity(writes()[1])).toEqual(original);
+    expect(status()).toContain("Metric definition saved");
+  });
+
+  for (const code of [200, 401]) {
+    it(`ignores late ${code} after unmount without private navigation or state writes`, async () => {
+      const { state, writes } = await setup();
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      const form = definitionForm();
+      const name = definitionField("Name");
+      submit(form);
+      await hooks.settle();
+      hooks.unmount();
+      const closed = hooks.afterClose();
+      invoke(name, "onChange", { target: { value: "closed" } });
+      submit(form);
+      pending.resolve(code === 200 ? saved() : new Response(null, { status: code }));
+      await hooks.settle();
+      expect(hooks.afterClose()).toBe(closed);
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(writes()).toHaveLength(1);
+    });
+  }
+
+  it("retires pending publication and old controls across hide and return", async () => {
+    const view = visibility();
+    const { state, writes } = await setup();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    const form = definitionForm();
+    const name = definitionField("Name");
+    const before = definitionDraft();
+    submit(form);
+    await hooks.settle();
+    await view.set("hidden");
+    await view.set("visible");
+    invoke(name, "onChange", { target: { value: "retired" } });
+    submit(form);
+    pending.resolve(saved());
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(before);
+    expect(status()).not.toContain("Metric definition saved");
+    expect(writes()).toHaveLength(1);
+    expect(definitionField("Name").props.disabled).not.toBe(true);
+  });
+
+  it("closes a current unauthorized request without publishing its error afterward", async () => {
+    const { state } = await setup();
+    state.write = () => new Response(null, { status: 401 });
+    submit();
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(text()).not.toContain("Metric could not be created");
+  });
+  for (const replacement of ["profile", "owner"]) {
+    it(`retires a pending response and controls after ${replacement} changes`, async () => {
+      const { state, writes } = await setup();
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      const form = definitionForm();
+      const name = definitionField("Name");
+      submit(form);
+      await hooks.settle();
+      state.auth = () =>
+        replacement === "owner" ? session(otherOwner) : session(owner, "Asia/Tokyo");
+      hooks.replayEffects();
+      await hooks.settle();
+      const before = text();
+      const navigation = router.replace.mock.calls.length;
+      invoke(name, "onChange", { target: { value: "obsolete profile" } });
+      submit(form);
+      pending.resolve(new Response(null, { status: 401 }));
+      await hooks.settle();
+      expect(text()).toBe(before);
+      expect(router.replace.mock.calls).toHaveLength(navigation);
+      expect(writes()).toHaveLength(1);
+    });
+  }
+
+  it("checks ownership again after successful JSON parsing finishes late", async () => {
+    const { state, writes } = await setup();
+    const pending = deferred<unknown>();
+    const response = saved();
+    const body = await response.clone().json();
+    const readJson = vi.fn(() => pending.promise);
+    Object.defineProperty(response, "json", { value: readJson });
+    state.write = () => response;
+    submit();
+    await hooks.settle();
+    expect(readJson).toHaveBeenCalledOnce();
+    hooks.unmount();
+    const closed = hooks.afterClose();
+    pending.resolve(body);
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(closed);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("ignores completion after normal Sign out has closed the private workspace", async () => {
+    const { state, writes } = await setup(true);
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    const form = definitionForm();
+    const name = definitionField("Name");
+    submit(form);
+    await hooks.settle();
+    await click("Sign out");
+    const before = text();
+    const navigation = router.replace.mock.calls.length;
+    invoke(name, "onChange", { target: { value: "closed" } });
+    submit(form);
+    pending.resolve(saved(true));
+    await hooks.settle();
+    expect(text()).toBe(before);
+    expect(router.replace.mock.calls).toHaveLength(navigation);
+    expect(writes().filter(([url]) => url.includes("biometrics/definitions"))).toHaveLength(1);
+  });
+
+  it("preserves raw fields and the exact retry after a transport failure", async () => {
+    const { state, writes } = await setup(true);
+    const before = definitionDraft();
+    state.write = () => {
+      throw new Error("Synthetic transport failure");
+    };
+    submit();
+    await hooks.settle();
+    expect(definitionDraft()).toEqual(before);
+    expect(definitionField("Name").props.disabled).not.toBe(true);
+    const original = requestIdentity(writes()[0]);
+    state.write = () => saved(true);
+    submit();
+    await hooks.settle();
+    expect(requestIdentity(writes()[1])).toEqual(original);
+    expect(status()).toContain("Metric definition saved");
+  });
+});
