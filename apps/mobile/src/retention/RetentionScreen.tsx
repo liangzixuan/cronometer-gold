@@ -2962,6 +2962,12 @@ export function RetentionScreen({
         ...historyRef.current,
         items: historyRef.current.items.filter((item) => item.id !== event.id),
       });
+      const draft = eventDraftRef.current;
+      if (draft.event?.id === event.id)
+        installEventDraft({
+          ...initialEvent(profileTimeZone),
+          definitionId: draft.definitionId,
+        });
       setMessage("Biometric event deleted.");
     } catch (error) {
       if (!acceptedReadingIsCurrent()) return;

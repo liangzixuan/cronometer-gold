@@ -11534,3 +11534,216 @@ describe("custom-food pending secure enqueue editor protection", () => {
     }
   });
 });
+
+describe("native accepted Delete reading editor retirement", () => {
+  const other = {
+    ...readingEvent,
+    id: "22cfa2bf-4950-43f7-9f24-b983ac803012",
+    value: "81.00000900",
+  };
+  const deleted = (replayed = false) => response({ data: { event: null, replayed } });
+  const draft = (tree) =>
+    [readingValueLabel(), "Local date", "Local time"].map(
+      (label) => input(tree, label).props.value,
+    );
+  const hasSave = (tree) =>
+    nodes(
+      biometricSection(tree),
+      (node) => node.type === "Pressable" && text(node) === "Save reading",
+    ).length;
+  async function correction(harness, invalid = false) {
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await type(harness, readingValueLabel(), invalid ? " invalid value " : "-71.000000100");
+    await type(harness, "Local date", invalid ? "invalid" : "2026-09-08");
+    return type(harness, "Local time", invalid ? "25:99" : "06:59");
+  }
+
+  for (const invalid of [false, true]) {
+    it(`retires the same reading after ordinary Delete with ${invalid ? "invalid raw" : "valid"} correction fields`, async () => {
+      historyClock();
+      const { harness, requests } = setupReadings(
+        (request) => (request.method === "DELETE" ? deleted() : undefined),
+        { entries: [readingEvent, other] },
+      );
+      try {
+        const before = await correction(harness, invalid);
+        expect(button(biometricCard(before, readingEvent.id), "Delete").props.disabled).toBe(false);
+        const tree = await pressBiometric(harness, "Delete", readingEvent.id);
+        expect(writes(requests)).toHaveLength(1);
+        expect(writes(requests)[0].method).toBe("DELETE");
+        expect(writes(requests)[0].url.pathname).toBe(`/v1/biometrics/events/${readingEvent.id}`);
+        expect(writes(requests)[0].headers["if-match"]).toBe('"9"');
+        expect(writes(requests)[0].body).toBeUndefined();
+        expect(
+          nodes(tree, (node) => node.type === "View" && node.key === readingEvent.id),
+        ).toHaveLength(0);
+        expect(hasSave(tree)).toBe(0);
+        expect(input(tree, readingValueLabel()).props.value).toBe("");
+        expect(button(biometricSection(tree), "Log reading").props.disabled).toBe(false);
+        expect(text(tree)).not.toContain("Replace unsaved reading?");
+        const edited = await pressBiometric(harness, "Edit", other.id);
+        expect(input(edited, readingValueLabel()).props.value).toBe(other.value);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("rejects retained Save before repaint and after the accepted Delete settles", async () => {
+    historyClock();
+    const pending = deferred();
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "DELETE" ? pending.promise : undefined,
+    );
+    try {
+      const before = await correction(harness);
+      const save = button(biometricSection(before), "Save reading").props.onPress;
+      const remove = button(biometricCard(before, readingEvent.id), "Delete").props.onPress;
+      remove();
+      save();
+      let tree = await harness.settle();
+      expect(writes(requests)).toHaveLength(1);
+      expect(button(biometricSection(tree), "Save reading").props.disabled).toBe(true);
+      pending.resolve(deleted());
+      tree = await harness.settle();
+      const allocated = hooks.operation;
+      save();
+      await harness.settle();
+      expect(writes(requests)).toHaveLength(1);
+      expect(hooks.operation).toBe(allocated);
+      expect(hasSave(tree)).toBe(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("preserves every raw correction field when another reading is deleted", async () => {
+    historyClock();
+    const { harness, requests } = setupReadings(
+      (request) => (request.method === "DELETE" ? deleted() : undefined),
+      { entries: [readingEvent, other] },
+    );
+    try {
+      const before = draft(await correction(harness, true));
+      const tree = await pressBiometric(harness, "Delete", other.id);
+      expect(draft(tree)).toEqual(before);
+      expect(hasSave(tree)).toBe(1);
+      expect(text(biometricCard(tree, readingEvent.id))).toContain(readingEvent.value);
+      expect(writes(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("preserves an independent new Log draft after deleting a saved reading", async () => {
+    historyClock();
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "DELETE" ? deleted() : undefined,
+    );
+    try {
+      await type(harness, readingValueLabel(), " new raw value ");
+      await type(harness, "Local date", "invalid");
+      const before = draft(await type(harness, "Local time", "25:99"));
+      const tree = await pressBiometric(harness, "Delete", readingEvent.id);
+      expect(draft(tree)).toEqual(before);
+      expect(hasSave(tree)).toBe(0);
+      expect(writes(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const failure of [400, 412, "malformed", "transport"]) {
+    it(`preserves the correction through ${failure} and retires it only after accepted retry`, async () => {
+      historyClock();
+      let attempt = 0;
+      const { harness, requests } = setupReadings((request) => {
+        if (request.method !== "DELETE") return undefined;
+        if (++attempt !== 1) return deleted(true);
+        if (failure === "transport") throw new Error("Synthetic lost Delete response");
+        if (failure === "malformed") return response({ data: {} });
+        return response({ error: { message: "Synthetic rejected Delete" } }, failure);
+      });
+      try {
+        const before = draft(await correction(harness));
+        let tree = await pressBiometric(harness, "Delete", readingEvent.id);
+        expect(draft(tree)).toEqual(before);
+        expect(hasSave(tree)).toBe(1);
+        expect(button(biometricSection(tree), "Save reading").props.disabled).toBe(false);
+        const first = writes(requests)[0];
+        tree = await pressBiometric(harness, "Delete", readingEvent.id);
+        const retry = writes(requests)[1];
+        expect(retry.url.pathname).toBe(first.url.pathname);
+        expect(retry.method).toBe(first.method);
+        expect(retry.body).toBe(first.body);
+        expect(retry.headers["if-match"]).toBe(first.headers["if-match"]);
+        if (failure === 412) {
+          // The existing response policy retires the operation after a known conflict.
+          expect(retry.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+        } else expect(retry.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+        expect(hasSave(tree)).toBe(0);
+        expect(input(tree, readingValueLabel()).props.value).toBe("");
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("leaves an unrelated value-only correction's exact timestamp and PATCH unchanged", async () => {
+    historyClock();
+    const { harness, requests } = setupReadings(
+      (request) => {
+        if (request.method === "DELETE") return deleted();
+        if (request.method === "PATCH")
+          return response({
+            data: {
+              replayed: false,
+              event: { ...readingEvent, ...JSON.parse(request.body), revision: "10" },
+            },
+          });
+        return undefined;
+      },
+      { entries: [readingEvent, other] },
+    );
+    try {
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "-70.000001000");
+      await pressBiometric(harness, "Delete", other.id);
+      const tree = await pressBiometric(harness, "Save reading");
+      expect(writes(requests)).toHaveLength(2);
+      expect(JSON.parse(writes(requests)[1].body)).toEqual({ value: "-70.000001000" });
+      expect(text(biometricCard(tree, readingEvent.id))).toContain("07:00:05");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["owner", "unmount"]) {
+    it(`does not publish a late Delete into ${boundary}`, async () => {
+      historyClock();
+      const pending = deferred();
+      const { harness, requests } = setupReadings((request) =>
+        request.method === "DELETE" ? pending.promise : undefined,
+      );
+      try {
+        await correction(harness);
+        await pressBiometric(harness, "Delete", readingEvent.id);
+        if (boundary === "unmount") harness.unmount();
+        else {
+          harness.updateProps({ ownerUserId: otherOwner, sessionEpoch: 2 });
+          await harness.settle();
+          await type(harness, readingValueLabel(), " new owner's raw value ");
+        }
+        const before = boundary === "owner" ? draft(await harness.settle()) : null;
+        const writesAfterUnmount = harness.writesAfterUnmount;
+        pending.resolve(deleted());
+        const tree = await harness.settle();
+        if (before) expect(draft(tree)).toEqual(before);
+        expect(harness.writesAfterUnmount).toBe(writesAfterUnmount);
+        expect(writes(requests)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+});
