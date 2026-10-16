@@ -409,9 +409,11 @@ test("actual collector, encryption and create-only file adapter publish and reco
     });
     const recovered = await store.recover({
       ...result.manifest,
+      source: { kind: "unqualified" },
       manifestSha256: result.manifestSha256,
     });
     assert.ok(recovered);
+    assert.deepEqual(recovered.readSource, { kind: "unqualified" });
     const parts = [];
     for await (const part of recovered.dump) parts.push(part);
     assert.deepEqual(Buffer.concat(parts), dump);

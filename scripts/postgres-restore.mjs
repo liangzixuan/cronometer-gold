@@ -360,7 +360,11 @@ export async function runPostgresRestore(input) {
       temporaryDirectory: directory,
       maxDumpBytes: options.maxDumpBytes,
     });
-    recovered = await store.recover({ ...options.expectedBackup, signal: controller.signal });
+    recovered = await store.recover({
+      ...options.expectedBackup,
+      source: { kind: "unqualified" },
+      signal: controller.signal,
+    });
     requireValue(recovered);
     const sourceEvidence = parsePostgresBackupEvidence(
       recovered.sourceEvidence,

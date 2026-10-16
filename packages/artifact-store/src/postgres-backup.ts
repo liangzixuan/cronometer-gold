@@ -14,6 +14,12 @@ import {
   POSTGRES_BACKUP_MEDIA_TYPE,
   type RawArtifactStore,
 } from "./artifact-encryption.js";
+import {
+  type AzureBlobReadIdentity,
+  type AzureBlobReadLocation,
+  snapshotAzureBlobReadLocation,
+  snapshotAzureBlobVersionReadIdentity,
+} from "./azure-blob-raw-artifact-store.js";
 
 const MAGIC = Buffer.from("NTPB0002", "ascii");
 const HEADER_BYTES = MAGIC.byteLength + 4;
@@ -32,7 +38,7 @@ export interface PostgresBackupManifest {
   readonly backupId: string;
   readonly capturedAt: string;
   readonly databaseName: string;
-  readonly deploymentTarget: "staging" | "production";
+  readonly deploymentTarget: "development" | "staging" | "production";
   readonly dumpBytes: number;
   readonly dumpSha256: string;
   readonly snapshotId: string;
@@ -44,13 +50,14 @@ export interface PostgresBackupManifest {
 export interface PostgresBackupExpectedIdentity {
   readonly backupId: string;
   readonly databaseName: string;
-  readonly deploymentTarget: "staging" | "production";
+  readonly deploymentTarget: "development" | "staging" | "production";
   readonly manifestSha256: string;
   readonly snapshotId: string;
   readonly sourceRevision: string;
 }
 
 export interface RecoveredPostgresBackup {
+  readonly readSource: PostgresBackupReadSource;
   readonly manifest: PostgresBackupManifest;
   readonly manifestBytes: Buffer;
   readonly metadata: EncryptedArtifactMetadata;
@@ -72,6 +79,50 @@ function requireBackup(condition: unknown): asserts condition {
   if (!condition) throw new PostgresBackupAuthenticationError();
 }
 
+export type PostgresBackupReadExpectation =
+  | AzureBlobReadLocation
+  | Readonly<{ kind: "unqualified" }>;
+export type PostgresBackupReadSource =
+  | Extract<AzureBlobReadIdentity, { kind: "azure-blob-version" }>
+  | Readonly<{ kind: "unqualified" }>;
+
+export function snapshotPostgresBackupReadExpectation(
+  value: unknown,
+): PostgresBackupReadExpectation {
+  requireBackup(
+    value !== null &&
+      typeof value === "object" &&
+      Object.getPrototypeOf(value) === Object.prototype,
+  );
+  const kind = Object.getOwnPropertyDescriptor(value, "kind");
+  requireBackup(kind && "value" in kind);
+  if (kind.value === "unqualified") {
+    requireBackup(Reflect.ownKeys(value).length === 1);
+    return Object.freeze({ kind: "unqualified" });
+  }
+  return snapshotAzureBlobReadLocation(value);
+}
+
+export function snapshotPostgresBackupReadSource(
+  value: unknown,
+  expected: PostgresBackupReadExpectation,
+  key: string,
+  contentLength: number,
+  maximumObjectBytes: number,
+): PostgresBackupReadSource {
+  if (expected.kind === "unqualified") {
+    const copy = snapshotPostgresBackupReadExpectation(value);
+    requireBackup(copy.kind === "unqualified");
+    return copy;
+  }
+  return snapshotAzureBlobVersionReadIdentity(value, {
+    ...expected,
+    objectKey: key,
+    contentLength,
+    maximumObjectBytes,
+  });
+}
+
 function validIdentity(value: {
   readonly backupId: unknown;
   readonly databaseName: unknown;
@@ -81,7 +132,11 @@ function validIdentity(value: {
 }): void {
   requireBackup(typeof value.backupId === "string" && UUID.test(value.backupId));
   requireBackup(typeof value.databaseName === "string" && DATABASE.test(value.databaseName));
-  requireBackup(value.deploymentTarget === "staging" || value.deploymentTarget === "production");
+  requireBackup(
+    value.deploymentTarget === "development" ||
+      value.deploymentTarget === "staging" ||
+      value.deploymentTarget === "production",
+  );
   requireBackup(typeof value.snapshotId === "string" && SNAPSHOT.test(value.snapshotId));
   requireBackup(typeof value.sourceRevision === "string" && REVISION.test(value.sourceRevision));
 }
@@ -274,7 +329,17 @@ export class EncryptedPostgresBackupStore {
     this.#maxDumpBytes = input.maxDumpBytes;
   }
 
-  #store(signal: AbortSignal | undefined, streams: Set<Readable>): EncryptedArtifactStore {
+  #store(
+    signal: AbortSignal | undefined,
+    streams: Set<Readable>,
+    read?: {
+      readonly expected: PostgresBackupReadExpectation;
+      readonly objectKey: string;
+      readonly maximumObjectBytes: number;
+      attempted: boolean;
+      observed?: PostgresBackupReadSource;
+    },
+  ): EncryptedArtifactStore {
     const raw = this.#rawStore;
     return new EncryptedArtifactStore({
       keyRing: this.#keyRing,
@@ -293,8 +358,30 @@ export class EncryptedPostgresBackupStore {
         },
         async open(input) {
           signal?.throwIfAborted();
+          requireBackup(read && !read.attempted && input.objectKey === read.objectKey);
+          read.attempted = true;
           const opened = await raw.open(input);
-          if (opened) own(opened.stream, signal, streams);
+          if (opened) {
+            const stream = own(opened.stream, signal, streams);
+            const contentLength = opened.contentLength;
+            if (read.expected.kind === "azure-blob-version") {
+              const identity = Object.getOwnPropertyDescriptor(opened, "readIdentity");
+              requireBackup(identity && "value" in identity);
+              read.observed = snapshotPostgresBackupReadSource(
+                identity.value,
+                read.expected,
+                read.objectKey,
+                contentLength,
+                read.maximumObjectBytes,
+              );
+            } else {
+              read.observed = Object.freeze({ kind: "unqualified" });
+            }
+            signal?.throwIfAborted();
+            // Pin the owned stream and length: later mutation of the raw record
+            // cannot switch the bytes that are associated with the observation.
+            return { stream, contentLength };
+          }
           signal?.throwIfAborted();
           return opened;
         },
@@ -351,6 +438,7 @@ export class EncryptedPostgresBackupStore {
 
   async recover(
     input: PostgresBackupExpectedIdentity & {
+      readonly source: PostgresBackupReadExpectation;
       readonly signal?: AbortSignal;
     },
   ): Promise<RecoveredPostgresBackup | null> {
@@ -386,15 +474,52 @@ export class EncryptedPostgresBackupStore {
       return disposePromise;
     };
     try {
+      input = {
+        backupId: input.backupId,
+        databaseName: input.databaseName,
+        deploymentTarget: input.deploymentTarget,
+        manifestSha256: input.manifestSha256,
+        snapshotId: input.snapshotId,
+        sourceRevision: input.sourceRevision,
+        source: snapshotPostgresBackupReadExpectation(input.source),
+        ...(input.signal ? { signal: input.signal } : {}),
+      };
       input.signal?.throwIfAborted();
       validIdentity(input);
       requireBackup(typeof input.manifestSha256 === "string" && SHA256.test(input.manifestSha256));
-      authenticated = await this.#store(input.signal, streams).openAuthenticatedByObject({
+      const read: {
+        expected: PostgresBackupReadExpectation;
+        objectKey: string;
+        maximumObjectBytes: number;
+        attempted: boolean;
+        observed?: PostgresBackupReadSource;
+      } = {
+        expected: input.source,
+        objectKey: objectKey(input),
+        maximumObjectBytes:
+          this.#maxDumpBytes +
+          MAX_MANIFEST_BYTES +
+          MAX_SOURCE_EVIDENCE_BYTES +
+          HEADER_BYTES +
+          MAX_ARTIFACT_ENVELOPE_OVERHEAD_BYTES,
+        attempted: false,
+      };
+      authenticated = await this.#store(input.signal, streams, read).openAuthenticatedByObject({
         objectKey: objectKey(input),
         mediaType: POSTGRES_BACKUP_MEDIA_TYPE,
         ...(input.signal ? { signal: input.signal } : {}),
       });
       if (!authenticated) return null;
+      requireBackup(
+        read.attempted && read.observed && authenticated.metadata.objectKey === read.objectKey,
+      );
+      const readSource = snapshotPostgresBackupReadSource(
+        read.observed,
+        read.expected,
+        authenticated.metadata.objectKey,
+        authenticated.metadata.ciphertextBytes,
+        read.maximumObjectBytes,
+      );
       // Keep the original stream paused and alive: its close handler removes the
       // authenticated spool. All parsing and the returned range share one new fd.
       authenticated.stream.on("error", () => undefined);
@@ -483,6 +608,7 @@ export class EncryptedPostgresBackupStore {
       });
       transferred = true;
       return {
+        readSource,
         manifest,
         manifestBytes: bytes,
         metadata: authenticated.metadata,

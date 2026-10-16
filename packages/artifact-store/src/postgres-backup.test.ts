@@ -74,12 +74,15 @@ function manifest(patch: Partial<PostgresBackupManifest> = {}): Buffer {
   );
 }
 
-function expected(bytes = manifest()): PostgresBackupExpectedIdentity {
+function expected(
+  bytes = manifest(),
+): PostgresBackupExpectedIdentity & { source: { kind: "unqualified" } } {
   return {
     backupId,
     databaseName: "nourishing",
     deploymentTarget: "staging",
     manifestSha256: hash(bytes),
+    source: { kind: "unqualified" },
     snapshotId,
     sourceRevision: revision,
   };
@@ -186,6 +189,7 @@ describe("encrypted PostgreSQL backup boundary", () => {
     expect(opened.manifestBytes).toEqual(bytes);
     expect(opened.sourceEvidence).toEqual(sourceEvidence);
     expect(opened.metadata).toEqual(metadata);
+    expect(opened.readSource).toEqual({ kind: "unqualified" });
     const names = await readdir(spool);
     expect(names).toHaveLength(1);
     const folder = join(spool, names[0] as string);
@@ -595,12 +599,16 @@ describe("encrypted PostgreSQL backup boundary", () => {
         throw new Error("unused");
       },
       async open() {
-        return { contentLength: 1024, stream };
+        return { contentLength: 1024, stream, readIdentity: readIdentity(1024) };
       },
     };
     const { backup, spool } = await setup(raw);
     const controller = new AbortController();
-    const pending = backup.recover({ ...expected(), signal: controller.signal });
+    const pending = backup.recover({
+      ...expected(),
+      source: pinnedSource,
+      signal: controller.signal,
+    });
     const rejection = expect(pending).rejects.toThrow();
     await started;
     controller.abort();
@@ -751,5 +759,273 @@ describe("backup encryption purpose extension", () => {
       cipher.getAuthTag(),
     ]);
     expect(raw.objects.get(objectKey)).toEqual(expected);
+  });
+});
+
+describe("literal deployment-target backup identity", () => {
+  const targets = ["development", "staging", "production"] as const;
+  for (const deploymentTarget of targets) {
+    it(`authenticates and preserves a ${deploymentTarget} backup`, async () => {
+      const raw = new ImmutableMemoryStore();
+      const { backup, spool } = await setup(raw);
+      const bytes = manifest({ deploymentTarget });
+      const metadata = await backup.publish({
+        manifest: bytes,
+        sourceEvidence,
+        dump: Readable.from([dumpBytes]),
+      });
+      expect(metadata.objectKey).toBe(reference);
+      const opened = requireValue(await backup.recover({ ...expected(bytes), deploymentTarget }));
+      try {
+        expect(opened.manifest.deploymentTarget).toBe(deploymentTarget);
+        expect(opened.manifestBytes).toEqual(bytes);
+        expect(opened.sourceEvidence).toEqual(sourceEvidence);
+        expect(await collect(opened.dump)).toEqual(dumpBytes);
+      } finally {
+        await opened.dispose();
+      }
+      expect(await readdir(spool)).toEqual([]);
+      expect(await privateDescriptors(spool)).toEqual([]);
+    });
+    for (const expectedTarget of targets.filter((target) => target !== deploymentTarget)) {
+      it(`rejects authenticated ${deploymentTarget} bytes expected as ${expectedTarget}`, async () => {
+        const raw = new ImmutableMemoryStore();
+        const { backup, spool } = await setup(raw);
+        const bytes = manifest({ deploymentTarget });
+        await putFramed(raw, spool, frame(bytes));
+        await expect(
+          backup.recover({ ...expected(bytes), deploymentTarget: expectedTarget }),
+        ).rejects.toThrow();
+        expect(raw.reads).toBe(1);
+        expect(await readdir(spool)).toEqual([]);
+        expect(await privateDescriptors(spool)).toEqual([]);
+      });
+    }
+  }
+  for (const invalid of ["Development", "test"]) {
+    it(`rejects unknown target ${invalid} before publication and raw recovery`, async () => {
+      const raw = new ImmutableMemoryStore();
+      const { backup, spool } = await setup(raw);
+      const deploymentTarget = invalid as PostgresBackupManifest["deploymentTarget"];
+      await expect(
+        backup.publish({
+          manifest: manifest({ deploymentTarget }),
+          sourceEvidence,
+          dump: Readable.from([dumpBytes]),
+        }),
+      ).rejects.toThrow();
+      await expect(backup.recover({ ...expected(), deploymentTarget })).rejects.toThrow();
+      expect(raw.writes).toBe(0);
+      expect(raw.reads).toBe(0);
+      expect(await readdir(spool)).toEqual([]);
+    });
+  }
+});
+
+const pinnedSource = {
+  kind: "azure-blob-version" as const,
+  containerUrl: "https://nourishingtest.blob.core.windows.net/backups",
+  prefix: "development/Backups/",
+};
+function readIdentity(contentLength: number, versionId = "Opaque-V1") {
+  return {
+    ...pinnedSource,
+    objectKey: reference,
+    blobName: pinnedSource.prefix + reference,
+    versionId,
+    contentLength,
+  };
+}
+
+describe("PostgreSQL authenticated read source", () => {
+  it.each([
+    undefined,
+    null,
+    {},
+    { kind: "unqualified", extra: true },
+    { kind: "azure-blob-current" },
+    { ...pinnedSource, prefix: "../" },
+    { ...pinnedSource, containerUrl: pinnedSource.containerUrl + "?sig=PRIVATE" },
+  ])("requires an explicit valid expectation before raw open: %j", async (source) => {
+    const memory = new ImmutableMemoryStore();
+    const { backup, spool } = await setup(memory);
+    await expect(
+      backup.recover({ ...expected(), source } as Parameters<typeof backup.recover>[0]),
+    ).rejects.toThrow();
+    expect(memory.reads).toBe(0);
+    expect(await readdir(spool)).toEqual([]);
+  });
+
+  it("captures the exact opened source before delayed authentication and survives disposal", async () => {
+    const memory = new ImmutableMemoryStore();
+    const source = { ...pinnedSource };
+    const input = { ...expected(), source };
+    let observed: ReturnType<typeof readIdentity> | undefined;
+    let rawResult:
+      | { stream: Readable; contentLength: number; readIdentity: ReturnType<typeof readIdentity> }
+      | undefined;
+    const raw: RawArtifactStore = {
+      put: (value) => memory.put(value),
+      async open(value) {
+        memory.reads++;
+        const ciphertext = memory.objects.get(value.objectKey);
+        if (!ciphertext) return null;
+        observed = readIdentity(ciphertext.length);
+        const original = Buffer.from(ciphertext);
+        const stream = Readable.from(
+          (async function* () {
+            source.prefix = "replaced/";
+            input.sourceRevision = "b".repeat(40);
+            if (!observed || !rawResult) throw new Error("fixture missing");
+            observed.versionId = "PRIVATE-REPLACED";
+            rawResult.contentLength = 1;
+            rawResult.stream = Readable.from([Buffer.from("PRIVATE-REPLACED")]);
+            yield original;
+          })(),
+        );
+        rawResult = { stream, contentLength: ciphertext.length, readIdentity: observed };
+        return rawResult;
+      },
+    };
+    const { backup, spool } = await setup(raw);
+    const metadata = await putFramed(raw, spool, frame());
+    const result = requireValue(await backup.recover(input));
+    expect(result.readSource).toEqual(readIdentity(metadata.ciphertextBytes));
+    expect(result.readSource).not.toBe(observed);
+    expect(Object.isFrozen(result.readSource)).toBe(true);
+    expect(await collect(result.dump)).toEqual(dumpBytes);
+    await result.dispose();
+    expect(result.readSource).toEqual(readIdentity(metadata.ciphertextBytes));
+    expect(memory.reads).toBe(1);
+    expect(await readdir(spool)).toEqual([]);
+  });
+
+  it("isolates simultaneous recovery observations on one store", async () => {
+    const memory = new ImmutableMemoryStore();
+    const raw: RawArtifactStore = {
+      put: (value) => memory.put(value),
+      async open(value) {
+        const opened = await memory.open(value);
+        if (!opened) return null;
+        return {
+          ...opened,
+          readIdentity: readIdentity(opened.contentLength, "version-" + memory.reads),
+        };
+      },
+    };
+    const { backup, spool } = await setup(raw);
+    await putFramed(raw, spool, frame());
+    // Capture distinct identities synchronously before the deferred reads resume.
+    let sequence = 0;
+    raw.open = async (value) => {
+      const version = "version-" + ++sequence;
+      const opened = await memory.open(value);
+      return opened
+        ? { ...opened, readIdentity: readIdentity(opened.contentLength, version) }
+        : null;
+    };
+    const results = await Promise.all([
+      backup.recover({ ...expected(), source: pinnedSource }),
+      backup.recover({ ...expected(), source: pinnedSource }),
+    ]);
+    expect(results.map((r) => requireValue(r).readSource)).toEqual([
+      readIdentity(memory.objects.get(reference)?.length ?? 0, "version-1"),
+      readIdentity(memory.objects.get(reference)?.length ?? 0, "version-2"),
+    ]);
+    await Promise.all(results.map((r) => requireValue(r).dispose()));
+    expect(memory.reads).toBe(2);
+    expect(await readdir(spool)).toEqual([]);
+  });
+
+  it.each(["missing", "current", "key", "length", "location", "accessor", "record-accessor"])(
+    "refuses %s raw identity and owns cleanup without retry",
+    async (fault) => {
+      const memory = new ImmutableMemoryStore();
+      let stream: Readable | undefined;
+      let getterCalls = 0;
+      const raw: RawArtifactStore = {
+        put: (value) => memory.put(value),
+        async open(value) {
+          const opened = await memory.open(value);
+          if (!opened) return null;
+          stream = opened.stream;
+          const identity: Record<string, unknown> = readIdentity(opened.contentLength);
+          if (fault === "current") identity.kind = "azure-blob-current";
+          if (fault === "key") identity.objectKey = "wrong.enc";
+          if (fault === "length") identity.contentLength = opened.contentLength + 1;
+          if (fault === "location") identity.prefix = "other/";
+          if (fault === "accessor")
+            Object.defineProperty(identity, "versionId", {
+              get() {
+                getterCalls++;
+                throw new Error("PRIVATE");
+              },
+            });
+          if (fault === "missing") return opened;
+          if (fault === "record-accessor")
+            return Object.defineProperty(opened, "readIdentity", {
+              get() {
+                getterCalls++;
+                throw new Error("PRIVATE");
+              },
+            });
+          return { ...opened, readIdentity: identity };
+        },
+      };
+      const { backup, spool } = await setup(raw);
+      await putFramed(raw, spool, frame());
+      await expect(backup.recover({ ...expected(), source: pinnedSource })).rejects.toThrow();
+      expect(getterCalls).toBe(0);
+      expect(stream?.destroyed).toBe(true);
+      expect(memory.reads).toBe(1);
+      expect(await readdir(spool)).toEqual([]);
+      expect(await privateDescriptors(spool)).toEqual([]);
+    },
+  );
+
+  it.each(["truncated", "oversized", "late-error", "authentication"])(
+    "does not publish a qualified result after %s ciphertext",
+    async (fault) => {
+      const memory = new ImmutableMemoryStore();
+      const raw: RawArtifactStore = {
+        put: (value) => memory.put(value),
+        async open(value) {
+          memory.reads++;
+          const bytes = memory.objects.get(value.objectKey);
+          if (!bytes) return null;
+          const copy = Buffer.from(bytes);
+          if (fault === "authentication") copy[copy.length - 1] = (copy[copy.length - 1] ?? 0) ^ 1;
+          const stream = Readable.from(
+            (async function* () {
+              yield fault === "truncated" ? copy.subarray(0, -1) : copy;
+              if (fault === "oversized") yield Buffer.from([1]);
+              if (fault === "late-error") throw new Error("PRIVATE-LATE-ERROR");
+            })(),
+          );
+          return { stream, contentLength: bytes.length, readIdentity: readIdentity(bytes.length) };
+        },
+      };
+      const { backup, spool } = await setup(raw);
+      await putFramed(raw, spool, frame());
+      await expect(backup.recover({ ...expected(), source: pinnedSource })).rejects.toThrow();
+      expect(memory.reads).toBe(1);
+      expect(await readdir(spool)).toEqual([]);
+    },
+  );
+
+  it("does not upgrade explicit unqualified reads using incidental provider fields", async () => {
+    const memory = new ImmutableMemoryStore();
+    const raw: RawArtifactStore = {
+      put: (v) => memory.put(v),
+      async open(v) {
+        const opened = await memory.open(v);
+        return opened ? { ...opened, readIdentity: readIdentity(opened.contentLength) } : null;
+      },
+    };
+    const { backup, spool } = await setup(raw);
+    await putFramed(raw, spool, frame());
+    const result = requireValue(await backup.recover(expected()));
+    expect(result.readSource).toEqual({ kind: "unqualified" });
+    await result.dispose();
   });
 });
