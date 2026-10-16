@@ -517,9 +517,16 @@ export function FoodSearchClient() {
   }
 
   function chooseSuggestion(suggestion: FoodAutocompleteSuggestion) {
-    closeSuggestions(suggestion.label);
-    setQuery(suggestion.label);
-    void runSearch(suggestion.label);
+    // Fit the input's UTF-16 limit and API query limit without splitting a character.
+    let selectedQuery = "";
+    for (const character of normalizeSearchText(suggestion.label)) {
+      if (selectedQuery.length + character.length > 128) break;
+      selectedQuery += character;
+    }
+    selectedQuery = selectedQuery.trimEnd();
+    closeSuggestions(selectedQuery);
+    setQuery(selectedQuery);
+    void runSearch(selectedQuery);
   }
 
   function chooseIntent(nextIntent: FoodSearchIntent) {

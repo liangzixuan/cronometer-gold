@@ -1091,3 +1091,81 @@ describe("web search request retirement", () => {
     expect(reads).toBe(3);
   });
 });
+
+describe("Food suggestion query limits", () => {
+  it.each([
+    ["short", "Apple Pie", "Apple Pie"],
+    ["long ASCII", "A".repeat(129), "A".repeat(128)],
+    ["astral", "\u{1f34e}".repeat(129), "\u{1f34e}".repeat(64)],
+    ["surrogate boundary", "A".repeat(127) + "\u{1f34e}", "A".repeat(127)],
+    ["normalization expansion", "\ufb03".repeat(64), "ffi".repeat(42) + "ff"],
+  ])("selects a %s label and logs its full named food", async (_kind, label, expectedQuery) => {
+    const namedHit = { ...hit, name: label };
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (url.startsWith("/api/foods/autocomplete?")) {
+        return Response.json({
+          data: [
+            {
+              foodId: hit.foodId,
+              foodVersionId: hit.foodVersionId,
+              kind: hit.kind,
+              label,
+              brandName: hit.brandName,
+              source: hit.source,
+            },
+          ],
+        });
+      }
+      if (url.startsWith("/api/foods/search?")) {
+        const query = new URL(url, "https://example.test").searchParams.get("query");
+        expect(query).toBe(expectedQuery);
+        expect([...(query ?? "")].length).toBeLessThanOrEqual(128);
+        expect(query?.length).toBeLessThanOrEqual(128);
+        return Response.json({ data: [namedHit], page: { nextCursor: null } });
+      }
+      if (url.startsWith("/api/diary/entries?") && init?.method === "POST") {
+        const saved = await savedMutation(init).json();
+        saved.data.entry.food.name = label;
+        return Response.json(saved);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await change("food-query", "apple");
+    for (const callback of timers.values()) callback();
+    timers.clear();
+    await hooks.settle();
+    const suggestion = elements().find(
+      (node) => node.type === "button" && text(node).startsWith(label),
+    );
+    if (!suggestion) throw new Error("Missing full-name suggestion");
+    invoke(suggestion);
+    await hooks.settle();
+    expect(field("food-query").props.value).toBe(expectedQuery);
+    expect(fetcher.mock.calls.filter(([url]) => url.startsWith("/api/foods/search?"))).toHaveLength(
+      1,
+    );
+    expect(elements().some((node) => node.type === "h3" && text(node) === label)).toBe(true);
+    expect(text()).not.toContain("Food search is unavailable");
+    expect(field("quick-add-date").props.value).toBe("2026-09-24");
+    expect(field("quick-add-meal").props.value).toBe("dinner");
+    await change("quick-add-search-202-amount", "1.5");
+    const add = button(`Add 1.5 default servings of ${label}`);
+    expect(add.props.disabled).toBe(false);
+    invoke(add);
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.[0]).toBe("/api/diary/entries?date=2026-09-24&profileTimeZonePrecondition=v1");
+    expect(JSON.parse(String(posts[0]?.[1]?.body))).toMatchObject({
+      foodVersionId: hit.foodVersionId,
+      portion: { kind: "serving", servingId: hit.defaultServing.servingId, amount: "1.5" },
+      mealSlot: "dinner",
+    });
+    expect(text()).toContain(`1.5 default servings of ${label} was added to Dinner on 2026-09-24.`);
+    expect(text()).not.toContain("retry safely");
+  });
+});
