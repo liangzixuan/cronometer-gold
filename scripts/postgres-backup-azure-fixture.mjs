@@ -126,3 +126,31 @@ export function azureBackupFixture({ hosted = false } = {}) {
   };
   return state;
 }
+
+export function azureLedgerSettings({
+  containerUrl = "https://nourishingledger.blob.core.windows.net/ledger",
+  prefix = "development/ledger/",
+} = {}) {
+  const sas = new URLSearchParams(azureBackupFixture().storage("rl").sasToken);
+  sas.set("sig", "synthetic-ledger-sas");
+  return {
+    kind: "azure-blob",
+    containerUrl,
+    prefix,
+    sasToken: sas.toString(),
+    encryptionKeyRing: {
+      currentKeyId: "ledger-current",
+      keys: {
+        "ledger-old": Buffer.alloc(32, 21).toString("base64"),
+        "ledger-current": Buffer.alloc(32, 22).toString("base64"),
+      },
+    },
+    locatorKeyRing: {
+      currentKeyId: "locator-current",
+      keys: {
+        "locator-old": Buffer.alloc(32, 31).toString("base64"),
+        "locator-current": Buffer.alloc(32, 32).toString("base64"),
+      },
+    },
+  };
+}
