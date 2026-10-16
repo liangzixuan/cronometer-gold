@@ -4,16 +4,14 @@ import { lstat, mkdir, mkdtemp, rm, statfs, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { finished } from "node:stream/promises";
 
-import {
-  EncryptedPostgresBackupStore,
-  FileRawArtifactStore,
-} from "../packages/artifact-store/dist/index.js";
+import { EncryptedPostgresBackupStore } from "../packages/artifact-store/dist/index.js";
 import {
   normalizePostgresBackupConnection,
   postgresBackupLibpqEnvironment,
   postgresBackupPasswordFile,
 } from "../packages/db/dist/index.js";
 import { withPostgresBackupSnapshot } from "./postgres-backup-snapshot.mjs";
+import { createPostgresBackupRawStore, postgresBackupStorage } from "./postgres-backup-storage.mjs";
 import { ChildCleanupError, runTool, trustedPath } from "./postgres-operator-process.mjs";
 
 const SHA = /^[0-9a-f]{64}$/u;
@@ -34,7 +32,7 @@ function inputSettings(input) {
     "deploymentTarget",
     "backupId",
     "tmpfsRoot",
-    "outputDirectory",
+    "storage",
     "tools",
     "keyRing",
     "maxDumpBytes",
@@ -51,7 +49,7 @@ function inputSettings(input) {
   requireValue(
     typeof input.sourceRevision === "string" && /^[0-9a-f]{40}$/u.test(input.sourceRevision),
   );
-  requireValue(["staging", "production"].includes(input.deploymentTarget));
+  requireValue(["development", "staging", "production"].includes(input.deploymentTarget));
   requireValue(typeof input.backupId === "string" && UUID.test(input.backupId));
   requireValue(
     Number.isSafeInteger(input.maxDumpBytes) &&
@@ -90,6 +88,7 @@ function inputSettings(input) {
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.keyRing.currentKeyId),
   );
   requireValue(input.keyRing.keys.has(input.keyRing.currentKeyId));
+  const storage = postgresBackupStorage(input.storage, "backup", input.maxDumpBytes);
   const keys = new Map();
   for (const [id, bytes] of input.keyRing.keys) {
     requireValue(typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(id));
@@ -98,6 +97,7 @@ function inputSettings(input) {
   }
   return Object.freeze({
     ...input,
+    storage,
     connection: normalizePostgresBackupConnection(input.connection),
     tools: Object.freeze(tools),
     keyRing: { purpose: "postgres_backup", currentKeyId: input.keyRing.currentKeyId, keys },
@@ -137,7 +137,7 @@ function manifestBytes(value) {
 }
 
 /**
- * A local ciphertext artifact only. Callers must separately qualify the host,
+ * Publishes authenticated ciphertext to selected storage. Separately qualify the host,
  * native tools, real snapshot import, off-host recovery and restore/erasure replay.
  */
 export async function runPostgresBackup(input) {
@@ -158,7 +158,8 @@ export async function runPostgresBackup(input) {
     controller.signal.throwIfAborted();
     await trustedPath(options.tmpfsRoot, { directory: true, privateLeaf: true });
     requireValue(Number((await statfs(options.tmpfsRoot)).type) === TMPFS);
-    await ciphertextDirectory(options.outputDirectory, options.sourceRevision);
+    if (options.storage.kind === "file")
+      await ciphertextDirectory(options.storage.directory, options.sourceRevision);
     directory = await mkdtemp(join(options.tmpfsRoot, "nutrition-pg-backup-"));
     await trustedPath(directory, { directory: true, privateLeaf: true });
     const environment = postgresBackupLibpqEnvironment(options.connection, directory);
@@ -237,7 +238,7 @@ export async function runPostgresBackup(input) {
     });
     phase = "publication";
     const store = new EncryptedPostgresBackupStore({
-      rawStore: new FileRawArtifactStore(options.outputDirectory),
+      rawStore: createPostgresBackupRawStore(options.storage),
       keyRing: options.keyRing,
       temporaryDirectory: directory,
       maxDumpBytes: options.maxDumpBytes,
@@ -258,8 +259,10 @@ export async function runPostgresBackup(input) {
     }
     controller.signal.throwIfAborted();
     result = Object.freeze({
-      kind: "nutrition-postgres-local-backup-v1",
-      localOnly: true,
+      kind: "nutrition-postgres-backup-publication-v1",
+      storage: options.storage.kind,
+      localOnly: options.storage.kind === "file",
+      operationalRecoveryAccepted: false,
       manifest: JSON.parse(manifest.toString("utf8")),
       manifestSha256: digest(manifest),
       metadata,

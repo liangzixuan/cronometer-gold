@@ -13,6 +13,8 @@ import test from "node:test";
 import { rootCertificates } from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { azureBackupFixture } from "./postgres-backup-azure-fixture.mjs";
+
 const stateKey = Symbol.for("nutrition.test.localBackup");
 const state = {
   children: [],
@@ -180,6 +182,14 @@ state.rm = async (...args) => {
 const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (
+      specifier === "@azure/core-rest-pipeline" &&
+      context.parentURL?.endsWith("/azure-blob-http-client.ts")
+    ) {
+      state.azurePipelineURL = next(specifier, context).url;
+      return { url: "nutrition-test:azure-wire", shortCircuit: true };
+    }
+
+    if (
       specifier === "node:test" &&
       context.parentURL?.endsWith("/postgres-restore-drill.test.mjs")
     )
@@ -209,7 +219,8 @@ const hooks = registerHooks({
       return { url: "nutrition-test:db", shortCircuit: true };
     if (
       specifier === "../packages/artifact-store/dist/index.js" &&
-      context.parentURL?.endsWith("/postgres-backup.mjs")
+      (context.parentURL?.endsWith("/postgres-backup.mjs") ||
+        context.parentURL?.endsWith("/postgres-backup-storage.mjs"))
     )
       return { url: "nutrition-test:artifact", shortCircuit: true };
     if (
@@ -244,6 +255,8 @@ const hooks = registerHooks({
         JSON.stringify(source("packages/artifact-store/src/artifact-encryption.ts")) +
         "; export * from " +
         JSON.stringify(source("packages/artifact-store/src/postgres-backup.ts")) +
+        "; export * from " +
+        JSON.stringify(source("packages/artifact-store/src/azure-blob-raw-artifact-store.ts")) +
         ";",
       "nutrition-test:pg":
         prefix +
@@ -276,6 +289,18 @@ const hooks = registerHooks({
           end(){ if(this.closed) return Promise.resolve(); const ended=new Promise(r=>this.once("end",r)); this.socket.destroy(); return ended; }
         }`,
     };
+    if (url === "nutrition-test:azure-wire")
+      return {
+        format: "module",
+        shortCircuit: true,
+        source:
+          "export * from " +
+          JSON.stringify(state.azurePipelineURL) +
+          "; import {createHttpHeaders} from " +
+          JSON.stringify(state.azurePipelineURL) +
+          "; const state=globalThis[Symbol.for('nutrition.test.localBackup')]; " +
+          "export const createDefaultHttpClient=()=>({sendRequest:request=>state.azure.send(request,createHttpHeaders)});",
+      };
     if (modules[url]) return { format: "module", source: modules[url], shortCircuit: true };
     if (url.endsWith("/scripts/postgres-backup.mjs"))
       return {
@@ -306,9 +331,8 @@ const hooks = registerHooks({
 const { sharedCollectorAdapter } = await import("./postgres-restore-drill.test.mjs");
 state.fixture = sharedCollectorAdapter;
 const { runPostgresBackup, testedRunTool } = await import("./postgres-backup.mjs");
-const { EncryptedPostgresBackupStore, FileRawArtifactStore } = await import(
-  "nutrition-test:artifact"
-);
+const { EncryptedPostgresBackupStore, FileRawArtifactStore, AzureBlobRawArtifactStore } =
+  await import("nutrition-test:artifact");
 const { parsePostgresBackupEvidence } = await import("./postgres-backup-evidence.mjs");
 hooks.deregister();
 
@@ -348,7 +372,7 @@ async function setup() {
     deploymentTarget: "staging",
     backupId: "a0000000-0000-4000-8000-000000000001",
     tmpfsRoot: temporary,
-    outputDirectory,
+    storage: { kind: "file", directory: outputDirectory },
     tools,
     keyRing: {
       purpose: "postgres_backup",
@@ -381,6 +405,9 @@ test("actual collector, encryption and create-only file adapter publish and reco
   try {
     const result = await runPostgresBackup(fixture.options);
     assert.equal(result.localOnly, true);
+    assert.equal(result.kind, "nutrition-postgres-backup-publication-v1");
+    assert.equal(result.storage, "file");
+    assert.equal(result.operationalRecoveryAccepted, false);
     assert.equal(result.manifest.dumpBytes, dump.byteLength);
     assert.equal(result.manifest.dumpSha256, hash(dump));
     assert.equal(result.manifest.snapshotId, "00000003-000000A1-1");
@@ -402,7 +429,7 @@ test("actual collector, encryption and create-only file adapter publish and reco
     assert.equal(dumpCall.options.env.PGHOST, state.clients[0].config.host);
     assert.equal(dumpCall.options.env.PGPORT, String(state.clients[0].config.port));
     const store = new EncryptedPostgresBackupStore({
-      rawStore: new FileRawArtifactStore(fixture.options.outputDirectory),
+      rawStore: new FileRawArtifactStore(fixture.options.storage.directory),
       keyRing: fixture.options.keyRing,
       temporaryDirectory: fixture.temporary,
       maxDumpBytes: 1024,
@@ -454,7 +481,7 @@ for (const mode of [
         await fs
           .stat(
             join(
-              fixture.options.outputDirectory,
+              fixture.options.storage.directory,
               "postgres-backups/v2",
               fixture.options.sourceRevision,
               fixture.options.backupId + ".pgbackup.enc",
@@ -529,7 +556,7 @@ test("existing ciphertext survives duplicate publication", async () => {
   const fixture = await setup();
   try {
     const first = await runPostgresBackup(fixture.options);
-    const path = join(fixture.options.outputDirectory, first.metadata.objectKey);
+    const path = join(fixture.options.storage.directory, first.metadata.objectKey);
     const original = await fs.readFile(path);
     await assert.rejects(runPostgresBackup(fixture.options), /publication failed/u);
     assert.deepEqual(await fs.readFile(path), original);
@@ -550,7 +577,7 @@ test("cleanup failure prevents success without deleting published ciphertext", a
         error.errors[0].message === "PostgreSQL local backup plaintext cleanup failed",
     );
     const path = join(
-      fixture.options.outputDirectory,
+      fixture.options.storage.directory,
       "postgres-backups/v2",
       fixture.options.sourceRevision,
       fixture.options.backupId + ".pgbackup.enc",
@@ -829,3 +856,155 @@ for (const diagnostic of ["", "PRIVATE_DIAGNOSTIC_µ\nsecond chunk\n"]) {
     }
   });
 }
+
+test("development operator preserves literal target through actual collection and authenticated recovery", async () => {
+  const fixture = await setup();
+  try {
+    fixture.options.deploymentTarget = "development";
+    const result = await runPostgresBackup(fixture.options);
+    assert.equal(result.localOnly, true);
+    assert.equal(result.manifest.deploymentTarget, "development");
+    const store = new EncryptedPostgresBackupStore({
+      rawStore: new FileRawArtifactStore(fixture.options.storage.directory),
+      keyRing: fixture.options.keyRing,
+      temporaryDirectory: fixture.temporary,
+      maxDumpBytes: 1024,
+    });
+    const recovered = await store.recover({
+      source: { kind: "unqualified" },
+      ...result.manifest,
+      manifestSha256: result.manifestSha256,
+    });
+    assert.ok(recovered);
+    try {
+      assert.equal(recovered.manifest.deploymentTarget, "development");
+      const parts = [];
+      for await (const part of recovered.dump) parts.push(part);
+      assert.deepEqual(Buffer.concat(parts), dump);
+      assert.deepEqual(
+        parsePostgresBackupEvidence(recovered.sourceEvidence, "nutrition_owner"),
+        sharedCollectorAdapter().source,
+      );
+    } finally {
+      await recovered.dispose();
+    }
+    assert.ok(state.children.every((child) => child.closed));
+    assert.ok(state.clients.every((client) => client.closed));
+    assert.deepEqual(await fs.readdir(fixture.temporary), []);
+  } finally {
+    await fixture.dispose();
+  }
+});
+for (const deploymentTarget of ["Development", "test"]) {
+  test(
+    "backup operator rejects unknown target " + deploymentTarget + " before any tools or SQL",
+    async () => {
+      const fixture = await setup();
+      try {
+        fixture.options.deploymentTarget = deploymentTarget;
+        await assert.rejects(runPostgresBackup(fixture.options), /PostgreSQL local backup/u);
+        assert.equal(state.calls.length, 0);
+        assert.equal(state.clients.length, 0);
+        assert.deepEqual(await fs.readdir(fixture.temporary), []);
+      } finally {
+        await fixture.dispose();
+      }
+    },
+  );
+}
+
+test("Azure create-only backup publishes authenticated ciphertext without exporting SAS to native children", async () => {
+  const fixture = await setup();
+  const azure = azureBackupFixture();
+  state.azure = azure;
+  try {
+    fixture.options.storage = azure.storage("c");
+    fixture.options.deploymentTarget = "development";
+    const result = await runPostgresBackup(fixture.options);
+    assert.equal(result.storage, "azure-blob");
+    assert.equal(result.localOnly, false);
+    assert.equal(result.operationalRecoveryAccepted, false);
+    assert.equal(azure.ciphertext.includes(dump), false);
+    assert.equal(JSON.stringify(result).includes("synthetic-backup-sas"), false);
+    assert.ok(state.calls.every((c) => !JSON.stringify(c).includes("synthetic-backup-sas")));
+    const store = new EncryptedPostgresBackupStore({
+      rawStore: new AzureBlobRawArtifactStore({ ...azure.storage("rl"), role: "restore-reader" }),
+      keyRing: fixture.options.keyRing,
+      temporaryDirectory: fixture.temporary,
+      maxDumpBytes: 1024,
+    });
+    const recovered = await store.recover({
+      source: {
+        kind: "azure-blob-version",
+        containerUrl: azure.storage("rl").containerUrl,
+        prefix: azure.storage("rl").prefix,
+      },
+      ...Object.fromEntries(
+        ["backupId", "databaseName", "deploymentTarget", "snapshotId", "sourceRevision"].map(
+          (k) => [k, result.manifest[k]],
+        ),
+      ),
+      manifestSha256: result.manifestSha256,
+    });
+    assert.ok(recovered);
+    try {
+      assert.equal(recovered.manifest.dumpSha256, hash(dump));
+    } finally {
+      await recovered.dispose();
+    }
+    const original = Buffer.from(azure.ciphertext);
+    await assert.rejects(runPostgresBackup(fixture.options), /backup/u);
+    assert.deepEqual(azure.ciphertext, original);
+    assert.deepEqual(await fs.readdir(fixture.temporary), []);
+  } finally {
+    azure.dispose();
+    state.azure = undefined;
+    await fixture.dispose();
+  }
+});
+for (const change of ["mixed", "unknown", "broad", "read-role", "oversized"]) {
+  test(
+    "Azure backup rejects storage admission " + change + " before tools or database",
+    async () => {
+      const fixture = await setup();
+      const azure = azureBackupFixture();
+      state.azure = azure;
+      try {
+        fixture.options.storage = azure.storage(
+          change === "broad" ? "rcd" : change === "read-role" ? "rl" : "c",
+        );
+        if (change === "mixed") fixture.options.outputDirectory = fixture.local;
+        if (change === "unknown") fixture.options.storage.role = "backup-writer";
+        if (change === "oversized") fixture.options.maxDumpBytes = 2_147_483_649;
+        await assert.rejects(runPostgresBackup(fixture.options));
+        assert.equal(state.calls.length, 0);
+        assert.equal(state.clients.length, 0);
+        assert.equal(azure.requests.length, 0);
+      } finally {
+        azure.dispose();
+        state.azure = undefined;
+        await fixture.dispose();
+      }
+    },
+  );
+}
+test("Azure backup publication rejection stays redacted and clears plaintext", async () => {
+  const fixture = await setup();
+  const azure = azureBackupFixture();
+  state.azure = azure;
+  try {
+    fixture.options.storage = azure.storage("c");
+    azure.denied = true;
+    await assert.rejects(runPostgresBackup(fixture.options), (error) => {
+      assert.equal(String(error).includes("synthetic-backup-sas"), false);
+      return true;
+    });
+    assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    assert.ok(state.children.every((c) => c.closed));
+    assert.ok(state.clients.every((c) => c.closed));
+  } finally {
+    azure.dispose();
+    state.azure = undefined;
+    await fixture.dispose();
+  }
+});
