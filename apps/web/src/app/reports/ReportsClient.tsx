@@ -19,6 +19,7 @@ import {
   reportComparisonText,
   reportPointAccessibilityLabel,
   reportPointCoverageText,
+  reportPointHasChartAmount,
   reportSourceDiaryDates,
   resolveInitialNutritionReportRange,
   targetSnapshotForPoint,
@@ -1165,7 +1166,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                     >
                       <time dateTime={point.localDate}>{displayDate(point.localDate)}</time>
                       <div className="reportBarTrack" aria-hidden="true">
-                        {point.knownPercentOfScale !== null ? (
+                        {reportPointHasChartAmount(point) ? (
                           <span
                             className={`reportBarFill reportBarFill--${point.aggregate?.completeness ?? "missing"}`}
                             style={{ width: `${Number(point.knownPercentOfScale)}%` }}

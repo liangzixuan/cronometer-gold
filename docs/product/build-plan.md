@@ -119,10 +119,12 @@ ADR0106 qualification and its earlier failures are retained. Do not resume anoth
 catalogue service attempt or feature family by default. Existing action-specific
 approvals and the full M0/M1/M2 acceptance requirements remain in force.
 
-Known vulnerability remediation is the lowest work priority, with minimum
-follow-up effort. Product functionality, hosted integration and the daily workflow
-come first. Preserve automated findings and release requirements; do not repeatedly
-poll unchanged advisories or weaken an audit to clear the queue.
+Security remediation has the lowest priority. As clarified by the user on October
+16, 2026, security findings must not block product work, routine source commits or
+non-force pushes. Keep checks enabled and record actual failures; do not request
+another approval solely for a red security check. Prioritize functionality, hosted
+integration and the daily workflow. Separate deployment, spending, credential,
+destructive-action and native-release permissions remain in force.
 
 ### Execution queue
 

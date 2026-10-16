@@ -55,7 +55,7 @@ for committed-source packing, coverage and artifact limits.
 | --- | --- | --- |
 | Preflight | Source identity, versions, required tools and Docker/Compose availability | Prerequisites are usable; failures are classified before running the suite |
 | Development | Focused behavioral regressions, affected types and formatting | Each fix has relevant passing evidence, and independent review is integrated |
-| Final source | Canonical `pnpm check`, `pnpm build`, and applicable dependency/license/static checks | Required commands pass on the final source; cache reuse and opt-in skips are explicit |
+| Final source | Canonical `pnpm check`, `pnpm build`, and applicable dependency/license/static checks | Behavioral, type, build and non-security checks pass; security findings are recorded without blocking source delivery; cache reuse and opt-in skips are explicit |
 | Local services | Required migration, API, restore, scoped search and privacy runbook steps | Executed integration counts and exact readiness/loopback evidence are recorded |
 | Delivery | Review final diff, staged contents, modes and secrets; commit/push under standing authorization; inspect automatic checks | Local/tracking/live-remote relationship and each workflow's observed state are recorded |
 
@@ -121,6 +121,13 @@ This table helps select development checks; it does not exempt a release from an
 required gate. Freshness-sensitive external evidence still needs revalidation.
 The local production audit retains its action-specific authorization boundary.
 Automatic hosted audit evidence is recorded separately.
+
+The user's October 16, 2026 priority applies to all security findings: keep audit
+and security checks enabled, report their actual failures, and continue product
+work and routine source commits/pushes without another security approval request.
+Security remediation stays at the lowest priority. A red security result is not
+reported as a pass. Separate deployment, spending, credential, destructive-action
+and native-release permissions still apply.
 
 ## Reliable command and evidence capture
 

@@ -916,15 +916,22 @@ export function reportComparisonText(point: NutritionReportSeriesPoint): string 
   return parts.length === 0 ? "No saved threshold" : parts.join(" · ");
 }
 
+export function reportPointHasChartAmount(point: NutritionReportSeriesPoint): boolean {
+  return (
+    point.aggregate !== null &&
+    point.aggregate.completeness !== "unknown" &&
+    point.knownPercentOfScale !== null
+  );
+}
+
 export function reportPointAccessibilityLabel(
   point: NutritionReportSeriesPoint,
   nutrientName: string,
   unit: string,
 ): string {
-  const scale =
-    point.knownPercentOfScale === null
-      ? "no chart bar"
-      : `${point.knownPercentOfScale}% of chart scale`;
+  const scale = reportPointHasChartAmount(point)
+    ? `${point.knownPercentOfScale}% of chart scale`
+    : "no chart bar";
   return `${point.localDate}, ${nutrientName}: ${reportAmountText(point, unit)}; ${reportPointCoverageText(point)} ${scale}.`;
 }
 

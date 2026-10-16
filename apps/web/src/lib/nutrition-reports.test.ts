@@ -14,6 +14,7 @@ import {
   reportComparisonText,
   reportPointAccessibilityLabel,
   reportPointCoverageText,
+  reportPointHasChartAmount,
   reportSourceDiaryDates,
   resolveInitialNutritionReportRange,
 } from "./nutrition-reports";
@@ -423,6 +424,7 @@ describe("web nutrition-report presentation", () => {
   if (!missing) throw new Error("Expected a report point.");
 
   it("labels an empty diary day as missing rather than zero", () => {
+    expect(reportPointHasChartAmount(missing)).toBe(false);
     expect(reportAmountText(missing, "kcal")).toBe("Missing");
     expect(reportPointCoverageText(missing)).toContain("missing, not zero");
     expect(reportPointAccessibilityLabel(missing, "Energy", "kcal")).toContain("no chart bar");
@@ -452,8 +454,12 @@ describe("web nutrition-report presentation", () => {
       },
       knownPercentOfScale: "70",
     };
+    expect(reportPointHasChartAmount(partial)).toBe(true);
     expect(reportAmountText(partial, "kcal")).toBe("At least 1,400 kcal");
     expect(reportPointCoverageText(partial)).toContain("Known lower bound");
+    expect(reportPointAccessibilityLabel(partial, "Energy", "kcal")).toContain(
+      "70% of chart scale",
+    );
   });
 
   it("labels wholly unknown coverage as unknown instead of a zero lower bound", () => {
@@ -480,10 +486,30 @@ describe("web nutrition-report presentation", () => {
       },
       knownPercentOfScale: "0",
     };
+    expect(reportPointHasChartAmount(unknown)).toBe(false);
     expect(reportAmountText(unknown, "kcal")).toBe("Unknown");
     expect(reportPointCoverageText(unknown)).toContain("Amount unknown");
     expect(reportPointAccessibilityLabel(unknown, "Energy", "kcal")).toContain("Energy: Unknown;");
     expect(reportPointAccessibilityLabel(unknown, "Energy", "kcal")).not.toContain("At least 0");
+    expect(reportPointAccessibilityLabel(unknown, "Energy", "kcal")).toContain("no chart bar");
+    expect(reportPointAccessibilityLabel(unknown, "Energy", "kcal")).not.toContain(
+      "0% of chart scale",
+    );
+  });
+
+  it("keeps a chart amount for a known zero", () => {
+    const point = parseNutritionReport(zeroTargetNutritionReportFixture()).series[0]?.points[0];
+    if (!point?.aggregate) throw new Error("Expected a quantified report point.");
+    const knownZero: NutritionReportSeriesPoint = {
+      ...point,
+      aggregate: { ...point.aggregate, knownAmount: "0" },
+      knownPercentOfScale: "0",
+    };
+    expect(reportPointHasChartAmount(knownZero)).toBe(true);
+    expect(reportAmountText(knownZero, "kcal")).toBe("0 kcal");
+    expect(reportPointAccessibilityLabel(knownZero, "Energy", "kcal")).toContain(
+      "0% of chart scale",
+    );
   });
 
   it("explains why a saved zero target has no percentage", () => {

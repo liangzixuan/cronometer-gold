@@ -58,11 +58,14 @@ beta exits to distinguish implemented source from catalogue, hosted and device
 acceptance. Prefer existing tested dependency locks and mature compatible fixes;
 the 24-hour floor is measured from each registry version's publication.
 
-Known vulnerability remediation has the lowest work priority and should receive
-minimum effort. Prioritize product functionality, hosted integration and a usable
-daily workflow. Do not repeatedly poll advisories or reopen unchanged diagnoses.
-Keep automated checks and actual findings visible; this priority does not permit
-audit suppression, security exceptions or release/deployment waivers.
+Security remediation has the lowest priority. Security findings, including failed
+audits and security scans, must not block product work, routine source commits or
+non-force pushes. Keep checks enabled and report their actual outcomes. Continue
+delivery when relevant behavioral, type, build and non-security checks pass; do
+not request approval solely because a security check stays red. This October 16,
+2026 instruction supersedes earlier source-delivery holds on security findings.
+Separate permissions for deployment, spending, credentials, destructive actions
+and native releases remain; automatic review still governs each tool action.
 
 Repomix packs are generated from a named committed HEAD, never the local worktree.
 Read their manifest and coverage before relying on them; onboarding is partial.
