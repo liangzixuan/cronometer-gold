@@ -1476,6 +1476,37 @@ export function defaultMealForHour(hour: number): MealSlot {
   return "snacks";
 }
 
+/** Match the returned addition before retiring its uncertain request. */
+export function quickAddMatchesRequest(
+  mutation: DiaryMutationResult,
+  operation: QuickAddOperation,
+): boolean {
+  const entry = mutation.entry;
+  if (entry?.entryKind !== "food") return false;
+  const instant =
+    /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.(\d{1,9}))?(?:Z|[+-]\d{2}:\d{2})$/u.exec(
+      entry.occurredAt,
+    );
+  if (!instant || !isLocalDate(instant[1] ?? "")) return false;
+  const subMilliseconds = instant[2]?.slice(3) ?? "";
+  const localDate = correctionTargetLocalDate(
+    operation.body.occurredAt,
+    operation.expectedTimeZone,
+  );
+  return (
+    !/[1-9]/u.test(subMilliseconds) &&
+    entry.foodVersionId === operation.body.foodVersionId &&
+    sameDiaryPortionRequest(operation.body.portion, entry.portion) &&
+    entry.mealSlot === operation.body.mealSlot &&
+    Date.parse(entry.occurredAt) === Date.parse(operation.body.occurredAt) &&
+    entry.timeZone === operation.expectedTimeZone &&
+    localDate !== null &&
+    entry.localDate === localDate &&
+    mutation.affectedDays.length === 1 &&
+    mutation.affectedDays[0]?.localDate === localDate
+  );
+}
+
 export function isPositiveDecimal(value: string): boolean {
   return value.length <= 19 && API_POSITIVE_DECIMAL.test(value);
 }

@@ -24,6 +24,7 @@ import {
   parseSession,
   prepareQuickAddOperation,
   type QuickAddOperation,
+  quickAddMatchesRequest,
 } from "../../lib/diary";
 
 import {
@@ -738,6 +739,9 @@ export function FoodSearchClient() {
         throw new Error(message);
       }
       const mutation = parseDiaryMutation(body);
+      if (!quickAddMatchesRequest(mutation, operation)) {
+        throw new TypeError("The server returned a diary entry for a different addition.");
+      }
       const loggedDate = confirmedFoodAddDate(mutation, food.foodVersionId);
       const message = `${quickAddAmountLabel(draft)} of ${food.name} was added to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`;
       if (pendingAdds.current.get(operation.intentKey) === operation) {

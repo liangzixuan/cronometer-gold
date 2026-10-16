@@ -1413,3 +1413,124 @@ describe("Food suggestion query limits", () => {
     expect(text()).not.toContain("retry safely");
   });
 });
+
+describe("food Add response matches the submitted operation", () => {
+  for (const instance of ["search", "barcode"] as const) {
+    it.each([
+      "quantity",
+      "unit",
+      "serving",
+      "meal",
+      "instant",
+      "time-zone",
+      "day",
+      "submillisecond",
+      "compact-offset",
+      "lowercase-zone",
+    ] as const)(
+      `keeps an uncertain ${instance} Add after a valid but unrelated %s result`,
+      async (mismatch) => {
+        const writes: RequestInit[] = [];
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes.push(init);
+            const response = await savedMutation(init).json();
+            if (writes.length === 1) {
+              const saved = response.data.entry;
+              if (mismatch === "quantity") saved.portion.amount = "3";
+              if (mismatch === "unit") saved.portion = { kind: "grams", grams: "2.5" };
+              if (mismatch === "serving") saved.portion.servingId = "304";
+              if (mismatch === "meal") saved.mealSlot = "breakfast";
+              if (mismatch === "instant") saved.occurredAt = "2026-09-24T17:01:00.000Z";
+              if (mismatch === "time-zone") saved.timeZone = "America/New_York";
+              if (mismatch === "submillisecond") saved.occurredAt = "2026-09-24T17:00:00.000001Z";
+              if (mismatch === "compact-offset")
+                saved.occurredAt = "2026-09-24T17:00:00.000001+0000";
+              if (mismatch === "lowercase-zone") saved.occurredAt = "2026-09-24T17:00:00.000001z";
+              if (mismatch === "day") {
+                saved.localDate = "2026-09-23";
+                response.data.affectedDays[0].localDate = "2026-09-23";
+              }
+            }
+            return Response.json(response);
+          }
+          return publicResponse(url);
+        });
+        vi.stubGlobal("fetch", fetcher);
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-24T17:00:00.000Z"));
+        hooks.mount(FoodSearchClient);
+        await hooks.settle();
+        if (instance === "search") await search();
+        else {
+          await change("food-barcode", "012345678905");
+          const form = elements().find((node) => node.props.className === "barcodeForm");
+          if (!form) throw new Error("Missing barcode form");
+          invoke(form, "onSubmit", { preventDefault: vi.fn() });
+          await hooks.settle();
+        }
+        await change(`quick-add-${instance}-202-amount`, "2.500000");
+        invoke(button("Add 2.500000 default servings of Apple Pie"));
+        await hooks.settle();
+        expect(writes).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(text()).not.toContain("was added to");
+        expect(text()).toContain("Choose Add again to retry safely");
+        expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        vi.setSystemTime(new Date("2026-09-24T18:00:00.000Z"));
+        invoke(button("Add 2.500000 default servings of Apple Pie"));
+        await hooks.settle();
+        expect(writes).toHaveLength(2);
+        expect(writes[1]).toEqual(writes[0]);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(text()).toContain("was added to Dinner on 2026-09-24");
+        invoke(button("Add 2.500000 default servings of Apple Pie"));
+        await hooks.settle();
+        expect(writes).toHaveLength(3);
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(new Headers(writes[2]?.headers).get("idempotency-key")).not.toBe(
+          new Headers(writes[0]?.headers).get("idempotency-key"),
+        );
+      },
+    );
+  }
+
+  it.each([false, true])(
+    "settles a matching grams result with equivalent decimal/instant for replayed=%s",
+    async (replayed) => {
+      const writes: RequestInit[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes.push(init);
+            const response = await savedMutation(init).json();
+            response.data.replayed = replayed;
+            response.data.entry.portion.grams = "2.500000";
+            response.data.entry.occurredAt = "2026-09-24T17:00:00.000000000+00:00";
+            return Response.json(response);
+          }
+          return publicResponse(url);
+        }),
+      );
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-24T17:00:00.000Z"));
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await search();
+      await change("quick-add-search-202-kind", "grams");
+      await change("quick-add-search-202-amount", "2.500000");
+      invoke(button("Add 2.500000 g of Apple Pie"));
+      await hooks.settle();
+      expect(text()).toContain("2.500000 g of Apple Pie was added to Dinner on 2026-09-24");
+      invoke(button("Add 2.500000 g of Apple Pie"));
+      await hooks.settle();
+      expect(writes).toHaveLength(2);
+      expect(operationId).toHaveBeenCalledTimes(2);
+    },
+  );
+});
