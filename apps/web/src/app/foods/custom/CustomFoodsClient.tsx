@@ -134,7 +134,7 @@ function blankCustom(nutrientId: string): CustomDraft {
     servingLabel: "",
     servingGrams: "",
     notes: "",
-    nutrients: nutrientId ? [{ nutrientId, state: "quantified", amountPer100Grams: "0" }] : [],
+    nutrients: nutrientId ? [{ nutrientId, state: "quantified", amountPer100Grams: "" }] : [],
   };
 }
 
@@ -373,7 +373,7 @@ export function CustomFoodsClient() {
       ...custom,
       nutrients: [
         ...custom.nutrients,
-        { nutrientId: nextCustomNutrient.nutrientId, state: "quantified", amountPer100Grams: "0" },
+        { nutrientId: nextCustomNutrient.nutrientId, state: "quantified", amountPer100Grams: "" },
       ],
     });
   }
@@ -392,7 +392,7 @@ export function CustomFoodsClient() {
     setCustom({
       ...custom,
       nutrients: custom.nutrients.map((item, rowIndex) =>
-        rowIndex === index ? { nutrientId, state: "quantified", amountPer100Grams: "0" } : item,
+        rowIndex === index ? { nutrientId, state: "quantified", amountPer100Grams: "" } : item,
       ),
     });
   }
@@ -1486,7 +1486,7 @@ export function CustomFoodsClient() {
                                 ? {
                                     nutrientId: item.nutrientId,
                                     state: "quantified",
-                                    amountPer100Grams: "0",
+                                    amountPer100Grams: "",
                                   }
                                 : stateValue === "trace"
                                   ? {

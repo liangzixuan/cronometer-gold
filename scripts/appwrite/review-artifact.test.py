@@ -67,11 +67,16 @@ class ReviewArtifactTests(unittest.TestCase):
                     module.bounded_gh("/fixture", 8)
             pid = int(Path(pidfile).read_text())
             state = Path(f"/proc/{pid}/stat")
+            def exited_or_zombie():
+                try:
+                    return state.read_text().split()[2] == "Z"
+                except (FileNotFoundError, ProcessLookupError):
+                    return True
             for _ in range(100):
-                if not state.exists() or state.read_text().split()[2] == "Z":
+                if exited_or_zombie():
                     break
                 time.sleep(0.01)
-            self.assertTrue(not state.exists() or state.read_text().split()[2] == "Z")
+            self.assertTrue(exited_or_zombie())
 
     def test_valid_archive_is_only_inert_json_not_acceptance(self):
         data = archive()

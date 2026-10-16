@@ -1158,6 +1158,7 @@ describe("actual loaded saved-food name filter", () => {
         await click("Log pinned v1", card(first));
         await change("Exact quantity", "1.375");
       } else await change("Name", "Pending draft");
+      if (kind === "create") await change("Amount per 100 grams 1", "0");
       const label =
         kind === "create"
           ? "Create private food"
@@ -1904,6 +1905,82 @@ function customAvailabilityWorkspace(initial: CustomFood = food()) {
   return result;
 }
 
+describe("web custom-food entered nutrient amounts", () => {
+  it("retains an untouched new amount without writing, then saves an explicitly entered zero", async () => {
+    const { state, writes } = customAvailabilityWorkspace();
+    await mount();
+    await change("Name", "Measured zero");
+    expect(field("Amount per 100 grams 1").props.value).toBe("");
+    const draft = formValues();
+    await submit("Create private food");
+    expect(writes()).toHaveLength(0);
+    expect(formValues()).toEqual(draft);
+    expect(status()).toContain("Enter zero or a positive decimal");
+    state.write = () => receipt(food());
+    await change("Amount per 100 grams 1", "0");
+    await submit("Create private food");
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]?.[0]).toBe("/api/retention/custom-foods");
+    expect(JSON.parse(String(writes()[0]?.[1]?.body)).nutrients).toEqual([
+      { nutrientId: "4", state: "quantified", amountPer100Grams: "0" },
+    ]);
+    expect(field("Amount per 100 grams 1").props.value).toBe("");
+  });
+
+  it.each(["trace", "unknown"] as const)(
+    "saves an explicit %s without fabricating an amount",
+    async (stateValue) => {
+      const { state, writes } = customAvailabilityWorkspace();
+      await mount();
+      await change("Name", "Unmeasured nutrient");
+      await change("Nutrient state 1", stateValue);
+      if (stateValue === "unknown") await change("Unknown reason 1", "not_analyzed");
+      state.write = () => receipt(food());
+      await submit("Create private food");
+      expect(writes()).toHaveLength(1);
+      expect(JSON.parse(String(writes()[0]?.[1]?.body)).nutrients).toEqual([
+        {
+          nutrientId: "4",
+          state: stateValue,
+          amountPer100Grams: null,
+          ...(stateValue === "unknown" ? { reason: "not_analyzed" } : {}),
+        },
+      ]);
+    },
+  );
+
+  it.each(["trace", "unknown"] as const)(
+    "requires a new amount after changing %s to quantified",
+    async (stateValue) => {
+      const { writes } = customAvailabilityWorkspace();
+      await mount();
+      await click("Revise", card(food()));
+      await change("Nutrient state 1", stateValue);
+      await change("Nutrient state 1", "quantified");
+      expect(field("Amount per 100 grams 1").props.value).toBe("");
+      const draft = formValues();
+      await submit("Save new version");
+      expect(writes()).toHaveLength(0);
+      expect(formValues()).toEqual(draft);
+      expect(status()).toContain("Enter zero or a positive decimal");
+    },
+  );
+
+  it.each(["add", "change"] as const)("requires an amount after a nutrient %s", async (action) => {
+    const { writes } = customAvailabilityWorkspace();
+    await mount();
+    await click("Revise", card(food()));
+    if (action === "add") await click("Add nutrient");
+    else await change("Nutrient 1", "4");
+    expect(field(`Amount per 100 grams ${action === "add" ? 2 : 1}`).props.value).toBe("");
+    const draft = formValues();
+    await submit("Save new version");
+    expect(writes()).toHaveLength(0);
+    expect(formValues()).toEqual(draft);
+    expect(status()).toContain("Enter zero or a positive decimal");
+  });
+});
+
 describe("web custom-food nutrient addition availability", () => {
   it("adds unused IDs in loaded order, explains exhaustion and restores a removed choice without touching exact legacy rows", async () => {
     const saved = allStates();
@@ -1921,7 +1998,7 @@ describe("web custom-food nutrient addition availability", () => {
     expect(button("Add nutrient").props.disabled).toBe(false);
     expect(button("Add nutrient").props["aria-describedby"]).toBe("custom-nutrient-availability");
     await click("Add nutrient");
-    expect(customNutrientValues()).toEqual([...originalRows, ["2", "quantified", "0"]]);
+    expect(customNutrientValues()).toEqual([...originalRows, ["2", "quantified", ""]]);
     expect(field("Name").props.value).toBe(name);
     expect(button("Add nutrient").props.disabled).toBe(true);
     expect(customNutrientAvailability()).toBe(
@@ -1934,7 +2011,7 @@ describe("web custom-food nutrient addition availability", () => {
     await click("Remove nutrient 3");
     expect(button("Add nutrient").props.disabled).toBe(false);
     await click("Add nutrient");
-    expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", "0"]);
+    expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", ""]);
     expect(customNutrientValues().slice(0, 2)).toEqual(originalRows.slice(0, 2));
     expect(customNutrientValues().slice(2, 6)).toEqual(originalRows.slice(3));
     expect(button("Add nutrient").props.disabled).toBe(true);
@@ -1953,10 +2030,10 @@ describe("web custom-food nutrient addition availability", () => {
     hooks.renderWithoutEffects();
     expect(customNutrientValues()).toEqual([
       ["2", "quantified", "12.375"],
-      ["4", "quantified", "0"],
+      ["4", "quantified", ""],
     ]);
     await click("Add nutrient");
-    expect(customNutrientValues().at(-1)).toEqual(["3", "quantified", "0"]);
+    expect(customNutrientValues().at(-1)).toEqual(["3", "quantified", ""]);
     expect(button("Add nutrient").props.disabled).toBe(true);
     expect(fetcher.mock.calls).toHaveLength(before);
   });
@@ -1992,7 +2069,7 @@ describe("web custom-food nutrient addition availability", () => {
     await hooks.settle();
     expect(customNutrientRows()).toHaveLength(0);
     await click("Add nutrient");
-    expect(customNutrientValues()).toEqual([["2", "quantified", "0"]]);
+    expect(customNutrientValues()).toEqual([["2", "quantified", ""]]);
   });
 
   it("rejects retained Add after raw edit-restore and pending or replaced registry receipts", async () => {
@@ -2037,7 +2114,7 @@ describe("web custom-food nutrient addition availability", () => {
     await click("Add nutrient");
     expect(customNutrientValues()).toEqual([
       ["2", "quantified", "12.375"],
-      ["99", "quantified", "0"],
+      ["99", "quantified", ""],
     ]);
   });
 
@@ -2056,13 +2133,13 @@ describe("web custom-food nutrient addition availability", () => {
     const before = fetcher.mock.calls.length;
     invoke(choice, "onChange", { target: { value: "2" } });
     hooks.renderWithoutEffects();
-    expect(customNutrientValues()).toEqual([["2", "quantified", "0"]]);
+    expect(customNutrientValues()).toEqual([["2", "quantified", ""]]);
     invoke(add, "onClick");
     invoke(button("Add nutrient"), "onClick");
     hooks.renderWithoutEffects();
     expect(customNutrientValues()).toEqual([
-      ["2", "quantified", "0"],
-      ["4", "quantified", "0"],
+      ["2", "quantified", ""],
+      ["4", "quantified", ""],
     ]);
     expect(field(savedFilterLabel).props.value).toBe("Saved");
     expect(details(food()).props.hidden).toBe(false);
@@ -2084,13 +2161,13 @@ describe("web custom-food nutrient addition availability", () => {
     expect(button("Add nutrient").props.disabled).toBe(false);
     invoke(choice, "onChange", { target: { value: "3" } });
     await hooks.settle();
-    expect(customNutrientValues()).toEqual([["3", "quantified", "0"]]);
+    expect(customNutrientValues()).toEqual([["3", "quantified", ""]]);
     await change("Nutrient 1", "2");
     await change("Amount per 100 grams 1", "12.375");
     invoke(add, "onClick");
     invoke(button("Add nutrient"), "onClick");
     await hooks.settle();
-    expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", "0"]);
+    expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", ""]);
     expect(fetcher.mock.calls).toHaveLength(before);
     expect(writes()).toHaveLength(1);
     expect(writes()[0]?.[1]?.body).toBe(body);
@@ -2216,14 +2293,14 @@ describe("web custom-food nutrient row uniqueness", () => {
     expect(formValues()).toEqual(original);
     expect(status()).toBe(message);
     await change("Nutrient 2", "2");
-    expect(customNutrientValues()[1]).toEqual(["2", "quantified", "0"]);
+    expect(customNutrientValues()[1]).toEqual(["2", "quantified", ""]);
     expect(customNutrientOptions(1).at(-1)).toEqual({
       id: "3",
       label: "Shared name (ug)",
       disabled: false,
     });
     await change("Nutrient 1", "3");
-    expect(customNutrientValues()[0]).toEqual(["3", "quantified", "0"]);
+    expect(customNutrientValues()[0]).toEqual(["3", "quantified", ""]);
     await click("Remove nutrient 3");
     expect(customNutrientOptions(2)[0]).toEqual({
       id: "4",
@@ -2232,8 +2309,8 @@ describe("web custom-food nutrient row uniqueness", () => {
     });
     await change("Nutrient 2", "4");
     expect(customNutrientValues()).toEqual([
-      ["3", "quantified", "0"],
-      ["4", "quantified", "0"],
+      ["3", "quantified", ""],
+      ["4", "quantified", ""],
       ...rows.slice(3),
     ]);
     expect(field("Name").props.value).toBe(" Raw nutrient draft ");
@@ -2262,14 +2339,14 @@ describe("web custom-food nutrient row uniqueness", () => {
     invoke(secondChoice, "onChange", { target: { value: "4" } });
     hooks.renderWithoutEffects();
     expect(customNutrientValues()).toEqual([
-      ["4", "quantified", "0"],
+      ["4", "quantified", ""],
       ["3", "quantified", "0"],
     ]);
     const removed = field("Nutrient 2");
     invoke(button("Remove nutrient 2"), "onClick");
     invoke(removed, "onChange", { target: { value: "2" } });
     await hooks.settle();
-    expect(customNutrientValues()).toEqual([["4", "quantified", "0"]]);
+    expect(customNutrientValues()).toEqual([["4", "quantified", ""]]);
     expect(customNutrientOptions(1).at(-1)?.disabled).toBe(false);
     expect(fetcher.mock.calls).toHaveLength(before);
   });
@@ -2300,7 +2377,7 @@ describe("web custom-food nutrient row uniqueness", () => {
     }
     expect(customNutrientValues()).toEqual(rows);
     await change("Nutrient 2", "4");
-    expect(customNutrientValues()).toEqual([rows[0], ["4", "quantified", "0"]]);
+    expect(customNutrientValues()).toEqual([rows[0], ["4", "quantified", ""]]);
     expect(customNutrientOptions(2).find((item) => item.id === "2")?.disabled).toBe(true);
     expect(fetcher.mock.calls).toHaveLength(before);
   });
