@@ -13,7 +13,10 @@ import test from "node:test";
 import { rootCertificates } from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { azureBackupFixture } from "./postgres-backup-azure-fixture.mjs";
+import {
+  azureBackupFixture,
+  syntheticOperatorAssemblyFixture,
+} from "./postgres-backup-azure-fixture.mjs";
 
 const stateKey = Symbol.for("nutrition.test.localBackup");
 const state = {
@@ -220,7 +223,8 @@ const hooks = registerHooks({
     if (
       specifier === "../packages/artifact-store/dist/index.js" &&
       (context.parentURL?.endsWith("/postgres-backup.mjs") ||
-        context.parentURL?.endsWith("/postgres-backup-storage.mjs"))
+        context.parentURL?.endsWith("/postgres-backup-storage.mjs") ||
+        context.parentURL?.endsWith("/postgres-operator.mjs"))
     )
       return { url: "nutrition-test:artifact", shortCircuit: true };
     if (
@@ -334,6 +338,7 @@ const { runPostgresBackup, testedRunTool } = await import("./postgres-backup.mjs
 const { EncryptedPostgresBackupStore, FileRawArtifactStore, AzureBlobRawArtifactStore } =
   await import("nutrition-test:artifact");
 const { parsePostgresBackupEvidence } = await import("./postgres-backup-evidence.mjs");
+const { runPostgresOperator } = await import("./postgres-operator.mjs");
 hooks.deregister();
 
 async function setup() {
@@ -1008,3 +1013,148 @@ test("Azure backup publication rejection stays redacted and clears plaintext", a
     await fixture.dispose();
   }
 });
+
+test("protected CLI dispatch connects to actual Azure backup workflow", async () => {
+  const fixture = await setup();
+  const azure = azureBackupFixture({ hosted: true });
+  state.azure = azure;
+  try {
+    const assembly = await syntheticOperatorAssemblyFixture(fixture.local);
+    const settings = {
+      ...fixture.options,
+      sourceRevision: assembly.sourceRevision,
+      deploymentTarget: assembly.deploymentTarget,
+      storage: azure.storage("c"),
+      keyRing: {
+        currentKeyId: fixture.options.keyRing.currentKeyId,
+        keys: Object.fromEntries(
+          [...fixture.options.keyRing.keys].map(([id, value]) => [
+            id,
+            Buffer.from(value).toString("base64"),
+          ]),
+        ),
+      },
+    };
+    const document = {
+      schemaVersion: 1,
+      assembly: assembly.binding,
+      operation: "backup",
+      notAfterUtc: new Date(Date.now() + 120000).toISOString(),
+      settings,
+    };
+    const raw = JSON.stringify(document);
+    const path = join(fixture.local, "operator.json");
+    await fs.writeFile(path, raw, { mode: 0o600, flag: "wx" });
+    const result = await runPostgresOperator([
+      "backup",
+      "--input",
+      path,
+      "--input-sha256",
+      hash(raw),
+    ]);
+    assert.equal(result.expectedBackup.snapshotId, "00000003-000000A1-1");
+    assert.equal(result.expectedBackup.databaseName, "nutrition");
+    const recoveryStore = new EncryptedPostgresBackupStore({
+      rawStore: new AzureBlobRawArtifactStore({ ...azure.storage("rl"), role: "restore-reader" }),
+      keyRing: fixture.options.keyRing,
+      temporaryDirectory: fixture.temporary,
+      maxDumpBytes: 1024,
+    });
+    const recovered = await recoveryStore.recover({
+      ...result.expectedBackup,
+      source: {
+        kind: "azure-blob-version",
+        containerUrl: azure.storage("rl").containerUrl,
+        prefix: azure.storage("rl").prefix,
+      },
+    });
+    assert.ok(recovered);
+    try {
+      assert.equal(recovered.manifest.dumpSha256, hash(dump));
+    } finally {
+      await recovered.dispose();
+    }
+    assert.equal(result.operation, "backup");
+    assert.equal(result.result.storage, "azure-blob");
+    assert.equal(result.result.operationalRecoveryAccepted, false);
+    assert.equal(JSON.stringify(result).includes("synthetic-backup-sas"), false);
+    assert.deepEqual(await fs.readdir(fixture.temporary), []);
+  } finally {
+    azure.dispose();
+    state.azure = undefined;
+    await fixture.dispose();
+  }
+});
+
+for (const fault of [
+  "operation",
+  "digest",
+  "expired",
+  "input-mode",
+  "assembly-digest",
+  "destination",
+  "aborted",
+]) {
+  test("protected backup admission refuses " + fault + " before native effects", async () => {
+    const fixture = await setup();
+    const azure = azureBackupFixture({ hosted: true });
+    state.azure = azure;
+    try {
+      const assembly = await syntheticOperatorAssemblyFixture(fixture.local);
+      const settings = {
+        ...fixture.options,
+        sourceRevision: assembly.sourceRevision,
+        deploymentTarget: assembly.deploymentTarget,
+        storage: azure.storage("c"),
+        keyRing: {
+          currentKeyId: fixture.options.keyRing.currentKeyId,
+          keys: Object.fromEntries(
+            [...fixture.options.keyRing.keys].map(([id, b]) => [
+              id,
+              Buffer.from(b).toString("base64"),
+            ]),
+          ),
+        },
+      };
+      const document = {
+        schemaVersion: 1,
+        assembly: assembly.binding,
+        operation: fault === "operation" ? "restore" : "backup",
+        notAfterUtc: new Date(Date.now() + (fault === "expired" ? -1000 : 120000)).toISOString(),
+        settings,
+      };
+      if (fault === "assembly-digest") document.assembly.sha256 = "0".repeat(64);
+      if (fault === "destination") settings.storage.prefix = "different/";
+      const raw = JSON.stringify(document),
+        path = join(fixture.local, "refused-operator.json");
+      await fs.writeFile(path, raw, { mode: fault === "input-mode" ? 0o644 : 0o600, flag: "wx" });
+      const controller = new AbortController();
+      if (fault === "aborted") controller.abort(new Error("PRIVATE-CANCEL"));
+      await assert.rejects(
+        runPostgresOperator(
+          [
+            "backup",
+            "--input",
+            path,
+            "--input-sha256",
+            fault === "digest" ? "0".repeat(64) : hash(raw),
+          ],
+          { signal: controller.signal },
+        ),
+        (e) => {
+          assert.equal(String(e).includes("synthetic-backup-sas"), false);
+          assert.equal(String(e).includes("PRIVATE"), false);
+          return true;
+        },
+      );
+      assert.equal(state.calls.length, 0);
+      assert.equal(state.clients.length, 0);
+      assert.equal(azure.requests.length, 0);
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      azure.dispose();
+      state.azure = undefined;
+      await fixture.dispose();
+    }
+  });
+}

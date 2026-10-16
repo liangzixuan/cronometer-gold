@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 
 export function azureBackupFixture({ hosted = false } = {}) {
@@ -152,5 +155,67 @@ export function azureLedgerSettings({
         "locator-current": Buffer.alloc(32, 32).toString("base64"),
       },
     },
+  };
+}
+
+/** Structural fixture only. It does not qualify assembly generation or source provenance. */
+export async function syntheticOperatorAssemblyFixture(parent) {
+  const sourceRevision = "a".repeat(40),
+    hash = (v) => createHash("sha256").update(v).digest("hex");
+  const ledger = {
+    ERASURE_REPLAY_LEDGER_STORE: "azure",
+    ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL:
+      "https://nourishingledger.blob.core.windows.net/nourishing-development-erasure",
+    ERASURE_REPLAY_LEDGER_AZURE_PREFIX: "development/erasure/",
+  };
+  const content = JSON.stringify({
+    contract: "nutrition-storage-recovery-v1",
+    executable: false,
+    admitted_components: [],
+    postgres_backup_destination: {
+      kind: "azure-blob",
+      containerUrl: "https://nourishingbackup.blob.core.windows.net/nourishing-development-backup",
+      prefix: "development/backup/",
+    },
+    ledger_consumers: { worker: ledger, maintenance_worker: ledger },
+  });
+  const sourceFiles = Object.fromEntries(
+    [
+      "infra/development/azure/runtime-assembly.py",
+      "infra/development/azure/runtime-installation-storage.py",
+      "infra/development/azure/storage-acquisition.py",
+      "scripts/postgres-operator.mjs",
+    ].map((p) => [p, { path: "/synthetic/source/" + p, sha256: "0".repeat(64) }]),
+  );
+  const raw = JSON.stringify({
+    schema_version: 1,
+    kind: "nutrition-storage-recovery-assembly-v1",
+    contract: "nutrition-storage-recovery-v1",
+    target: "development",
+    classification: "synthetic",
+    localOnly: true,
+    operationalAcceptance: false,
+    executable: false,
+    admitted_components: [],
+    source_revision: sourceRevision,
+    source_files: sourceFiles,
+    manifest_sha256: "1".repeat(64),
+    policy_sha256: "2".repeat(64),
+    assembly_sha256: "3".repeat(64),
+    acquisition_sha256: "4".repeat(64),
+    storage_context_sha256: "5".repeat(64),
+    not_after_utc: new Date(Date.now() + 180000).toISOString(),
+    members: { "recovery-references.json": { mode: "0600", sha256: hash(content), content } },
+  });
+  const path = join(parent, "synthetic-recovery-assembly.json");
+  await writeFile(path, raw, { mode: 0o600, flag: "wx" });
+  return {
+    binding: { path, sha256: hash(raw) },
+    sourceRevision,
+    deploymentTarget: "development",
+    erasureReplay: azureLedgerSettings({
+      containerUrl: ledger.ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL,
+      prefix: ledger.ERASURE_REPLAY_LEDGER_AZURE_PREFIX,
+    }),
   };
 }

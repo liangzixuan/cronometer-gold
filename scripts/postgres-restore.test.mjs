@@ -12,7 +12,11 @@ import { PassThrough, Readable } from "node:stream";
 import test, { mock } from "node:test";
 import { rootCertificates } from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { azureBackupFixture, azureLedgerSettings } from "./postgres-backup-azure-fixture.mjs";
+import {
+  azureBackupFixture,
+  azureLedgerSettings,
+  syntheticOperatorAssemblyFixture,
+} from "./postgres-backup-azure-fixture.mjs";
 
 const stateKey = Symbol.for("nutrition.test.localRestore");
 const state = { registrations: 0 };
@@ -25,6 +29,8 @@ const hooks = registerHooks({
   resolve(specifier, context, next) {
     if (specifier === "node:perf_hooks" && context.parentURL?.endsWith("/postgres-restore.mjs"))
       return { url: "nutrition-test:clock", shortCircuit: true };
+    if (specifier === "@nutrition-tracker/domain" && context.parentURL?.includes("/packages/db/"))
+      return { url: source("packages/domain/src/index.ts"), shortCircuit: true };
     if (specifier === "../apps/worker/dist/erasure-ledger-restore.js")
       return { url: source("apps/worker/src/erasure-ledger-restore.ts"), shortCircuit: true };
     if (specifier === "@nutrition-tracker/db" && context.parentURL?.includes("/apps/worker/"))
@@ -67,6 +73,8 @@ const hooks = registerHooks({
       context.parentURL?.endsWith("/artifact-store/src/postgres-backup.ts")
     )
       return { url: "nutrition-test:artifact-fs", shortCircuit: true };
+    if (specifier === "node:fs/promises" && context.parentURL?.endsWith("/postgres-operator.mjs"))
+      return { url: "nutrition-test:operator-fs", shortCircuit: true };
     if (specifier === "pg" && context.parentURL?.endsWith("/owned-postgres-owner.ts"))
       return { url: "nutrition-test:pg", shortCircuit: true };
     if (
@@ -77,7 +85,8 @@ const hooks = registerHooks({
     if (
       specifier === "../packages/artifact-store/dist/index.js" &&
       (context.parentURL?.endsWith("/postgres-restore.mjs") ||
-        context.parentURL?.endsWith("/postgres-backup-storage.mjs"))
+        context.parentURL?.endsWith("/postgres-backup-storage.mjs") ||
+        context.parentURL?.endsWith("/postgres-operator.mjs"))
     )
       return { url: "nutrition-test:artifact", shortCircuit: true };
     if (
@@ -107,6 +116,15 @@ const hooks = registerHooks({
       "nutrition-test:artifact-fs":
         prefix +
         'export * from "node:fs/promises"; export const open=(...args)=>state.open(...args);',
+      "nutrition-test:operator-fs":
+        prefix +
+        `
+        import {open as original} from "node:fs/promises";export {lstat} from "node:fs/promises";
+        export async function open(...args){const h=await original(...args);return new Proxy(h,{get(target,name){
+          if(name==="write") return async(...values)=>{state.outputWrites++;if((state.publicationFault==="evidence"&&state.outputWrites===1)||(state.publicationFault==="handoff"&&state.outputWrites===2))return h.write(values[0],0,1,0);return h.write(...values);};
+          if(name==="close")return async()=>{await h.close();if(state.publicationFault==="late-close"&&state.outputWrites===2){state.publicationFault="observed";throw new Error("PRIVATE-PUBLICATION-CLOSE");}};
+          const value=Reflect.get(target,name,target);return typeof value==="function"?value.bind(target):value;
+        }});}`,
       "nutrition-test:db":
         "export * from " +
         JSON.stringify(source("packages/db/src/postgres-backup-connection.ts")) +
@@ -222,6 +240,7 @@ const { discoverMigrations } = await import("../packages/db/src/migrator.ts");
 const { EXPORT_ENTITY_SPECS, USER_LINKED_EXPORT_EXCLUSIONS, ERASURE_TABLE_SPECS } = await import(
   "../packages/db/src/retention-privacy-policy.ts"
 );
+const { runPostgresOperator } = await import("./postgres-operator.mjs");
 hooks.deregister();
 
 function close(child) {
@@ -1908,3 +1927,192 @@ for (const mode of [
     }
   });
 }
+
+for (const publicationFault of ["none", "evidence", "handoff", "late-close", "final-fence"])
+  test(
+    "protected CLI dispatch connects to actual Azure restore workflow: " + publicationFault,
+    async () => {
+      const fixture = await setup();
+      const azure = azureBackupFixture({ hosted: true });
+      state.azure = azure;
+      try {
+        const assembly = await syntheticOperatorAssemblyFixture(fixture.local);
+        await configureLedger(fixture, azure, assembly.erasureReplay, { entry: true });
+        state.publicationFault = publicationFault;
+        state.outputWrites = 0;
+        azure.ciphertext = Buffer.from(fixture.cipherBytes);
+        const settings = {
+          ...fixture.options,
+          storage: azure.storage("rl"),
+          keyRing: {
+            currentKeyId: fixture.options.keyRing.currentKeyId,
+            keys: Object.fromEntries(
+              [...fixture.options.keyRing.keys].map(([id, value]) => [
+                id,
+                Buffer.from(value).toString("base64"),
+              ]),
+            ),
+          },
+        };
+        const document = {
+          schemaVersion: 1,
+          assembly: assembly.binding,
+          operation: "restore",
+          restoreHandoffPath: join(fixture.local, "restore-handoff.json"),
+          restoreEvidencePath: join(fixture.local, "restore-evidence.json"),
+          notAfterUtc: new Date(Date.now() + 120000).toISOString(),
+          settings,
+        };
+        const raw = JSON.stringify(document);
+        const path = join(fixture.local, "operator.json");
+        await fs.writeFile(path, raw, { mode: 0o600, flag: "wx" });
+        const dispatched = runPostgresOperator([
+          "restore",
+          "--input",
+          path,
+          "--input-sha256",
+          hash(raw),
+        ]);
+        if (publicationFault !== "none") {
+          await assert.rejects(dispatched, (error) => {
+            assert.ok(!String(error).includes("PRIVATE"));
+            return true;
+          });
+          assert.ok(state.persistedReplay);
+          assert.deepEqual([...state.replayRows], [replaySecond]);
+          assert.equal(state.target.allowConnections, publicationFault !== "final-fence");
+          // Completed restore permits its owner while denying runtime CONNECT.
+          // Publication failure retains that fence; restore failure re-fences all connections.
+          assert.ok(state.sql.some((entry) => entry.text.includes("pg_catalog.unnest")));
+          assert.equal(
+            state.sql.some((entry) => /^grant /iu.test(entry.text)),
+            false,
+          );
+          assert.ok(state.clients.every((c) => c.closed));
+          const evidence = await fs.readFile(document.restoreEvidencePath),
+            handoff = await fs.readFile(document.restoreHandoffPath);
+          if (publicationFault === "evidence") {
+            assert.equal(evidence.length, 1);
+            assert.equal(handoff.length, 0);
+          }
+          if (publicationFault === "handoff") {
+            assert.equal(JSON.parse(evidence).result.erasureReplay.replayedTombstones, 1);
+            assert.equal(handoff.length, 1);
+          }
+          if (publicationFault === "late-close") {
+            assert.equal(JSON.parse(evidence).result.erasureReplay.replayedTombstones, 1);
+            assert.equal(JSON.parse(handoff).result.erasureReplay.replayedTombstones, 1);
+          }
+          if (publicationFault === "final-fence") {
+            assert.equal(evidence.length, 0);
+            assert.equal(handoff.length, 0);
+          }
+          return;
+        }
+        const result = await dispatched.catch((error) => {
+          assert.deepEqual(state.pgErrors, []);
+          throw state.restoreFailure ?? error;
+        });
+        assert.equal(result.operation, "restore");
+        assert.equal(result.result.sourceStorage, "azure-blob");
+        assert.equal(result.result.operationalRecoveryAccepted, false);
+        const handoffBytes = await fs.readFile(document.restoreHandoffPath);
+        const handoff = JSON.parse(handoffBytes);
+        const evidenceBytes = await fs.readFile(document.restoreEvidencePath);
+        const retained = JSON.parse(evidenceBytes);
+        assert.deepEqual(result.evidence, {
+          path: document.restoreEvidencePath,
+          bytes: evidenceBytes.length,
+          sha256: hash(evidenceBytes),
+        });
+        assert.deepEqual(handoff.evidence, result.evidence);
+        assert.equal(evidenceBytes.toString(), JSON.stringify(retained));
+        assert.deepEqual(
+          Buffer.from(retained.authenticatedBackup.manifestBase64, "base64"),
+          fixture.manifestBytes,
+        );
+        assert.deepEqual(
+          Buffer.from(retained.authenticatedBackup.sourceEvidenceBase64, "base64"),
+          fixture.evidence,
+        );
+        assert.deepEqual(retained.authenticatedBackup.metadata, fixture.metadata);
+        assert.deepEqual(retained.authenticatedBackup.readSource, {
+          kind: "azure-blob-version",
+          containerUrl: settings.storage.containerUrl,
+          prefix: settings.storage.prefix,
+          objectKey: fixture.metadata.objectKey,
+          blobName: settings.storage.prefix + fixture.metadata.objectKey,
+          versionId: azure.version,
+          contentLength: fixture.cipherBytes.length,
+        });
+        assert.deepEqual(
+          retained.result,
+          Object.fromEntries(
+            [
+              "targetDatabase",
+              "databaseOid",
+              "restoreEpochHash",
+              "erasureReplay",
+              "sourceRevision",
+              "manifestSha256",
+              "sourceEvidenceSha256",
+            ].map((k) => [k, result.result[k]]),
+          ),
+        );
+        assert.equal(retained.inputSha256, hash(raw));
+        assert.equal(retained.assemblySha256, assembly.binding.sha256);
+        assert.equal(result.handoff.sha256, hash(handoffBytes));
+        assert.equal(result.handoff.bytes, handoffBytes.length);
+        assert.equal(result.result.restoreEpochHash, hash(handoff.result.restoreEpoch));
+        assert.equal(result.result.status, "local-restore-replayed");
+        assert.equal(result.result.erasureReplayRequired, false);
+        assert.deepEqual(
+          [
+            result.result.erasureReplay.scannedSubjects,
+            result.result.erasureReplay.replayedTombstones,
+          ],
+          [2, 1],
+        );
+        assert.deepEqual([...state.replayRows], [replaySecond]);
+        assert.equal(state.persistedReplay.restore_epoch_hash, result.result.restoreEpochHash);
+        assert.equal(
+          state.persistedReplay.reconciliation_digest,
+          result.result.erasureReplay.reconciliationDigest,
+        );
+        assert.equal(
+          state.clients.filter((c) => c.config.application_name === "nutrition-postgres-replay")
+            .length,
+          1,
+        );
+        assert.ok(state.clients.every((c) => c.closed));
+        assert.equal(
+          azure.ledgerRequests.filter((r) => new URL(r.url).searchParams.get("comp") === "list")
+            .length,
+          4,
+        );
+        assert.equal(
+          azure.ledgerRequests.filter((r) => new URL(r.url).searchParams.has("versionid")).length,
+          1,
+        );
+        assert.equal(handoff.result.databaseOid, result.result.databaseOid);
+        assert.equal(handoff.result.manifestSha256, settings.expectedBackup.manifestSha256);
+        assert.equal(Object.hasOwn(result.result, "authenticatedBackup"), false);
+        assert.equal(Object.hasOwn(handoff.result, "authenticatedBackup"), false);
+        for (const forbidden of [
+          "manifestBytes",
+          "sourceEvidence",
+          "metadata",
+          "readSource",
+          "synthetic-secret",
+        ])
+          assert.equal(Object.hasOwn(handoff.result, forbidden), false);
+        assert.equal(JSON.stringify(result).includes(handoff.result.restoreEpoch), false);
+        assert.equal(JSON.stringify(result).includes("synthetic-backup-sas"), false);
+        assert.deepEqual(await fs.readdir(fixture.temporary), []);
+      } finally {
+        azure.dispose();
+        state.azure = undefined;
+        await fixture.dispose();
+      }
+    },
+  );
