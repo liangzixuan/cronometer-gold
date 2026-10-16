@@ -618,6 +618,14 @@ export function FoodSearchClient() {
     draft: QuickAddDraft,
     instance: "search" | "barcode",
   ) {
+    if (
+      !mounted.current ||
+      sessionStateRef.current !== "ready" ||
+      sessionRoute.current.revision !== sessionRouteRevision ||
+      appliedSessionRoute.current !== sessionRouteRevision
+    ) {
+      return;
+    }
     if (activeAddOperation.current !== null) {
       setAddState("error");
       setAddMessage("Wait for the current diary addition to finish before adding another food.");
@@ -674,6 +682,14 @@ export function FoodSearchClient() {
     }
     pendingAdds.current.set(operation.intentKey, operation);
     activeAddOperation.current = operation.operationId;
+    const addSessionGeneration = sessionGeneration.current;
+    const currentAdd = () =>
+      mounted.current &&
+      activeAddOperation.current === operation.operationId &&
+      sessionStateRef.current === "ready" &&
+      sessionGeneration.current === addSessionGeneration &&
+      sessionRoute.current.revision === sessionRouteRevision &&
+      appliedSessionRoute.current === sessionRouteRevision;
     setAddingFoodVersion(food.foodVersionId);
     setAddState("loading");
     setAddMessage(`Adding ${quickAddAmountLabel(draft)} of ${food.name}…`);
@@ -692,12 +708,22 @@ export function FoodSearchClient() {
           cache: "no-store",
         },
       );
+      if (!currentAdd()) return;
+      if (response.status === 401) {
+        sessionStateRef.current = "unauthenticated";
+        setSessionState("unauthenticated");
+        setTimeZone(null);
+        setAddState("error");
+        return;
+      }
       const body = await responseJson(response);
+      if (!currentAdd()) return;
       if (!response.ok) {
         if (fenceQuickAddForTimeZoneChange(pendingAdds.current, operation, response.status, body)) {
           setDateReviewRequired(true);
           setTimeZone(null);
           const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange();
+          if (!currentAdd()) return;
           setAddState("error");
           setAddMessage(quickAddTimeZoneReviewMessage(diaryDate, currentTimeZone));
           return;
@@ -732,6 +758,7 @@ export function FoodSearchClient() {
         });
       }
     } catch (error) {
+      if (!currentAdd()) return;
       setAddState("error");
       setAddMessage(
         `${error instanceof Error ? error.message : "The food could not be added."} Choose Add again to retry safely.`,
@@ -739,8 +766,8 @@ export function FoodSearchClient() {
     } finally {
       if (activeAddOperation.current === operation.operationId) {
         activeAddOperation.current = null;
+        if (mounted.current) setAddingFoodVersion(null);
       }
-      setAddingFoodVersion(null);
     }
   }
 
@@ -988,7 +1015,9 @@ export function FoodSearchClient() {
             : sessionState === "error"
               ? "Your session could not be verified. Retry session to enable diary additions."
               : sessionState === "unauthenticated"
-                ? "Sign in to choose a quantity and add it to your diary."
+                ? pendingAdds.current.size > 0
+                  ? "Sign in to continue. Check your diary before retrying an unconfirmed addition."
+                  : "Sign in to choose a quantity and add it to your diary."
                 : addMessage}
         </p>
         {sessionState === "error" ? (

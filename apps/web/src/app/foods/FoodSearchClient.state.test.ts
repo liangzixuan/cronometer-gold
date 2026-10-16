@@ -1092,6 +1092,250 @@ describe("web search request retirement", () => {
   });
 });
 
+describe("food additions after session expiry", () => {
+  async function showPublicResults() {
+    await search();
+    await change("food-barcode", "012345678905");
+    const form = elements().find((node) => node.props.className === "barcodeForm");
+    if (!form) throw new Error("Missing barcode form");
+    invoke(form, "onSubmit", { preventDefault: vi.fn() });
+    await hooks.settle();
+  }
+
+  it.each(["search", "barcode"])(
+    "retires a current %s Add 401 before parsing and keeps the public draft",
+    async (instance) => {
+      const post = deferred<Response>();
+      const json = vi.fn(() => {
+        throw new Error("401 body must not be parsed");
+      });
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return post.promise;
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await showPublicResults();
+      await change("quick-add-date", "2026-09-22");
+      await change("quick-add-meal", "snacks");
+      await change("quick-add-search-202-amount", "2.500000");
+      const add = elements().find(
+        (node) =>
+          node.type === "fieldset" &&
+          elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+      );
+      if (!add) throw new Error("Missing quick-add controls");
+      const retained = elements(add).find((node) => node.type === "button");
+      if (!retained) throw new Error("Missing Add");
+      invoke(retained);
+      post.resolve({ ok: false, status: 401, json } as unknown as Response);
+      for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+      invoke(retained); // A retained event can arrive before React renders the disabled button.
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      await hooks.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(text()).toContain("Sign in");
+      expect(text()).not.toContain("Choose Add again to retry safely");
+      expect(text()).not.toContain("was not added");
+      expect(
+        elements().filter((node) => node.type === "h3" && text(node) === "Apple Pie"),
+      ).toHaveLength(2);
+      for (const source of ["search", "barcode"]) {
+        expect(field(`quick-add-${source}-202-amount`).props.value).toBe("2.500000");
+      }
+      expect(field("quick-add-date").props.value).toBe("2026-09-22");
+      expect(field("quick-add-meal").props.value).toBe("snacks");
+      const adds = elements().filter(
+        (node) => node.type === "button" && String(node.props["aria-label"]).startsWith("Add "),
+      );
+      expect(adds).toHaveLength(2);
+      expect(adds.every((node) => node.props.disabled === true)).toBe(true);
+      for (const node of adds) invoke(node);
+      invoke(retained);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(operationId).toHaveBeenCalledOnce();
+      expect(authCount(fetcher)).toBe(1);
+      expect(button("Search").props.disabled).toBe(false);
+      expect(button("Look up").props.disabled).toBe(false);
+      expect(elements().some((node) => node.props.href === "/login")).toBe(true);
+    },
+  );
+
+  it("keeps an uncertain attempt's identity when its exact retry returns 401", async () => {
+    let posts = 0;
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST")
+        return ++posts === 1 ? failure("503") : Response.json({}, { status: 401 });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("quick-add-search-202-amount", "2.500000");
+    invoke(button("Add 2.500000 default servings of Apple Pie"));
+    await hooks.settle();
+    expect(text()).toContain("Choose Add again to retry safely");
+    const retry = button("Add 2.500000 default servings of Apple Pie");
+    invoke(retry);
+    await hooks.settle();
+    const writes = pendingPosts(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(operationId).toHaveBeenCalledOnce();
+    expect(text()).toContain("Check your diary before retrying an unconfirmed addition");
+    expect(text()).not.toContain("was not added");
+    invoke(retry);
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(2);
+    expect(hasRetry()).toBe(false);
+  });
+
+  it.each(["loading", "unauthenticated"])(
+    "does not submit from a retained Add while session discovery is %s",
+    async (state) => {
+      const auth = deferred<Response>();
+      const fetcher = vi.fn(async (url: string) =>
+        url === "/api/auth/me" ? auth.promise : publicResponse(url),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await search();
+      if (state === "unauthenticated") {
+        auth.resolve(Response.json({}, { status: 401 }));
+        await hooks.settle();
+      }
+      invoke(button("Add 1 default serving of Apple Pie"));
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["401", "network", "late-json"])(
+    "ignores a late Add %s and retained callback after unmount",
+    async (outcome) => {
+      const post = deferred<Response>();
+      const body = deferred<unknown>();
+      const json = vi.fn(() => body.promise);
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return post.promise;
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await search();
+      const add = button("Add 1 default serving of Apple Pie");
+      invoke(add);
+      if (outcome === "late-json") {
+        post.resolve({ ok: false, status: 503, json } as unknown as Response);
+        await hooks.settle();
+        expect(json).toHaveBeenCalledOnce();
+      }
+      hooks.unmount();
+      invoke(add);
+      if (outcome === "network") post.reject(new Error("Late network failure"));
+      else if (outcome === "late-json") body.resolve({ error: "Late failure" });
+      else post.resolve({ ok: false, status: 401, json } as unknown as Response);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(hooks.afterClose()).toBe(0);
+      if (outcome === "401") expect(json).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a retired route's 401 and fences its retained Add before route effects", async () => {
+    const post = deferred<Response>();
+    const json = vi.fn(() => {
+      throw new Error("Retired body must not be parsed");
+    });
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST") return post.promise;
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    const oldAdd = button("Add 1 default serving of Apple Pie");
+    invoke(oldAdd);
+    await hooks.settle();
+    route.query = "date=2026-09-25&meal=lunch";
+    hooks.renderWithoutEffects();
+    invoke(oldAdd);
+    post.resolve({ ok: false, status: 401, json } as unknown as Response);
+    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    hooks.render();
+    await hooks.settle();
+    expect(json).not.toHaveBeenCalled();
+    expect(text()).not.toContain("Sign in");
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+    expect(field("quick-add-meal").props.value).toBe("lunch");
+    invoke(oldAdd);
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(false);
+  });
+});
+
+it("permits the current Add after a route effect changes no selected destination values", async () => {
+  route.query = "date=2026-09-24";
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/auth/me") return session();
+    if (init?.method === "POST") return savedMutation(init);
+    return publicResponse(url);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  hooks.mount(FoodSearchClient);
+  await hooks.settle();
+  await search();
+  await change("quick-add-meal", "dinner");
+  route.query = "date=2026-09-24&meal=dinner";
+  hooks.render();
+  await hooks.settle();
+  const add = button("Add 1 default serving of Apple Pie");
+  expect(add.props.disabled).toBe(false);
+  invoke(add);
+  await hooks.settle();
+  expect(pendingPosts(fetcher)).toHaveLength(1);
+  expect(text()).toContain("was added to Dinner on 2026-09-24");
+});
+
+it("ignores the remaining Add work after unmount during a time-zone profile refresh", async () => {
+  const profile = deferred<Response>();
+  let auth = 0;
+  const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+    if (url === "/api/auth/me") return ++auth === 1 ? session() : profile.promise;
+    if (init?.method === "POST") {
+      return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+    }
+    return publicResponse(url);
+  });
+  vi.stubGlobal("fetch", fetcher);
+  hooks.mount(FoodSearchClient);
+  await hooks.settle();
+  await search();
+  invoke(button("Add 1 default serving of Apple Pie"));
+  await hooks.settle();
+  expect(authCount(fetcher)).toBe(2);
+  expect(pendingPosts(fetcher)).toHaveLength(1);
+
+  hooks.unmount();
+  profile.resolve(session("UTC"));
+  await hooks.settle();
+
+  expect(hooks.afterClose()).toBe(0);
+  expect(pendingPosts(fetcher)).toHaveLength(1);
+});
+
 describe("Food suggestion query limits", () => {
   it.each([
     ["short", "Apple Pie", "Apple Pie"],
