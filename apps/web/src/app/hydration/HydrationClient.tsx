@@ -178,7 +178,16 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const draftVersionRef = useRef(draftVersion);
   const [localTime, setLocalTime] = useState("");
   const [selectedAddOccurredAt, setSelectedAddOccurredAt] = useState<string | null>(null);
-  const [edit, setEdit] = useState<HydrationEdit | null>(null);
+  const [edit, setEditState] = useState<HydrationEdit | null>(null);
+  const editRef = useRef<HydrationEdit | null>(null);
+  const setEdit = useCallback(
+    (change: HydrationEdit | null | ((current: HydrationEdit | null) => HydrationEdit | null)) => {
+      const next = typeof change === "function" ? change(editRef.current) : change;
+      editRef.current = next;
+      setEditState(next);
+    },
+    [],
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, setPending] = useState<HydrationWriteOperation | null>(null);
   const [reconcile, setReconcile] = useState(false);
@@ -249,7 +258,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     setMessageIsError(false);
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [router, setEdit]);
 
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
@@ -336,7 +345,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         return false;
       }
     },
-    [signInAgain],
+    [setEdit, signInAgain],
   );
 
   const loadSession = useCallback(() => {
@@ -401,7 +410,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         if (sessionController.current === controller) sessionController.current = null;
       }
     })();
-  }, [initialDate, routeContext, signInAgain]);
+  }, [initialDate, routeContext, setEdit, signInAgain]);
 
   useEffect(() => {
     mounted.current = true;
@@ -726,8 +735,17 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     );
   }
 
+  function canEditCorrection() {
+    return canEditAddDraft() && edit !== null && editRef.current === edit;
+  }
+
+  function changeEdit(change: (current: HydrationEdit) => HydrationEdit | null) {
+    if (!edit || !canEditCorrection()) return;
+    setEdit(change(edit));
+  }
+
   async function updateEntry() {
-    if (!edit) return;
+    if (!edit || !canEditCorrection()) return;
     try {
       const prepared = prepareHydrationUpdate(edit.amount, edit.entry, edit.time);
       await mutate(
@@ -1091,7 +1109,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                           inputMode="numeric"
                           maxLength={5}
                           onChange={(event) =>
-                            setEdit((current) =>
+                            changeEdit((current) =>
                               current ? { ...current, amount: event.target.value } : current,
                             )
                           }
@@ -1109,7 +1127,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                             checked={edit.time.enabled}
                             disabled={controlsDisabled}
                             onChange={(event) =>
-                              setEdit((current) =>
+                              changeEdit((current) =>
                                 current
                                   ? {
                                       ...current,
@@ -1132,7 +1150,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                             <span>Corrected local date</span>
                             <input
                               onChange={(event) =>
-                                setEdit((current) =>
+                                changeEdit((current) =>
                                   current
                                     ? {
                                         ...current,
@@ -1152,7 +1170,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                             <span>Corrected local time</span>
                             <input
                               onChange={(event) =>
-                                setEdit((current) =>
+                                changeEdit((current) =>
                                   current
                                     ? {
                                         ...current,
@@ -1187,7 +1205,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                                       checked={edit.time.occurrence === candidate.occurredAt}
                                       name="hydration-time-occurrence"
                                       onChange={() =>
-                                        setEdit((current) =>
+                                        changeEdit((current) =>
                                           current
                                             ? {
                                                 ...current,
@@ -1223,7 +1241,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                         <button
                           className="buttonQuiet"
                           disabled={controlsDisabled}
-                          onClick={() => setEdit(null)}
+                          onClick={() => changeEdit(() => null)}
                           type="button"
                         >
                           Cancel

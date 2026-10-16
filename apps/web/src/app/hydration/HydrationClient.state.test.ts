@@ -2897,3 +2897,219 @@ describe("Hydration unrelated Delete correction preservation", () => {
     expect(draftFields()).toEqual([]);
   });
 });
+
+describe("Hydration correction callback ownership", () => {
+  const second = created(500);
+  function editButton(id: string): ElementNode {
+    const row = elements().find(
+      (node) => node.type === "li" && (node as ElementNode & { key?: string }).key === id,
+    );
+    const found = elements(row ?? null).find(
+      (node) => node.type === "button" && text(node) === "Edit entry",
+    );
+    if (!found) throw new Error(`Missing editor for ${id}`);
+    return found;
+  }
+  function editor() {
+    const form = elements().find(
+      (node) => node.type === "form" && node.props.className === "hydrationEditor",
+    );
+    if (!form) throw new Error("Missing hydration editor.");
+    return form;
+  }
+  function values() {
+    return elements(editor())
+      .filter((node) => node.type === "input")
+      .map((node) => ({ value: node.props.value, checked: node.props.checked }));
+  }
+  function retain() {
+    const form = editor();
+    const cancel = button("Cancel");
+    const amount = field("Milliliters at 01:30");
+    const enabled = field("Correct date or time");
+    const date = field("Corrected local date");
+    const time = field("Corrected local time");
+    const earlier = field("Earlier occurrence · UTC−05:00");
+    return {
+      Save: () => invoke(form, "onSubmit", { preventDefault() {} }),
+      Cancel: () => invoke(cancel, "onClick"),
+      Amount: () => invoke(amount, "onChange", { target: { value: "999" } }),
+      Enabled: () => invoke(enabled, "onChange", { target: { checked: false } }),
+      Date: () => invoke(date, "onChange", { target: { value: "2026-11-02" } }),
+      Time: () => invoke(time, "onChange", { target: { value: "03:45" } }),
+      Occurrence: () => invoke(earlier, "onChange"),
+    };
+  }
+  async function prepare() {
+    invoke(editButton(original.id), "onClick");
+    await hooks.settle();
+    await change("Milliliters at 01:30", "625");
+    await change("Correct date or time", true);
+    await change("Corrected local time", "01:31");
+    invoke(field("Later occurrence · UTC−06:00"), "onChange");
+    await hooks.settle();
+  }
+  async function ready() {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session(owner, "America/Chicago");
+      if (init?.method) return Response.json({ error: "Unavailable." }, { status: 503 });
+      return day([original, second], original.localDate, "America/Chicago");
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await prepare();
+    return fetcher;
+  }
+
+  it.each(["Save", "Cancel", "Amount", "Enabled", "Date", "Time", "Occurrence"] as const)(
+    "ignores retained %s after another entry replaces the editor",
+    async (action) => {
+      const fetcher = await ready();
+      const held = retain();
+      await click("Cancel");
+      invoke(editButton(second.id), "onClick");
+      await hooks.settle();
+      await change("Milliliters at 10:15", "005x");
+      await change("Correct date or time", true);
+      await change("Corrected local time", "01:32");
+      invoke(field("Later occurrence · UTC−06:00"), "onChange");
+      await hooks.settle();
+      const before = values();
+      const beforeText = text();
+      const count = fetcher.mock.calls.length;
+      held[action]();
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(count);
+      expect(values()).toEqual(before);
+      expect(text()).toBe(beforeText);
+    },
+  );
+
+  it("does not revive a cancelled correction or submit an old draft after reopening the same entry", async () => {
+    const fetcher = await ready();
+    const held = retain();
+    await click("Cancel");
+    const closed = text();
+    held.Save();
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(text()).toBe(closed);
+    invoke(editButton(original.id), "onClick");
+    await hooks.settle();
+    await change("Milliliters at 01:30", "0700");
+    const before = values();
+    for (const action of Object.values(held)) action();
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(values()).toEqual(before);
+  });
+
+  it.each(["Save", "Cancel", "Amount", "Enabled", "Date", "Time", "Occurrence"] as const)(
+    "ignores retained %s after a field changes before rerender",
+    async (action) => {
+      const fetcher = await ready();
+      const held = retain();
+      invoke(field("Milliliters at 01:30"), "onChange", { target: { value: "0700" } });
+      held[action]();
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      expect(field("Milliliters at 01:30").props.value).toBe("0700");
+      expect(field("Correct date or time").props.checked).toBe(true);
+      expect(field("Corrected local date").props.value).toBe(original.localDate);
+      expect(field("Corrected local time").props.value).toBe("01:31");
+      expect(field("Later occurrence · UTC−06:00").props.checked).toBe(true);
+    },
+  );
+
+  it("keeps a pending correction and its exact retry intact through retained editor callbacks", async () => {
+    const response = deferred<Response>();
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "PATCH") {
+          writes.push(init);
+          return writes.length === 1
+            ? response.promise
+            : Response.json({ error: "Unavailable." }, { status: 503 });
+        }
+        return day([original, second], original.localDate, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await prepare();
+    const held = retain();
+    const before = values();
+    held.Save();
+    for (const action of Object.values(held)) action();
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(values()).toEqual(before);
+    response.resolve(Response.json({ error: "Unavailable." }, { status: 503 }));
+    await hooks.settle();
+    const failed = text();
+    for (const action of Object.values(held)) action();
+    await hooks.settle();
+    expect(text()).toBe(failed);
+    await click("Retry saved change");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({
+      amountMilliliters: 625,
+      occurredAt: "2026-11-01T07:31:00.000Z",
+    });
+    expect(new Headers(writes[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes[0]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"2"');
+  });
+
+  it.each(["route", "owner", "unmount"] as const)(
+    "makes retained correction callbacks inert at the %s boundary",
+    async (boundary) => {
+      let route = original.localDate;
+      let nextOwner = owner;
+      const fetcher = vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") return session(nextOwner, "America/Chicago");
+        const selected = new URL(url, "http://localhost").searchParams.get("date") ?? route;
+        return day(
+          selected === original.localDate ? [original, second] : [],
+          selected,
+          "America/Chicago",
+        );
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => HydrationClient({ initialDate: route }));
+      await hooks.settle();
+      await prepare();
+      const held = retain();
+      if (boundary === "unmount") hooks.unmount();
+      else {
+        route = "2026-11-02";
+        if (boundary === "owner") nextOwner = anotherOwner;
+        hooks.renderWithoutEffects();
+      }
+      const before = text();
+      const count = fetcher.mock.calls.length;
+      for (const action of Object.values(held)) action();
+      expect(fetcher).toHaveBeenCalledTimes(count);
+      if (boundary === "unmount") expect(hooks.afterClose()).toBe(0);
+      else {
+        hooks.renderWithoutEffects();
+        expect(text()).toBe(before);
+        hooks.render();
+        await hooks.settle();
+        const settled = text();
+        for (const action of Object.values(held)) action();
+        await hooks.settle();
+        expect(text()).toBe(settled);
+        expect(text()).toContain(
+          boundary === "owner" ? "other@example.test" : "owner@example.test",
+        );
+      }
+    },
+  );
+});
