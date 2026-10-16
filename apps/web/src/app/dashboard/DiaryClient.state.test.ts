@@ -4048,3 +4048,161 @@ describe("Diary repeated correction time", () => {
     expect(hooks.afterClose()).toBe(0);
   });
 });
+
+describe("Diary write unauthorized response ownership", () => {
+  async function pendingWrite(method: "PATCH" | "DELETE") {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const writes: { url: string; body: string | null; headers: Record<string, string> }[] = [];
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH" || init?.method === "DELETE") {
+        writes.push({
+          url,
+          body: typeof init.body === "string" ? init.body : null,
+          headers: Object.fromEntries(new Headers(init.headers)),
+        });
+        return writes.length === 1
+          ? pending.promise
+          : Response.json({ error: "Response unavailable." }, { status: 503 });
+      }
+      if (url === "/api/auth/logout") return new Response(null, { status: 204 });
+      return base(url, init);
+    });
+    await mount(fetch);
+    const logoutControl = button("Sign out");
+    if (method === "PATCH") {
+      await prepareSaveLockDraft();
+      invoke(button("Save changes to Apple 0"));
+    } else invoke(button("Delete Apple 0"));
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    return { pending, writes, fetch, logoutControl };
+  }
+
+  function unauthorized() {
+    const response = new Response(null, { status: 401 });
+    const read = vi.spyOn(response, "json");
+    return { response, read };
+  }
+
+  for (const method of ["PATCH", "DELETE"] as const) {
+    it.each([
+      "route",
+      "route-return",
+      "route-before-effects",
+      "profile-before-effects",
+      "logout",
+      "unmount",
+      "effect-replay",
+    ] as const)(
+      `keeps an obsolete ${method}401 from closing the diary after %s`,
+      async (transition) => {
+        const { pending, writes, fetch, logoutControl } = await pendingWrite(method);
+        if (transition === "route") await visitDiaryDate("2026-08-16");
+        if (transition === "route-return") {
+          await visitDiaryDate("2026-08-16");
+          await visitDiaryDate("2026-08-15");
+          await click("Edit Apple 0");
+          await changeEditorField("Private note", "New current draft");
+        }
+        if (transition === "route-before-effects") {
+          route.date = "2026-08-16";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "profile-before-effects") {
+          const next = session();
+          next.data.profile.timeZone = "America/New_York";
+          hooks.replaceVerifiedSessionBeforeEffects(parseSession(next));
+        }
+        if (transition === "logout") {
+          invoke(logoutControl);
+          await hooks.settle();
+        }
+        if (transition === "unmount") hooks.unmount();
+        if (transition === "effect-replay") {
+          hooks.replayEffects();
+          await hooks.settle();
+        }
+        const routes = router.replace.mock.calls.slice();
+        const refreshes = router.refresh.mock.calls.length;
+        const requests = fetch.mock.calls.length;
+        const before = text();
+        const { response, read } = unauthorized();
+        pending.resolve(response);
+        if (transition === "route-before-effects" || transition === "profile-before-effects") {
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          hooks.renderWithoutEffects();
+        } else await hooks.settle();
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(router.refresh).toHaveBeenCalledTimes(refreshes);
+        expect(fetch).toHaveBeenCalledTimes(requests);
+        expect(read).not.toHaveBeenCalled();
+        expect(writes).toHaveLength(1);
+        expect(hooks.afterClose()).toBe(0);
+        if (transition === "route-return") {
+          expect(text()).toBe(before);
+          expect(editorField("Private note").props.value).toBe("New current draft");
+        }
+      },
+    );
+
+    it(`still closes the current ${method}401 before parsing its body`, async () => {
+      const { pending, writes } = await pendingWrite(method);
+      const { response, read } = unauthorized();
+      pending.resolve(response);
+      await hooks.settle();
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(read).not.toHaveBeenCalled();
+      expect(writes).toHaveLength(1);
+      expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+      expect(text()).not.toContain("Exact private note 0");
+    });
+
+    it(`keeps a newer pending Save and its exact retry after an old ${method}401`, async () => {
+      const old = deferred<Response>();
+      const current = deferred<Response>();
+      const base = fetcher();
+      const writes: ReturnType<typeof captureEditorSave>[] = [];
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PATCH" || init?.method === "DELETE") {
+          writes.push({
+            url,
+            body: typeof init.body === "string" ? init.body : "",
+            headers: Object.fromEntries(new Headers(init.headers)),
+          });
+          if (writes.length === 1) return old.promise;
+          if (writes.length === 2) return current.promise;
+          return Response.json({ error: "Still unavailable." }, { status: 503 });
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      if (method === "PATCH") {
+        await prepareSaveLockDraft();
+        invoke(button("Save changes to Apple 0"));
+      } else invoke(button("Delete Apple 0"));
+      await hooks.settle();
+      await visitDiaryDate("2026-08-16");
+      await visitDiaryDate("2026-08-15");
+      await prepareSaveLockDraft();
+      await changeEditorField("Private note", "Newer exact draft");
+      const raw = editorValues();
+      invoke(button("Save changes to Apple 0"));
+      await hooks.settle();
+      expect(writes).toHaveLength(2);
+      const { response, read } = unauthorized();
+      old.resolve(response);
+      await hooks.settle();
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+      expect(editorValues()).toEqual(raw);
+      expect(button("Save changes to Apple 0").props.disabled).toBe(true);
+      expect(read).not.toHaveBeenCalled();
+      current.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(editorValues()).toEqual(raw);
+      await click("Save changes to Apple 0");
+      expect(writes).toHaveLength(3);
+      expect(writes[2]).toEqual(writes[1]);
+    });
+  }
+});

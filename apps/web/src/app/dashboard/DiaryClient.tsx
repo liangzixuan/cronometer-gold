@@ -1186,6 +1186,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         }
       }
     }
+    const requestSession = sessionRef.current;
+    const requestRoute = sessionRouteRef.current;
     const owner = beginMutation(editor.originLocalDate, editor.entryId);
     setMessage("Saving the diary entry…");
     try {
@@ -1217,7 +1219,15 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           cache: "no-store",
         },
       );
-      if (response.status === 401) return signInAgain();
+      if (response.status === 401) {
+        if (
+          mutationIsCurrent(owner) &&
+          sessionRef.current === requestSession &&
+          sessionRouteRef.current === requestRoute
+        )
+          signInAgain();
+        return;
+      }
       const responseBody = await json(response);
       if (
         timestampChanged &&
@@ -1295,6 +1305,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     }
     const key = `delete:${entry.id}:${diary.revision}`;
     const requestOperationId = operationId(key);
+    const requestSession = sessionRef.current;
+    const requestRoute = sessionRouteRef.current;
     const owner = beginMutation(diary.localDate, entry.id);
     setMessage("Deleting the diary entry…");
     try {
@@ -1310,7 +1322,15 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           cache: "no-store",
         },
       );
-      if (response.status === 401) return signInAgain();
+      if (response.status === 401) {
+        if (
+          mutationIsCurrent(owner) &&
+          sessionRef.current === requestSession &&
+          sessionRouteRef.current === requestRoute
+        )
+          signInAgain();
+        return;
+      }
       const body = await json(response);
       if (response.status === 412) {
         operationIds.current.delete(key);
