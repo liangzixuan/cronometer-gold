@@ -905,3 +905,111 @@ describe("day-note controls while the diary view is paused", () => {
     expect(field().props.value).toBe("acknowledged raw");
   });
 });
+
+describe("ordinary rereads of acknowledged day-note saves", () => {
+  const otherDate = "2026-09-16";
+  const hasReload = () =>
+    nodes().some((node) => node.type === "button" && text(node) === "Reload saved note");
+  const currentRead = async (call: RequestCall) =>
+    noteResponse(call.url.endsWith(noteDate) ? head : noteFixture(null, "0", otherDate));
+  async function acknowledgedWithFailedRead() {
+    await mount();
+    await change(" acknowledged raw\r\n ");
+    read = async () => Response.json({}, { status: 503 });
+    await click("Save note");
+    expect(puts()).toHaveLength(1);
+    expect(hasReload()).toBe(true);
+    expect(field().props.disabled).toBe(true);
+    read = currentRead;
+  }
+
+  it.each(["saved", "newer", "cleared"] as const)(
+    "accepts the %s current head after returning to the saved date without another recovery read",
+    async (result) => {
+      await acknowledgedWithFailedRead();
+      await navigate(otherDate);
+      expect(hasReload()).toBe(true);
+      expect(field().props.disabled).toBe(true);
+      if (result === "newer") head = noteFixture("newer saved elsewhere", "2");
+      if (result === "cleared") head = noteFixture(null, "2");
+      const requests = calls.length;
+      await navigate(noteDate);
+      expect(calls.slice(requests)).toHaveLength(1);
+      expect(calls[requests]?.init.method).toBeUndefined();
+      expect(field().props.value).toBe(head.note ?? "");
+      expect(field().props.disabled).toBe(false);
+      expect(hasReload()).toBe(false);
+      expect(text()).toContain(`Note saved for ${noteDate}. Current saved state checked.`);
+      expect(puts()).toHaveLength(1);
+    },
+  );
+
+  it.each(["unavailable", "wrong date", "wrong etag"] as const)(
+    "retains the acknowledged save after an ordinary %s read and uses GET-only recovery",
+    async (failure) => {
+      await acknowledgedWithFailedRead();
+      await navigate(otherDate);
+      read = async (call) => {
+        if (!call.url.endsWith(noteDate)) return currentRead(call);
+        if (failure === "unavailable") return Response.json({}, { status: 503 });
+        if (failure === "wrong date") return noteResponse(noteFixture(null, "0", otherDate));
+        return Response.json({ data: head }, { headers: { etag: '"99"' } });
+      };
+      await navigate(noteDate);
+      expect(hasReload()).toBe(true);
+      expect(field().props.disabled).toBe(true);
+      expect(puts()).toHaveLength(1);
+      read = currentRead;
+      const requests = calls.length;
+      await click("Reload saved note");
+      expect(calls.slice(requests)).toHaveLength(1);
+      expect(calls[requests]?.init.method).toBeUndefined();
+      expect(field().props.disabled).toBe(false);
+      expect(field().props.value).toBe(head.note);
+      expect(hasReload()).toBe(false);
+      expect(puts()).toHaveLength(1);
+    },
+  );
+
+  it("does not settle from a late ordinary read after its view ticket is retired", async () => {
+    await acknowledgedWithFailedRead();
+    await navigate(otherDate);
+    const old = deferred<Response>();
+    read = async (call) => (call.url.endsWith(noteDate) ? old.promise : currentRead(call));
+    await navigate(noteDate);
+    await navigate(otherDate);
+    const requests = calls.length;
+    old.resolve(noteResponse(head));
+    await hooks.settle();
+    expect(calls).toHaveLength(requests);
+    expect(hasReload()).toBe(true);
+    expect(field().props.disabled).toBe(true);
+    read = currentRead;
+    await navigate(noteDate);
+    expect(field().props.disabled).toBe(false);
+    expect(hasReload()).toBe(false);
+    expect(puts()).toHaveLength(1);
+  });
+
+  it("keeps a newer checked head editable when the first acknowledgement read fails late", async () => {
+    await mount();
+    await change("saved before navigation");
+    const old = deferred<Response>();
+    read = async () => old.promise;
+    await click("Save note");
+    expect(field().props.disabled).toBe(true);
+    read = currentRead;
+    await navigate(otherDate);
+    head = noteFixture("new current head", "2");
+    await navigate(noteDate);
+    expect(field().props.disabled).toBe(false);
+    expect(field().props.value).toBe("new current head");
+    old.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    expect(field().props.disabled).toBe(false);
+    expect(field().props.value).toBe("new current head");
+    expect(hasReload()).toBe(false);
+    expect(text()).toContain("Current saved state checked");
+    expect(puts()).toHaveLength(1);
+  });
+});

@@ -137,6 +137,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
   const load = useCallback(
     async (date: string, acknowledgement: Acknowledgement | null = null) => {
       if (!privateCurrent() || !isLocalDate(date)) return;
+      const pendingAcknowledgement = acknowledgement ?? stateRef.current.acknowledgement;
       const controller = new AbortController();
       controllers.current.add(controller);
       const ticket = {};
@@ -168,6 +169,10 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
         if (response.status !== 200) throw new Error("Note unavailable.");
         const note = readDayNote(body, response.headers.get("etag"), scope.ownerUserId, date);
         const current = stateRef.current;
+        const acknowledgementChecked =
+          pendingAcknowledgement !== null &&
+          pendingAcknowledgement.date === date &&
+          current.acknowledgement === pendingAcknowledgement;
         const mayInstall =
           viewRead.current === ticket &&
           propsRef.current.localDate === date &&
@@ -184,7 +189,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
               }
             : {}),
           ...(mayInstall ? { snapshot: { date, phase: "ready", note } as const } : {}),
-          ...(acknowledgement
+          ...(acknowledgementChecked
             ? {
                 acknowledgement: null,
                 message: `Note saved for ${date}. Current saved state checked.`,
