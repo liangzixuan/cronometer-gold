@@ -1293,13 +1293,23 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     }
   }
 
+  function canDeleteEntry(entry: DiaryEntry) {
+    return (
+      canStartEntryMutation(entry) &&
+      sessionRouteRef.current === sessionRoute &&
+      mutationSequence.current === renderedEditorMutationSequence &&
+      diary?.status !== "locked"
+    );
+  }
+
   async function deleteEntry(entry: DiaryEntry) {
     if (
-      editorRef.current !== null ||
       !diary ||
+      !canDeleteEntry(entry) ||
       !window.confirm(
         `Delete ${entryName(entry)} from ${diaryGroupLabel(diaryGroups, entry.mealSlot)}?`,
-      )
+      ) ||
+      !canDeleteEntry(entry)
     ) {
       return;
     }
@@ -1378,7 +1388,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     }
   }
 
-  function canRepeatEntry(entry: DiaryEntry) {
+  function canStartEntryMutation(entry: DiaryEntry) {
     return !(
       editorRef.current !== null ||
       !session ||
@@ -1428,7 +1438,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       choice.privateGeneration === privateUiGeneration.current &&
       choice.lifecycleEpoch === entryNutrientEpoch.current &&
       editorRef.current === null &&
-      canRepeatEntry(choice.entry) &&
+      canStartEntryMutation(choice.entry) &&
       canInspectEntryNutrients(choice.entry)
     );
   }
@@ -1437,7 +1447,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     if (
       !session ||
       !diaryPage ||
-      !canRepeatEntry(entry) ||
+      !canStartEntryMutation(entry) ||
       !canInspectEntryNutrients(entry) ||
       editorRef.current !== null ||
       pendingRepeat(entry) ||
@@ -1479,7 +1489,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     destination?: RepeatDestination,
     retry?: RepeatOperation,
   ) {
-    if (!session || !diary || !canRepeatEntry(entry)) return;
+    if (!session || !diary || !canStartEntryMutation(entry)) return;
     if (destination && !currentRepeatDestination(destination)) return;
     const ownerUserId = session.user.id;
     const privateGeneration = privateUiGeneration.current;

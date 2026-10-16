@@ -4206,3 +4206,174 @@ describe("Diary write unauthorized response ownership", () => {
     });
   }
 });
+
+describe("Diary Delete admission", () => {
+  async function deletionFixture() {
+    const pending = deferred<Response>();
+    const writes: { url: string; headers: Record<string, string> }[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        writes.push({ url, headers: Object.fromEntries(new Headers(init.headers)) });
+        return writes.length === 1
+          ? pending.promise
+          : Response.json({ error: "Response unavailable." }, { status: 503 });
+      }
+      if (url === "/api/auth/logout") return new Response(null, { status: 204 });
+      return base(url, init);
+    });
+    await mount(fetch);
+    return { pending, writes, fetch };
+  }
+
+  it.each(["same row", "another row"])(
+    "rejects a retained %s Delete immediately while another Delete owns the lock",
+    async (target) => {
+      const { pending, writes } = await deletionFixture();
+      const retained = button(target === "same row" ? "Delete Apple 0" : "Delete Apple 1");
+      invoke(button("Delete Apple 0"));
+      const uuid = vi.spyOn(crypto, "randomUUID");
+      const confirmations = vi.mocked(window.confirm).mock.calls.length;
+      invoke(retained);
+      await hooks.settle();
+      expect(writes).toHaveLength(1);
+      expect(window.confirm).toHaveBeenCalledTimes(confirmations);
+      expect(uuid).not.toHaveBeenCalled();
+      expect(button("Delete Apple 0").props.disabled).toBe(true);
+      pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+      await hooks.settle();
+      await click("Delete Apple 0");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+    },
+  );
+
+  it.each([
+    "route-before-effects",
+    "route-ABA-before-effects",
+    "profile-before-effects",
+    "effect-replay",
+    "hidden",
+    "logout",
+    "unmount",
+    "settled-mutation",
+  ] as const)(
+    "rejects a held Delete after %s before confirmation or ID allocation",
+    async (transition) => {
+      const { pending, writes, fetch } = await deletionFixture();
+      const retained = button("Delete Apple 0");
+      if (transition === "route-before-effects" || transition === "route-ABA-before-effects") {
+        route.date = "2026-08-16";
+        hooks.renderWithoutEffects();
+        if (transition === "route-ABA-before-effects") {
+          route.date = "2026-08-15";
+          hooks.renderWithoutEffects();
+        }
+      }
+      if (transition === "profile-before-effects") {
+        const next = session();
+        next.data.profile.timeZone = "America/New_York";
+        hooks.replaceVerifiedSessionBeforeEffects(parseSession(next));
+      }
+      if (transition === "effect-replay") {
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      if (transition === "hidden")
+        Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      if (transition === "logout") await click("Sign out");
+      if (transition === "unmount") hooks.unmount();
+      if (transition === "settled-mutation") {
+        invoke(button("Delete Apple 1"));
+        pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+        await hooks.settle();
+        writes.length = 0;
+        vi.mocked(window.confirm).mockClear();
+      }
+      const uuid = vi.spyOn(crypto, "randomUUID");
+      const requests = fetch.mock.calls.length;
+      const before = text();
+      invoke(retained);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (transition.includes("before-effects")) hooks.renderWithoutEffects();
+      else await hooks.settle();
+      expect(writes).toHaveLength(0);
+      expect(fetch).toHaveBeenCalledTimes(requests);
+      expect(window.confirm).not.toHaveBeenCalled();
+      expect(uuid).not.toHaveBeenCalled();
+      expect(text()).toBe(before);
+      expect(hooks.afterClose()).toBe(0);
+    },
+  );
+
+  it.each(["route", "editor", "profile"] as const)(
+    "rechecks Delete admission when confirmation changes the %s",
+    async (transition) => {
+      const { writes, fetch } = await deletionFixture();
+      const edit = button("Edit Apple 0");
+      vi.mocked(window.confirm).mockImplementationOnce(() => {
+        if (transition === "route") {
+          route.date = "2026-08-16";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "editor") invoke(edit);
+        if (transition === "profile")
+          hooks.replaceVerifiedSessionBeforeEffects(parseSession(session()));
+        return true;
+      });
+      const uuid = vi.spyOn(crypto, "randomUUID");
+      const requests = fetch.mock.calls.length;
+      invoke(button("Delete Apple 0"));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      hooks.renderWithoutEffects();
+      expect(writes).toHaveLength(0);
+      expect(fetch).toHaveBeenCalledTimes(requests);
+      expect(window.confirm).toHaveBeenCalledTimes(1);
+      expect(uuid).not.toHaveBeenCalled();
+      if (transition === "editor") expect(editorField("Quantity").props.value).toBe("1.250000");
+    },
+  );
+
+  it("keeps an ordinary cancelled Delete free of writes and operation IDs", async () => {
+    const { writes } = await deletionFixture();
+    vi.mocked(window.confirm).mockReturnValueOnce(false);
+    const uuid = vi.spyOn(crypto, "randomUUID");
+    await click("Delete Apple 0");
+    expect(window.confirm).toHaveBeenCalledWith("Delete Apple 0 from Breakfast?");
+    expect(writes).toHaveLength(0);
+    expect(uuid).not.toHaveBeenCalled();
+    expect(button("Delete Apple 0").props.disabled).toBe(false);
+  });
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it("rejects the disabled Delete on a locked day before confirmation", async () => {
+    const fixture = page();
+    fixture.data.status = "locked";
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    const uuid = vi.spyOn(crypto, "randomUUID");
+    expect(button("Delete Apple 0").props.disabled).toBe(true);
+    invoke(button("Delete Apple 0"));
+    await hooks.settle();
+    expect(fetch).toHaveBeenCalledTimes(requests);
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(uuid).not.toHaveBeenCalled();
+  });
+
+  it("allows a current held Delete after cancelling an unchanged editor", async () => {
+    const { pending, writes } = await deletionFixture();
+    const retained = button("Delete Apple 0");
+    await click("Edit Apple 0");
+    await click("Cancel editing Apple 0");
+    invoke(retained);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.url).toBe(`/api/diary/entries/${entry(0).id}?date=2026-08-15`);
+    expect(writes[0]?.headers["if-match"]).toBe('"3"');
+    expect(writes[0]?.headers.accept).toBe("application/json");
+    expect(writes[0]?.headers["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
+    pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+    await hooks.settle();
+  });
+});
