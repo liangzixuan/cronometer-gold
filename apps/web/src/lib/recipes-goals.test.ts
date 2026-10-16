@@ -342,27 +342,23 @@ describe("optional recipe log times", () => {
   });
 
   it.each([
-    ["2026-11-01", "01:30", "2026-11-01T06:30:00.000Z"],
     ["2026-09-09", "00:00", "2026-09-09T05:00:00.000Z"],
     ["2026-09-09", "23:59", "2026-09-10T04:59:00.000Z"],
-  ])(
-    "resolves explicit %s %s through the existing profile-zone convention",
-    (localDate, localTime, expected) => {
-      const operation = prepareRecipeLogOperation(
-        new Map(),
-        { ...input, localDate, localTime },
-        now,
-        () => "explicit",
-      );
-      expect(operation.body).toEqual({
-        recipeVersionId: input.recipeVersionId,
-        portion: input.portion,
-        mealSlot: input.mealSlot,
-        occurredAt: expected,
-      });
-      expect(operation.intentKey).toContain('"explicit-time"');
-    },
-  );
+  ])("resolves unique explicit %s %s in the profile zone", (localDate, localTime, expected) => {
+    const operation = prepareRecipeLogOperation(
+      new Map(),
+      { ...input, localDate, localTime },
+      now,
+      () => "explicit",
+    );
+    expect(operation.body).toEqual({
+      recipeVersionId: input.recipeVersionId,
+      portion: input.portion,
+      mealSlot: input.mealSlot,
+      occurredAt: expected,
+    });
+    expect(operation.intentKey).toContain('"explicit-time"');
+  });
 
   it.each([" ", "01:30 ", "1:30", "24:00", "12:60", "12:00:01", "02:30"])(
     "rejects invalid explicit input %j before pending lookup or identity allocation",
@@ -389,7 +385,14 @@ describe("optional recipe log times", () => {
     let sequence = 0;
     const id = () => String(++sequence);
     const prepare = (localTime: string) => {
-      const operation = prepareRecipeLogOperation(pending, { ...input, localTime }, now, id);
+      const selectedOccurredAt =
+        localTime === "" ? null : `2026-11-01T06:${localTime.slice(3)}:00.000Z`;
+      const operation = prepareRecipeLogOperation(
+        pending,
+        { ...input, localTime, selectedOccurredAt },
+        now,
+        id,
+      );
       pending.set(operation.intentKey, operation);
       return operation;
     };
@@ -401,5 +404,82 @@ describe("optional recipe log times", () => {
     expect(prepare("")).toBe(automatic);
     expect(prepare("01:31")).toBe(b);
     expect(sequence).toBe(3);
+  });
+});
+
+describe("explicit recipe occurrence validation and intent identity", () => {
+  const input = {
+    recipeId: "ce126b7f-dfe5-4ee4-a75c-6b0f50c1963e",
+    recipeVersionId: "db2ed69e-29d1-4330-a210-0a804f9ff2b3",
+    portion: { kind: "serving", amount: "2.500000" } as const,
+    mealSlot: "snacks" as const,
+    localDate: "2026-11-01",
+    localTime: "01:30",
+    timeZone: "America/Chicago",
+  };
+  it.each([undefined, null, "", "2026-11-01T07:31:00.000Z", "2026-11-01T07:30:45.123Z"])(
+    "rejects missing or mismatched occurrence %j before allocation or pending lookup",
+    (selectedOccurredAt) => {
+      const pending = new Map<string, StableMutation<RecipeLogBody>>();
+      const get = vi.spyOn(pending, "get"),
+        id = vi.fn(() => "invalid");
+      expect(() =>
+        prepareRecipeLogOperation(
+          pending,
+          { ...input, ...(selectedOccurredAt === undefined ? {} : { selectedOccurredAt }) },
+          new Date(),
+          id,
+        ),
+      ).toThrow(RangeError);
+      expect(id).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      expect(pending.size).toBe(0);
+    },
+  );
+  it("rejects a forged selection even for a unique minute", () => {
+    const id = vi.fn(() => "invalid");
+    expect(() =>
+      prepareRecipeLogOperation(
+        new Map(),
+        {
+          ...input,
+          localTime: "03:30",
+          selectedOccurredAt: "2026-11-01T07:30:00.000Z",
+        },
+        new Date(),
+        id,
+      ),
+    ).toThrow(RangeError);
+    expect(id).not.toHaveBeenCalled();
+  });
+  it("keeps exact automatic, Earlier and Later operations independently and recovers each retry", () => {
+    const pending = new Map<string, StableMutation<RecipeLogBody>>();
+    let allocated = 0;
+    const id = () => String(++allocated);
+    const prepare = (selectedOccurredAt: string | null) => {
+      const operation = prepareRecipeLogOperation(
+        pending,
+        {
+          ...input,
+          localTime: selectedOccurredAt === null ? "" : input.localTime,
+          selectedOccurredAt,
+        },
+        new Date("2026-11-01T07:30:45.123Z"),
+        id,
+      );
+      pending.set(operation.intentKey, operation);
+      return operation;
+    };
+    const automatic = prepare(null),
+      earlier = prepare("2026-11-01T06:30:00.000Z"),
+      later = prepare("2026-11-01T07:30:00.000Z");
+    expect(new Set([automatic.intentKey, earlier.intentKey, later.intentKey]).size).toBe(3);
+    expect(earlier.body.occurredAt).toBe("2026-11-01T06:30:00.000Z");
+    expect(later.body.occurredAt).toBe("2026-11-01T07:30:00.000Z");
+    expect(prepare("2026-11-01T06:30:00.000Z")).toBe(earlier);
+    expect(prepare("2026-11-01T07:30:00.000Z")).toBe(later);
+    expect(prepare(null)).toBe(automatic);
+    expect(allocated).toBe(3);
+    expect(automatic.body.occurredAt).toBe("2026-11-01T07:30:45.123Z");
   });
 });

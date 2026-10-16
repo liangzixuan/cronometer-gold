@@ -3113,7 +3113,6 @@ describe("actual optional recipe log time", () => {
   it.each([
     ["2026-11-01", "", "2026-11-01T07:30:45.123Z"],
     ["2026-10-31", "", "2026-10-31T17:00:00.000Z"],
-    ["2026-11-01", "01:30", "2026-11-01T06:30:00.000Z"],
     ["2026-09-09", "00:00", "2026-09-09T05:00:00.000Z"],
   ])("logs %s at %j with the exact expected instant", async (date, time, expected) => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -3176,10 +3175,13 @@ describe("actual optional recipe log time", () => {
     await click("Log recipe");
     vi.setSystemTime(new Date("2026-11-01T08:45:56.789Z"));
     await change(optionalTimeLabel, "01:30");
+    await click(earlierRecipeOccurrence);
     await click("Log recipe");
     await change(optionalTimeLabel, "01:31");
+    await click(earlierRecipeOccurrence);
     await click("Log recipe");
     await change(optionalTimeLabel, "01:30");
+    await click(earlierRecipeOccurrence);
     await click("Log recipe");
     await change(optionalTimeLabel, "");
     await click("Log recipe");
@@ -5416,4 +5418,274 @@ it("rejects retained recipe-list retries while a replacement route needs session
   expect(fetcher).toHaveBeenCalledTimes(count);
   await click("Retry session");
   expect(savedRecipeNames()).toEqual(["Saved recipe"]);
+});
+
+const earlierRecipeOccurrence = "Earlier occurrence · UTC−05:00";
+const laterRecipeOccurrence = "Later occurrence · UTC−06:00";
+async function openRepeatedRecipeLog() {
+  await mountReady();
+  openSaved();
+  await hooks.settle();
+  await change("Local diary date", "2026-11-01");
+  await change(optionalTimeLabel, "01:30");
+}
+function recipeOccurrences() {
+  return elements().filter(
+    (node) => node.type === "button" && text(node).includes(" occurrence · "),
+  );
+}
+describe("actual explicit recipe repeated-time occurrence", () => {
+  it("requires a choice before allocating or sending and preserves the raw draft", async () => {
+    const originalCrypto = crypto,
+      allocate = vi.fn(() => originalCrypto.randomUUID());
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    const fetcher = retryableLogFetcher();
+    await openRepeatedRecipeLog();
+    await change("Amount", "2.500000");
+    await change("Meal", "snacks");
+    const count = fetcher.mock.calls.length,
+      ids = allocate.mock.calls.length;
+    await click("Log recipe");
+    await click("Log recipe");
+    expect(fetcher.mock.calls).toHaveLength(count);
+    expect(allocate).toHaveBeenCalledTimes(ids);
+    expect(text()).toContain("Choose Earlier or Later");
+    expect(recipeOccurrences().map((node) => node.props["aria-pressed"])).toEqual([false, false]);
+    expect(field(optionalTimeLabel).props.value).toBe("01:30");
+    expect(field("Local diary date").props.value).toBe("2026-11-01");
+    expect(field("Amount").props.value).toBe("2.500000");
+    expect(field("Meal").props.value).toBe("snacks");
+  });
+  it.each([
+    [earlierRecipeOccurrence, "2026-11-01T06:30:00.000Z", "serving"],
+    [laterRecipeOccurrence, "2026-11-01T07:30:00.000Z", "serving"],
+    [earlierRecipeOccurrence, "2026-11-01T06:30:00.000Z", "grams"],
+    [laterRecipeOccurrence, "2026-11-01T07:30:00.000Z", "grams"],
+  ])("logs %s as %s with exact %s portion", async (choice, instant, kind) => {
+    const fetcher = retryableLogFetcher();
+    await openRepeatedRecipeLog();
+    await change("Portion", kind);
+    await change("Amount", "2.500000");
+    await change("Meal", "snacks");
+    await click(choice);
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    expect(button(choice).props["aria-pressed"]).toBe(true);
+    await click("Log recipe");
+    const [url, init] = required(recipeLogPosts(fetcher)[0]);
+    expect(url).toBe(`/api/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      recipeVersionId: versionId,
+      portion: kind === "grams" ? { kind, grams: "2.500000" } : { kind, amount: "2.500000" },
+      mealSlot: "snacks",
+      occurredAt: instant,
+    });
+    expect(new Headers(init?.headers).get("x-expected-profile-time-zone")).toBe("America/Chicago");
+  });
+  it("recovers exact unresolved Earlier and Later bodies and keys after switching back", async () => {
+    const fetcher = retryableLogFetcher();
+    await openRepeatedRecipeLog();
+    for (const choice of [
+      earlierRecipeOccurrence,
+      laterRecipeOccurrence,
+      earlierRecipeOccurrence,
+      laterRecipeOccurrence,
+    ]) {
+      await click(choice);
+      await click("Log recipe");
+    }
+    const posts = recipeLogPosts(fetcher);
+    expect(posts).toHaveLength(4);
+    const bodies = posts.map(([, init]) => init?.body);
+    const keys = posts.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(keys[0]).not.toBe(keys[1]);
+    expect(JSON.parse(String(bodies[0])).occurredAt).toBe("2026-11-01T06:30:00.000Z");
+    expect(JSON.parse(String(bodies[1])).occurredAt).toBe("2026-11-01T07:30:00.000Z");
+    expect(bodies.slice(2)).toEqual(bodies.slice(0, 2));
+    expect(keys.slice(2)).toEqual(keys.slice(0, 2));
+  });
+  it.each(["date", "time"])(
+    "clears occurrence on real %s changes and fences an A-to-B-to-A callback",
+    async (coordinate) => {
+      const fetcher = retryableLogFetcher();
+      await openRepeatedRecipeLog();
+      await click(laterRecipeOccurrence);
+      const oldChoice = button(earlierRecipeOccurrence),
+        oldLog = button("Log recipe");
+      const label = coordinate === "date" ? "Local diary date" : optionalTimeLabel;
+      await change(label, coordinate === "date" ? "2026-11-02" : "01:31");
+      await change(label, coordinate === "date" ? "2026-11-01" : "01:30");
+      invoke(oldChoice, "onClick");
+      invoke(oldLog, "onClick");
+      await hooks.settle();
+      expect(recipeLogPosts(fetcher)).toHaveLength(0);
+      expect(recipeOccurrences().map((node) => node.props["aria-pressed"])).toEqual([false, false]);
+      await click("Log recipe");
+      expect(recipeLogPosts(fetcher)).toHaveLength(0);
+      await click(laterRecipeOccurrence);
+      await click("Log recipe");
+      expect(JSON.parse(String(recipeLogPosts(fetcher)[0]?.[1]?.body)).occurredAt).toBe(
+        "2026-11-01T07:30:00.000Z",
+      );
+    },
+  );
+  it("retains choice through same-value inputs and unrelated draft, portion, meal and filter changes", async () => {
+    const fetcher = retryableLogFetcher();
+    await openRepeatedRecipeLog();
+    await click(laterRecipeOccurrence);
+    const log = button("Log recipe");
+    invoke(field(optionalTimeLabel), "onChange", { target: { value: "01:30" } });
+    invoke(field("Local diary date"), "onChange", { target: { value: "2026-11-01" } });
+    invoke(button(laterRecipeOccurrence), "onClick");
+    invoke(log, "onClick");
+    await hooks.settle();
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    await change("Name", "Independent draft");
+    await change("Amount", "2.500000");
+    await change("Portion", "grams");
+    await change("Meal", "snacks");
+    await change(savedFilterLabel, "Hidden selection");
+    await change(nestedFilterLabel, "Other");
+    await click("Per 100 g");
+    expect(button(laterRecipeOccurrence).props["aria-pressed"]).toBe(true);
+    expect(field("Name").props.value).toBe("Independent draft");
+    await click("Log recipe");
+    expect(JSON.parse(String(recipeLogPosts(fetcher)[1]?.[1]?.body)).occurredAt).toBe(
+      "2026-11-01T07:30:00.000Z",
+    );
+  });
+  it.each(["New", "copy", "open", "route", "owner", "unmount", "replay"])(
+    "fences retained occurrence controls after %s replaces their context",
+    async (transition) => {
+      const fetcher = retryableLogFetcher();
+      await openRepeatedRecipeLog();
+      await click(laterRecipeOccurrence);
+      const oldChoice = button(earlierRecipeOccurrence),
+        oldLog = button("Log recipe");
+      if (transition === "New") await click("New recipe");
+      else if (transition === "copy") await click("Copy to new draft");
+      else if (transition === "open") {
+        openSaved();
+        await hooks.settle();
+      } else if (transition === "route") {
+        navigation.query = "date=2026-11-02";
+        hooks.renderWithoutEffects();
+        expect(recipeOccurrences()).toHaveLength(0);
+      } else if (transition === "owner") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation((url, init) =>
+          url === "/api/auth/me"
+            ? recipeSessionInZone("America/Chicago", secondRecipeId)
+            : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+      } else if (transition === "unmount") hooks.unmount();
+      else {
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      const count = fetcher.mock.calls.length,
+        updates = hooks.afterClose();
+      invoke(oldChoice, "onClick");
+      invoke(oldLog, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(count);
+      expect(recipeLogPosts(fetcher)).toHaveLength(0);
+      expect(hooks.afterClose()).toBe(updates);
+      if (transition !== "unmount") expect(recipeOccurrences()).toHaveLength(0);
+    },
+  );
+  it("locks occurrence callbacks synchronously while pending and retains choice after same-day acceptance", async () => {
+    const fetcher = retryableLogFetcher(),
+      pending = deferred<Response>();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      init?.method === "POST" && url.includes("/log?") ? pending.promise : original(url, init),
+    );
+    await openRepeatedRecipeLog();
+    await click(laterRecipeOccurrence);
+    const oldChoice = button(earlierRecipeOccurrence),
+      log = button("Log recipe");
+    invoke(log, "onClick");
+    invoke(oldChoice, "onClick");
+    invoke(log, "onClick");
+    await hooks.settle();
+    expect(button(laterRecipeOccurrence).props.disabled).toBe(true);
+    expect(button(laterRecipeOccurrence).props["aria-pressed"]).toBe(true);
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    pending.resolve(acceptedRecipeLog());
+    await hooks.settle();
+    expect(button(laterRecipeOccurrence).props["aria-pressed"]).toBe(true);
+    expect(button(laterRecipeOccurrence).props.disabled).toBe(false);
+  });
+  it("clears the old occurrence on a zone409 and requires deliberate new-zone confirmation", async () => {
+    const fetcher = retryableLogFetcher(),
+      original = required(fetcher.getMockImplementation());
+    let posts = 0;
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST" && url.includes("/log?")) {
+        posts += 1;
+        return Response.json(
+          posts === 1 ? { code: "DIARY_TIME_ZONE_CHANGED" } : { error: "Lost confirmation" },
+          { status: posts === 1 ? 409 : 503 },
+        );
+      }
+      return url === "/api/auth/me" && posts > 0
+        ? recipeSessionInZone("America/New_York")
+        : original(url, init);
+    });
+    await openRepeatedRecipeLog();
+    await change("Amount", "2.500000");
+    await click(laterRecipeOccurrence);
+    const oldChoice = button(earlierRecipeOccurrence);
+    await click("Log recipe");
+    expect(field(optionalTimeLabel).props.value).toBe("01:30");
+    expect(field("Amount").props.value).toBe("2.500000");
+    invoke(oldChoice, "onClick");
+    await hooks.settle();
+    expect(recipeOccurrences().map((node) => node.props["aria-pressed"])).toEqual([false, false]);
+    await click("Confirm 2026-11-01 at 01:30 in America/New_York");
+    expect(button("Log recipe").props.disabled).toBe(true);
+    expect(text()).toContain("Choose Earlier or Later");
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    const confirm = button("Confirm 2026-11-01 at 01:30 in America/New_York");
+    invoke(button("Later occurrence · UTC−05:00"), "onClick");
+    invoke(confirm, "onClick");
+    await hooks.settle();
+    expect(button("Log recipe").props.disabled).toBe(true);
+    await click("Confirm 2026-11-01 at 01:30 in America/New_York");
+    await click("Log recipe");
+    const writes = recipeLogPosts(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(String(writes[1]?.[1]?.body)).occurredAt).toBe("2026-11-01T06:30:00.000Z");
+    expect(new Headers(writes[1]?.[1]?.headers).get("x-expected-profile-time-zone")).toBe(
+      "America/New_York",
+    );
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).not.toBe(
+      new Headers(writes[0]?.[1]?.headers).get("idempotency-key"),
+    );
+  });
+});
+
+it("rejects a skipped recipe minute before UUID or POST while retaining the raw draft", async () => {
+  const originalCrypto = crypto;
+  const allocate = vi.fn(() => originalCrypto.randomUUID());
+  vi.stubGlobal("crypto", { randomUUID: allocate });
+  const fetcher = retryableLogFetcher();
+  await mountReady();
+  openSaved();
+  await hooks.settle();
+  await change("Local diary date", "2026-03-08");
+  await change(optionalTimeLabel, "02:30");
+  await change("Amount", "2.500000");
+  await change("Meal", "snacks");
+  const ids = allocate.mock.calls.length;
+  await click("Log recipe");
+  expect(allocate).toHaveBeenCalledTimes(ids);
+  expect(recipeLogPosts(fetcher)).toHaveLength(0);
+  expect(field("Local diary date").props.value).toBe("2026-03-08");
+  expect(field(optionalTimeLabel).props.value).toBe("02:30");
+  expect(field("Amount").props.value).toBe("2.500000");
+  expect(field("Meal").props.value).toBe("snacks");
+  expect(text()).toContain("does not exist");
 });

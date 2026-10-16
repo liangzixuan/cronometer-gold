@@ -1,9 +1,10 @@
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
+
 import {
   type DiaryNutrient,
   isLocalDate,
   isSupportedTimeZone,
   localDateInTimeZone,
-  localDateTimeToInstant,
   type MealSlot,
   parseDiaryNutrient,
   quickAddOccurredAt,
@@ -1308,6 +1309,7 @@ export function prepareRecipeLogOperation(
     readonly localDate: string;
     readonly timeZone: string;
     readonly localTime?: string;
+    readonly selectedOccurredAt?: string | null;
   },
   now: Date,
   operationIdFactory: () => string,
@@ -1315,7 +1317,12 @@ export function prepareRecipeLogOperation(
   const explicitInstant =
     input.localTime === undefined || input.localTime === ""
       ? null
-      : recipeLogInstant(input.localDate, input.localTime, input.timeZone);
+      : recipeLogInstant(
+          input.localDate,
+          input.localTime,
+          input.timeZone,
+          input.selectedOccurredAt,
+        );
   const intentKey = JSON.stringify([
     input.recipeId,
     input.recipeVersionId,
@@ -1323,7 +1330,7 @@ export function prepareRecipeLogOperation(
     input.mealSlot,
     input.localDate,
     input.timeZone,
-    ...(explicitInstant === null ? [] : ["explicit-time", input.localTime]),
+    ...(explicitInstant === null ? [] : ["explicit-time", input.localTime, explicitInstant]),
   ]);
   return prepareStableMutation(
     pending,
@@ -1338,9 +1345,28 @@ export function prepareRecipeLogOperation(
   );
 }
 
-/** Convert an explicitly selected wall clock time while rejecting DST gaps. */
-export function recipeLogInstant(localDate: string, localTime: string, timeZone: string): string {
-  return localDateTimeToInstant(localDate, localTime, timeZone);
+/** Resolve an explicit local minute, requiring a choice for repeated times. */
+export function recipeLogInstant(
+  localDate: string,
+  localTime: string,
+  timeZone: string,
+  selectedOccurredAt?: string | null,
+): string {
+  const resolution = resolveHydrationLocalMinute(localDate, localTime, timeZone);
+  if (resolution.kind === "invalid")
+    throw new RangeError("Invalid local diary time or profile time zone.");
+  if (resolution.kind === "gap")
+    throw new RangeError("This local diary time does not exist in your profile time zone.");
+  if (selectedOccurredAt != null) {
+    const selected = resolution.candidates.find(
+      (candidate) => candidate.occurredAt === selectedOccurredAt,
+    );
+    if (!selected) throw new RangeError("Choose an occurrence for the current local diary time.");
+    return selected.occurredAt;
+  }
+  if (resolution.kind === "ambiguous")
+    throw new RangeError("Choose Earlier or Later for this repeated local time.");
+  return resolution.candidates[0].occurredAt;
 }
 
 export function authoritativeRecipeDate(now: Date, timeZone: string): string {

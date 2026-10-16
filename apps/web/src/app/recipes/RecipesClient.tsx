@@ -1,5 +1,6 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
@@ -395,6 +396,12 @@ export function RecipesClient() {
   const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
   const [logAmount, setLogAmount] = useState("1");
   const [logTime, setLogTime] = useState("");
+  const [logOccurrence, setLogOccurrence] = useState<string | null>(null);
+  const logTimeResolution = useMemo(
+    () =>
+      timeZone && logTime !== "" ? resolveHydrationLocalMinute(date, logTime, timeZone) : null,
+    [date, logTime, timeZone],
+  );
   const logTimeInput = useRef<HTMLInputElement | null>(null);
   const logDraftGeneration = useRef(0);
   const activeLog = useRef<object | null>(null);
@@ -469,6 +476,7 @@ export function RecipesClient() {
       activeLog.current = null;
       logDraftGeneration.current += 1;
       setLogTime("");
+      setLogOccurrence(null);
       clearDraftChoice();
       setSelectedState(next);
       setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
@@ -871,6 +879,7 @@ export function RecipesClient() {
         resetFoodSearch();
       }
       logDraftGeneration.current += 1;
+      setLogOccurrence(null);
       setTimeZone(session.profile.timeZone);
       setDiaryGroups(session.profile.diaryGroups);
       return session.profile.timeZone;
@@ -934,6 +943,7 @@ export function RecipesClient() {
         setSessionVerifying(false);
         setFilterVerifiedScope(requestScope);
         setDiaryGroups(session.profile.diaryGroups);
+        setLogOccurrence(null);
         setDate(localDate);
         setTimeZone(session.profile.timeZone);
         void loadRecipes();
@@ -984,6 +994,7 @@ export function RecipesClient() {
     resetFoodSearch();
     logDraftGeneration.current += 1;
     setLogTime("");
+    setLogOccurrence(null);
     if (activeLog.current !== null) {
       activeLog.current = null;
       setBusy(null);
@@ -1539,10 +1550,23 @@ export function RecipesClient() {
     );
   }
 
-  function changeLogField<T>(current: T, next: T, install: (value: T) => void) {
+  function changeLogField<T>(current: T, next: T, install: (value: T) => void, coordinate = false) {
     if (!canEditLogSelection() || current === next) return;
     logDraftGeneration.current += 1;
+    if (coordinate) setLogOccurrence(null);
     install(next);
+  }
+
+  function changeLogOccurrence(occurredAt: string) {
+    if (
+      !canEditLogSelection() ||
+      logTimeResolution?.kind !== "ambiguous" ||
+      !logTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt) ||
+      logOccurrence === occurredAt
+    )
+      return;
+    logDraftGeneration.current += 1;
+    setLogOccurrence(occurredAt);
   }
 
   function validateLogTimeInput(): boolean {
@@ -1575,6 +1599,13 @@ export function RecipesClient() {
       setMessage("Choose a positive recipe amount before logging.");
       return;
     }
+    if (
+      logTimeResolution?.kind === "ambiguous" &&
+      !logTimeResolution.candidates.some((candidate) => candidate.occurredAt === logOccurrence)
+    ) {
+      setMessage("Choose Earlier or Later for this repeated local time.");
+      return;
+    }
     const effectiveLogKind = selected.servingCount === null ? "grams" : logKind;
     const portion =
       effectiveLogKind === "grams"
@@ -1602,6 +1633,7 @@ export function RecipesClient() {
           localDate: date,
           timeZone,
           localTime: logTime,
+          selectedOccurredAt: logOccurrence,
         },
         new Date(),
         createOperationId,
@@ -1631,6 +1663,7 @@ export function RecipesClient() {
         ) {
           logDraftGeneration.current += 1;
           setDateReviewRequired(true);
+          setLogOccurrence(null);
           setTimeZone(null);
           const currentTimeZone =
             await refreshRecipeProfileAfterTimeZoneChange(initiatingOwnerUserId);
@@ -1644,6 +1677,7 @@ export function RecipesClient() {
       pendingLogs.current.delete(operation.intentKey);
       const loggedDate = mutation.entry?.localDate ?? date;
       logDraftGeneration.current += 1;
+      if (loggedDate !== date) setLogOccurrence(null);
       setDate(loggedDate);
       setMessage(
         mutation.replayed
@@ -1673,7 +1707,7 @@ export function RecipesClient() {
     }
     try {
       if (!isLocalDate(date)) throw new RangeError("Choose a valid local diary day.");
-      if (logTime !== "") recipeLogInstant(date, logTime, timeZone);
+      if (logTime !== "") recipeLogInstant(date, logTime, timeZone, logOccurrence);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Choose a valid local diary time.");
       return;
@@ -2335,7 +2369,7 @@ export function RecipesClient() {
                         type="date"
                         disabled={logControlsUnavailable}
                         onChange={(event) => {
-                          changeLogField(date, event.target.value, setDate);
+                          changeLogField(date, event.target.value, setDate, true);
                         }}
                         value={date}
                       />
@@ -2348,7 +2382,7 @@ export function RecipesClient() {
                         step={60}
                         disabled={logControlsUnavailable}
                         onChange={(event) => {
-                          changeLogField(logTime, event.target.value, setLogTime);
+                          changeLogField(logTime, event.target.value, setLogTime, true);
                         }}
                         value={logRouteReady ? logTime : ""}
                       />
@@ -2375,6 +2409,28 @@ export function RecipesClient() {
                     use the current instant for today or noon for another day. The diary snapshot
                     pins recipe version {selected.versionNumber}.
                   </p>
+                  {logRouteReady && logTimeResolution?.kind === "ambiguous" ? (
+                    <fieldset className="entryActions" disabled={logControlsUnavailable}>
+                      <legend>Repeated recipe time</legend>
+                      <small className="fieldHelp" id="recipe-log-occurrence-help">
+                        Choose Earlier or Later for this repeated local minute.
+                      </small>
+                      {logTimeResolution.candidates.map((candidate, index) => (
+                        <button
+                          aria-describedby="recipe-log-occurrence-help"
+                          aria-pressed={logOccurrence === candidate.occurredAt}
+                          className="buttonQuiet"
+                          disabled={logControlsUnavailable}
+                          key={candidate.occurredAt}
+                          onClick={() => changeLogOccurrence(candidate.occurredAt)}
+                          type="button"
+                        >
+                          {index === 0 ? "Earlier" : "Later"} occurrence ·{" "}
+                          {candidate.utcOffsetLabel}
+                        </button>
+                      ))}
+                    </fieldset>
+                  ) : null}
                   {dateReviewRequired ? (
                     <button
                       className="buttonSecondary"
