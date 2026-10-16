@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -256,7 +257,42 @@ describe("Azure environment replay consumer", () => {
               .map((id) => ({ id })),
           ),
         };
-        const db = { selectFrom: vi.fn(() => query), destroy: vi.fn(async () => undefined) };
+        let committed: {
+          completedAt: string;
+          databaseName: string;
+          databaseOid: string;
+          reconciliationDigest: string;
+          replayedSubjectCount: string;
+          restoreEpochHash: string;
+        };
+        const readback = {
+          selectFrom: vi.fn().mockReturnThis(),
+          select: vi.fn().mockReturnThis(),
+          where: vi.fn().mockReturnThis(),
+          limit: vi.fn().mockReturnThis(),
+          execute: vi.fn(async () => [
+            { ...committed, completedAt: new Date(committed.completedAt) },
+          ]),
+        };
+        const db = {
+          selectFrom: vi.fn(() => query),
+          withSchema: vi.fn((schema: string) => {
+            expect(schema).toBe("public");
+            return readback;
+          }),
+          destroy: vi.fn(async () => undefined),
+        };
+        operations.attest.mockImplementation(async (_db, input) => {
+          committed = {
+            completedAt: input.completedAt,
+            databaseName: "nutrition_isolated_restore",
+            databaseOid: "4567",
+            reconciliationDigest: input.reconciliationDigest,
+            replayedSubjectCount: String(input.replayedSubjectCount),
+            restoreEpochHash: createHash("sha256").update(input.restoreEpoch).digest("hex"),
+          };
+          return committed;
+        });
         operations.create.mockReturnValue(db);
         operations.replay.mockImplementation(async (_db, input) => {
           remaining.delete(input.subjectUserId);
@@ -277,6 +313,9 @@ describe("Azure environment replay consumer", () => {
             scannedSubjects: 2,
             replayedTombstones: 1,
           });
+          expect(result.attestation).toEqual(committed!);
+          expect(readback.limit).toHaveBeenCalledWith(2);
+          expect(readback.execute).toHaveBeenCalledOnce();
           expect([...remaining]).toEqual([second]);
           expect(operations.replay).toHaveBeenCalledOnce();
           expect(operations.replay).toHaveBeenCalledWith(

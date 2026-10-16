@@ -24,6 +24,8 @@ import {
   assertDatabaseReady,
   completeDatabaseRestoreReplayAttestation,
   createDatabaseFromEnvironment,
+  type DatabaseRestoreAttestationRecord,
+  prepareDatabaseRestoreReplaySession,
   reconcileErasedAccountRows,
   replayExternalErasureLedgerEntry,
 } from "@nutrition-tracker/db";
@@ -33,14 +35,22 @@ import { assertOciS3CompatibilityEndpoint } from "./oci-object-storage-config.js
 
 type RestoreDatabase = ReturnType<typeof createDatabaseFromEnvironment>;
 
+const MAXIMUM_RESTORE_SUBJECTS = 10_000;
+const SUBJECT_PAGE_SIZE = 500;
+const MAXIMUM_SUBJECT_QUERIES = 21;
+
 const CANONICAL_UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-export interface ErasureRestoreResult {
+export interface ErasureReplaySummary {
   readonly reconciliationDigest: string;
   readonly scannedSubjects: number;
   readonly replayedTombstones: number;
   readonly reconciled: true;
+}
+
+export interface ErasureRestoreResult extends ErasureReplaySummary {
+  readonly attestation: DatabaseRestoreAttestationRecord;
 }
 
 interface ErasureRestoreReconciliation {
@@ -62,11 +72,12 @@ export async function replayErasureLedgerSubjects(input: {
   readonly apply: (entry: ErasureReplayLedgerEntry) => Promise<ErasureRestoreReconciliation>;
   readonly maximumConcurrency: number;
   readonly signal?: AbortSignal;
-}): Promise<ErasureRestoreResult> {
+}): Promise<ErasureReplaySummary> {
+  const { signal, maximumConcurrency, subjects, ledger, apply } = input;
   if (
-    !Number.isSafeInteger(input.maximumConcurrency) ||
-    input.maximumConcurrency < 1 ||
-    input.maximumConcurrency > 16
+    !Number.isSafeInteger(maximumConcurrency) ||
+    maximumConcurrency < 1 ||
+    maximumConcurrency > 16
   ) {
     throw new RangeError("Invalid erasure restore concurrency");
   }
@@ -79,35 +90,63 @@ export async function replayErasureLedgerSubjects(input: {
     "utf8",
   );
   const processBatch = async () => {
-    const outcomes = await Promise.all(
-      batch.map(async (subjectUserId) => {
-        input.signal?.throwIfAborted();
-        if (!CANONICAL_UUID_PATTERN.test(subjectUserId)) {
-          throw new TypeError("Restore database contains a noncanonical subject identifier");
-        }
-        const result = await input.ledger.replaySubject({
-          apply: input.apply,
-          subjectUserId,
-          ...(input.signal ? { signal: input.signal } : {}),
-        });
-        if (
-          result !== null &&
-          (result.reconciled !== true ||
-            Object.values(result.remainingRows).some((value) => value !== "0"))
-        ) {
-          throw new Error("Erasure replay reconciliation failed");
-        }
-        return result === null ? 0 : 1;
-      }),
-    );
-    for (const [index, subjectUserId] of batch.entries()) {
-      reconciliation.update(`${subjectUserId}\t${outcomes[index] ?? 0}\n`, "utf8");
+    const controller = new AbortController();
+    const failure: { recorded: boolean; reason: unknown } = { recorded: false, reason: undefined };
+    const fail = (reason: unknown) => {
+      if (failure.recorded) return;
+      failure.recorded = true;
+      failure.reason = reason;
+      controller.abort(new Error("Erasure restore batch cancelled"));
+    };
+    const onAbort = () => fail(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    try {
+      // Each task consumes its rejection so every started sibling settles first.
+      // The first observed task failure or external abort wins, including falsey reasons.
+      const outcomes = await Promise.all(
+        batch.map(async (subjectUserId) => {
+          try {
+            controller.signal.throwIfAborted();
+            const result = await ledger.replaySubject({
+              apply: (entry) => {
+                controller.signal.throwIfAborted();
+                return apply(entry);
+              },
+              subjectUserId,
+              signal: controller.signal,
+            });
+            controller.signal.throwIfAborted();
+            if (
+              result !== null &&
+              (result.reconciled !== true ||
+                Object.values(result.remainingRows).some((value) => value !== "0"))
+            ) {
+              throw new Error("Erasure replay reconciliation failed");
+            }
+            return result === null ? 0 : 1;
+          } catch (error) {
+            fail(error);
+            return 0;
+          }
+        }),
+      );
+      if (failure.recorded) throw failure.reason;
+      for (const [index, subjectUserId] of batch.entries()) {
+        reconciliation.update(`${subjectUserId}\t${outcomes[index] ?? 0}\n`, "utf8");
+      }
+      replayedTombstones += outcomes.reduce<number>((sum, value) => sum + value, 0);
+      batch = [];
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
-    replayedTombstones += outcomes.reduce<number>((sum, value) => sum + value, 0);
-    batch = [];
   };
-  for await (const subjectUserId of input.subjects) {
-    input.signal?.throwIfAborted();
+  signal?.throwIfAborted();
+  for await (const subjectUserId of subjects) {
+    signal?.throwIfAborted();
+    if (scannedSubjects >= MAXIMUM_RESTORE_SUBJECTS) {
+      throw new RangeError("Erasure restore subject budget exceeded");
+    }
     if (!CANONICAL_UUID_PATTERN.test(subjectUserId)) {
       throw new TypeError("Restore database contains a noncanonical subject identifier");
     }
@@ -117,9 +156,10 @@ export async function replayErasureLedgerSubjects(input: {
     previousSubject = subjectUserId;
     scannedSubjects += 1;
     batch.push(subjectUserId);
-    if (batch.length >= input.maximumConcurrency) await processBatch();
+    if (batch.length >= maximumConcurrency) await processBatch();
   }
   if (batch.length) await processBatch();
+  signal?.throwIfAborted();
   return {
     reconciled: true,
     reconciliationDigest: reconciliation.digest("hex"),
@@ -128,16 +168,36 @@ export async function replayErasureLedgerSubjects(input: {
   };
 }
 
-async function* restoredSubjects(database: RestoreDatabase): AsyncGenerator<string> {
+async function* restoredSubjects(
+  database: RestoreDatabase,
+  signal: AbortSignal | undefined,
+): AsyncGenerator<string> {
   let cursor: string | null = null;
+  let yieldedSubjects = 0;
+  let queryAttempts = 0;
   for (;;) {
-    let query = database.selectFrom("app_user").select("id").orderBy("id").limit(500);
+    signal?.throwIfAborted();
+    if (queryAttempts >= MAXIMUM_SUBJECT_QUERIES) {
+      throw new RangeError("Erasure restore subject query budget exceeded");
+    }
+    const remainingSubjects = MAXIMUM_RESTORE_SUBJECTS - yieldedSubjects;
+    // One extra row distinguishes complete enumeration from a truncated success.
+    const limit = Math.min(SUBJECT_PAGE_SIZE, remainingSubjects + 1);
+    let query = database.selectFrom("app_user").select("id").orderBy("id").limit(limit);
     if (cursor !== null) query = query.where("id", ">", cursor);
+    queryAttempts += 1;
     const rows = await query.execute();
-    if (rows.length === 0) return;
-    for (const row of rows) yield row.id;
+    signal?.throwIfAborted();
+    if (rows.length > limit || rows.length > remainingSubjects) {
+      throw new RangeError("Erasure restore subject budget exceeded");
+    }
+    for (const row of rows) {
+      signal?.throwIfAborted();
+      yieldedSubjects += 1;
+      yield row.id;
+    }
+    if (rows.length < limit) return;
     cursor = rows.at(-1)?.id ?? null;
-    if (cursor === null || rows.length < 500) return;
   }
 }
 
@@ -215,6 +275,105 @@ export async function restoreVersionResolver(
   });
 }
 
+const ATTESTATION_FIELDS = [
+  "databaseName",
+  "databaseOid",
+  "restoreEpochHash",
+  "replayedSubjectCount",
+  "reconciliationDigest",
+  "completedAt",
+] as const;
+
+function dataRecord(value: unknown, fields: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Object.getPrototypeOf(value) !== Object.prototype)
+    throw new Error("Invalid restore observation");
+  const names = Reflect.ownKeys(value);
+  if (
+    names.length !== fields.length ||
+    names.some((name) => typeof name !== "string" || !fields.includes(name))
+  )
+    throw new Error("Invalid restore observation");
+  return Object.fromEntries(
+    fields.map((name) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name);
+      if (!descriptor || !("value" in descriptor)) throw new Error("Invalid restore observation");
+      return [name, descriptor.value];
+    }),
+  );
+}
+
+interface ExpectedReplayTarget {
+  readonly databaseName: string;
+  readonly databaseOid: string;
+  readonly expectedOwner: string;
+}
+
+function replayTarget(value: unknown): ExpectedReplayTarget {
+  const { databaseName, databaseOid, expectedOwner } = dataRecord(value, [
+    "databaseName",
+    "databaseOid",
+    "expectedOwner",
+  ]);
+  if (
+    typeof databaseName !== "string" ||
+    !/^[a-z_][a-z0-9_]{0,62}$/u.test(databaseName) ||
+    typeof databaseOid !== "string" ||
+    !/^[1-9][0-9]{0,9}$/u.test(databaseOid) ||
+    BigInt(databaseOid) > 4294967295n ||
+    typeof expectedOwner !== "string" ||
+    !/^[a-z][a-z0-9_]{0,62}$/u.test(expectedOwner)
+  )
+    throw new Error("Invalid restore target");
+  return Object.freeze({ databaseName, databaseOid, expectedOwner });
+}
+
+function attestationSnapshot(value: unknown, persisted = false): DatabaseRestoreAttestationRecord {
+  const fields = dataRecord(value, ATTESTATION_FIELDS);
+  if (persisted) {
+    if (
+      !(fields.completedAt instanceof Date) ||
+      Object.getPrototypeOf(fields.completedAt) !== Date.prototype ||
+      Reflect.ownKeys(fields.completedAt).length
+    )
+      throw new Error("Invalid restore observation");
+    fields.completedAt = Date.prototype.toISOString.call(fields.completedAt);
+  }
+  const {
+    databaseName,
+    databaseOid,
+    restoreEpochHash,
+    replayedSubjectCount,
+    reconciliationDigest,
+    completedAt,
+  } = fields;
+  if (
+    typeof databaseName !== "string" ||
+    databaseName.length === 0 ||
+    typeof databaseOid !== "string" ||
+    !/^[1-9][0-9]{0,9}$/u.test(databaseOid) ||
+    BigInt(databaseOid) > 4294967295n ||
+    typeof restoreEpochHash !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(restoreEpochHash) ||
+    typeof reconciliationDigest !== "string" ||
+    !/^[a-f0-9]{64}$/u.test(reconciliationDigest) ||
+    typeof replayedSubjectCount !== "string" ||
+    !/^(0|[1-9][0-9]{0,4})$/u.test(replayedSubjectCount) ||
+    BigInt(replayedSubjectCount) > 10000n ||
+    typeof completedAt !== "string" ||
+    completedAt.length !== 24 ||
+    new Date(completedAt).toISOString() !== completedAt
+  )
+    throw new Error("Invalid restore observation");
+  return Object.freeze({
+    databaseName,
+    databaseOid,
+    restoreEpochHash,
+    replayedSubjectCount,
+    reconciliationDigest,
+    completedAt,
+  });
+}
+
 /** Offline pre-traffic restore phase. Runtimes remain unready until this commits. */
 export async function replayAndAttestErasureLedgerRestore(input: {
   readonly database: RestoreDatabase;
@@ -223,11 +382,28 @@ export async function replayAndAttestErasureLedgerRestore(input: {
   readonly restoreEpoch: string;
   readonly clock?: () => Date;
   readonly signal?: AbortSignal;
+  readonly expectedTarget?: ExpectedReplayTarget;
 }): Promise<ErasureRestoreResult> {
-  await assertDatabaseMigrationLedgerReady(input.database);
+  const {
+    database,
+    ledger,
+    maximumConcurrency,
+    restoreEpoch,
+    clock,
+    signal,
+    expectedTarget: requestedTarget,
+  } = input;
+  const expectedTarget = requestedTarget === undefined ? undefined : replayTarget(requestedTarget);
+  signal?.throwIfAborted();
+  if (expectedTarget) {
+    if (maximumConcurrency !== 1) throw new Error("Qualified restore replay must be serial");
+    await prepareDatabaseRestoreReplaySession(database, expectedTarget);
+    signal?.throwIfAborted();
+  }
+  await assertDatabaseMigrationLedgerReady(database);
   const result = await replayErasureLedgerSubjects({
     apply: async (entry) => {
-      const replayed = await replayExternalErasureLedgerEntry(input.database, {
+      const replayed = await replayExternalErasureLedgerEntry(database, {
         ackDigest: erasureReplayLedgerEntryDigest(entry),
         ledgerEntryId: entry.ledgerEntryId,
         recordedAt: entry.recordedAt,
@@ -235,7 +411,7 @@ export async function replayAndAttestErasureLedgerRestore(input: {
       });
       // A second independent query is the pre-traffic readiness assertion;
       // the command never reports success from the delete transaction alone.
-      const verified = await reconcileErasedAccountRows(input.database, {
+      const verified = await reconcileErasedAccountRows(database, {
         userId: entry.subjectUserId,
       });
       if (
@@ -247,22 +423,58 @@ export async function replayAndAttestErasureLedgerRestore(input: {
       }
       return verified;
     },
-    ledger: input.ledger,
-    maximumConcurrency: input.maximumConcurrency,
-    ...(input.signal ? { signal: input.signal } : {}),
-    subjects: restoredSubjects(input.database),
+    ledger,
+    maximumConcurrency,
+    ...(signal ? { signal } : {}),
+    subjects: restoredSubjects(database, signal),
   });
-  await completeDatabaseRestoreReplayAttestation(input.database, {
-    completedAt: (input.clock ?? (() => new Date()))().toISOString(),
-    reconciliationDigest: result.reconciliationDigest,
-    replayedSubjectCount: result.replayedTombstones,
-    restoreEpoch: input.restoreEpoch,
-  });
-  await assertDatabaseReady(input.database, {
+  signal?.throwIfAborted();
+  const completedAt = (clock ?? (() => new Date()))().toISOString();
+  signal?.throwIfAborted();
+  const attestation = attestationSnapshot(
+    await completeDatabaseRestoreReplayAttestation(database, {
+      completedAt,
+      reconciliationDigest: result.reconciliationDigest,
+      replayedSubjectCount: result.replayedTombstones,
+      restoreEpoch,
+    }),
+  );
+  signal?.throwIfAborted();
+  if (
+    attestation.restoreEpochHash !== createHash("sha256").update(restoreEpoch).digest("hex") ||
+    attestation.reconciliationDigest !== result.reconciliationDigest ||
+    attestation.replayedSubjectCount !== String(result.replayedTombstones) ||
+    (expectedTarget &&
+      (attestation.databaseName !== expectedTarget.databaseName ||
+        attestation.databaseOid !== expectedTarget.databaseOid))
+  ) {
+    throw new Error("Restore attestation does not match replay");
+  }
+  await assertDatabaseReady(database, {
     requireRestoreAttestation: true,
-    restoreEpoch: input.restoreEpoch,
+    restoreEpoch,
   });
-  return result;
+  signal?.throwIfAborted();
+  const rows = await database
+    .withSchema("public")
+    .selectFrom("database_restore_attestation")
+    .select([
+      "database_name as databaseName",
+      "database_oid as databaseOid",
+      "restore_epoch_hash as restoreEpochHash",
+      "replayed_subject_count as replayedSubjectCount",
+      "reconciliation_digest as reconciliationDigest",
+      "completed_at as completedAt",
+    ])
+    .where("singleton", "=", true)
+    .limit(2)
+    .execute();
+  signal?.throwIfAborted();
+  if (rows.length !== 1) throw new Error("Restore attestation changed after readiness");
+  const observed = attestationSnapshot(rows[0], true);
+  if (ATTESTATION_FIELDS.some((name) => observed[name] !== attestation[name]))
+    throw new Error("Restore attestation changed after readiness");
+  return Object.freeze({ ...result, attestation: observed });
 }
 
 export async function createErasureRestoreRawStore(
@@ -399,8 +611,9 @@ export async function runErasureLedgerRestoreFromEnvironment(
     }),
   });
   const database = createDatabaseFromEnvironment(environment);
+  let work: { failed: false; result: ErasureRestoreResult } | { failed: true; reason: unknown };
   try {
-    return await replayAndAttestErasureLedgerRestore({
+    const result = await replayAndAttestErasureLedgerRestore({
       database,
       ledger,
       maximumConcurrency: positiveInteger(
@@ -410,9 +623,17 @@ export async function runErasureLedgerRestoreFromEnvironment(
       ),
       restoreEpoch: databaseRestoreEpoch,
     });
-  } finally {
-    await database.destroy();
+    work = { failed: false, result };
+  } catch (error) {
+    work = { failed: true, reason: error };
   }
+  try {
+    await database.destroy();
+  } catch (error) {
+    if (!work.failed) throw error;
+  }
+  if (work.failed) throw work.reason;
+  return work.result;
 }
 
 const entrypoint = process.argv[1];
