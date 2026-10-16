@@ -25,5 +25,9 @@
     "@types/node": "22.20.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
+  },
+  "dependencies": {
+    "@azure/core-rest-pipeline": "1.25.0",
+    "@azure/storage-blob": "12.32.0"
   }
 }
