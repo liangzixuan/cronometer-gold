@@ -6,6 +6,7 @@ import {
   type ErasureLedgerLocatorKeyRing,
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
+  validateAzureBlobCredential,
 } from "@nutrition-tracker/artifact-store";
 import {
   HOSTED_DEVELOPMENT_PROFILE,
@@ -39,6 +40,9 @@ const dependencyEnvironmentSchema = z.object({
   ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: z.string().max(64).optional(),
   ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: z.string().min(1).max(32_768).optional(),
   ERASURE_STATUS_CAPABILITY_HMAC_KEY: z.string().min(1).max(1_024).optional(),
+  EXPORT_ARTIFACT_AZURE_CONTAINER_URL: z.string().max(256).optional(),
+  EXPORT_ARTIFACT_AZURE_PREFIX: z.string().max(256).optional(),
+  EXPORT_ARTIFACT_AZURE_READ_SAS: z.string().max(8192).optional(),
   EXPORT_ARTIFACT_BUCKET: z.string().optional(),
   EXPORT_ARTIFACT_CURRENT_KEY_ID: z.string().max(64).optional(),
   EXPORT_ARTIFACT_DIRECTORY: z.string().default("/tmp/nutrition-tracker-encrypted-exports"),
@@ -92,7 +96,7 @@ const dependencyEnvironmentSchema = z.object({
     .min(1_000)
     .max(300_000)
     .default(30_000),
-  EXPORT_ARTIFACT_STORE: z.enum(["filesystem", "s3"]).default("filesystem"),
+  EXPORT_ARTIFACT_STORE: z.enum(["filesystem", "s3", "azure"]).default("filesystem"),
   MEILI_SEARCH_KEY: z.string().trim().min(16).optional(),
   MEILI_URL: z.url().default("http://127.0.0.1:7700"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -166,7 +170,10 @@ export interface ApiEmailVerificationDependencyConfig {
 
 export interface ApiRetentionDependencyConfig {
   readonly artifactEncryptionKeyRing: ArtifactEncryptionKeyRing;
-  readonly artifactStore: "filesystem" | "s3";
+  readonly artifactStore: "filesystem" | "s3" | "azure";
+  readonly artifactAzureContainerUrl?: string;
+  readonly artifactAzurePrefix?: string;
+  readonly artifactAzureReadSas?: string;
   readonly artifactDirectory: string;
   readonly artifactEndpoint?: string;
   readonly artifactRegion?: string;
@@ -244,6 +251,50 @@ export function loadApiDependencyConfig(
       ? undefined
       : "local-search-cursor-secret-change-before-shared-use-32-bytes");
   const issues: ConfigIssue[] = [];
+  const azureFields = [
+    "EXPORT_ARTIFACT_AZURE_CONTAINER_URL",
+    "EXPORT_ARTIFACT_AZURE_PREFIX",
+    "EXPORT_ARTIFACT_AZURE_READ_SAS",
+  ] as const;
+  if (result.data.EXPORT_ARTIFACT_STORE === "azure") {
+    try {
+      validateAzureBlobCredential({
+        containerUrl: result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL ?? "",
+        prefix: result.data.EXPORT_ARTIFACT_AZURE_PREFIX ?? "",
+        sasToken: result.data.EXPORT_ARTIFACT_AZURE_READ_SAS ?? "",
+        role: "reader",
+      });
+    } catch {
+      issues.push({
+        field: "EXPORT_ARTIFACT_AZURE_READ_SAS",
+        message: "Valid scoped Azure read configuration is required",
+      });
+    }
+    for (const field of [
+      "EXPORT_ARTIFACT_BUCKET",
+      "EXPORT_ARTIFACT_ENDPOINT",
+      "EXPORT_ARTIFACT_REGION",
+      "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
+      "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
+      "EXPORT_ARTIFACT_READ_SESSION_TOKEN",
+      "EXPORT_ARTIFACT_AZURE_WRITE_SAS",
+      "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
+      "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
+      "EXPORT_ARTIFACT_WRITE_SESSION_TOKEN",
+    ] as const) {
+      if (environment[field] !== undefined)
+        issues.push({ field, message: "Mixed storage credentials are not permitted" });
+    }
+  } else {
+    for (const field of azureFields)
+      if (environment[field] !== undefined)
+        issues.push({ field, message: "Azure storage must be explicitly selected" });
+  }
+  if (environment.EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS !== undefined)
+    issues.push({
+      field: "EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS",
+      message: "Worker deletion observation is not an API capability",
+    });
   const profile = result.data.NOURISHING_API_PROFILE;
   if (
     profile !== undefined &&
@@ -432,21 +483,26 @@ export function loadApiDependencyConfig(
       });
     }
     if (result.data.NODE_ENV === "production") {
-      if (result.data.EXPORT_ARTIFACT_STORE !== "s3") {
-        issues.push({ field: "EXPORT_ARTIFACT_STORE", message: "S3 is required in production" });
+      if (result.data.EXPORT_ARTIFACT_STORE === "filesystem") {
+        issues.push({
+          field: "EXPORT_ARTIFACT_STORE",
+          message: "Hosted object storage is required in production",
+        });
       }
-      if (!result.data.EXPORT_ARTIFACT_ENDPOINT) {
-        issues.push({ field: "EXPORT_ARTIFACT_ENDPOINT", message: "Required in production" });
-      } else if (new URL(result.data.EXPORT_ARTIFACT_ENDPOINT).protocol !== "https:") {
-        issues.push({ field: "EXPORT_ARTIFACT_ENDPOINT", message: "HTTPS is required" });
-      }
-      for (const field of [
-        "EXPORT_ARTIFACT_BUCKET",
-        "EXPORT_ARTIFACT_REGION",
-        "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
-        "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
-      ] as const) {
-        if (!result.data[field]) issues.push({ field, message: "Required in production" });
+      if (result.data.EXPORT_ARTIFACT_STORE !== "azure") {
+        if (!result.data.EXPORT_ARTIFACT_ENDPOINT) {
+          issues.push({ field: "EXPORT_ARTIFACT_ENDPOINT", message: "Required in production" });
+        } else if (new URL(result.data.EXPORT_ARTIFACT_ENDPOINT).protocol !== "https:") {
+          issues.push({ field: "EXPORT_ARTIFACT_ENDPOINT", message: "HTTPS is required" });
+        }
+        for (const field of [
+          "EXPORT_ARTIFACT_BUCKET",
+          "EXPORT_ARTIFACT_REGION",
+          "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
+          "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
+        ] as const) {
+          if (!result.data[field]) issues.push({ field, message: "Required in production" });
+        }
       }
       if (environment.EXPORT_ARTIFACT_READ_SPOOL_DIR === undefined) {
         issues.push({
@@ -478,6 +534,15 @@ export function loadApiDependencyConfig(
         artifactReadRateWindowMs: result.data.EXPORT_ARTIFACT_READ_RATE_WINDOW_MS,
         artifactRequestTimeoutMs: result.data.EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS,
         artifactStore: result.data.EXPORT_ARTIFACT_STORE,
+        ...(result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL
+          ? { artifactAzureContainerUrl: result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL }
+          : {}),
+        ...(result.data.EXPORT_ARTIFACT_AZURE_PREFIX
+          ? { artifactAzurePrefix: result.data.EXPORT_ARTIFACT_AZURE_PREFIX }
+          : {}),
+        ...(result.data.EXPORT_ARTIFACT_AZURE_READ_SAS
+          ? { artifactAzureReadSas: result.data.EXPORT_ARTIFACT_AZURE_READ_SAS }
+          : {}),
         deviceChallengeHmacKey: deviceChallengeKey,
         erasureLedgerLocatorKeyRing: locatorKeyRing,
         erasureStatusCapabilityHmacKey: statusKey,

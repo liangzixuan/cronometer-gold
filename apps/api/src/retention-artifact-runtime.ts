@@ -2,6 +2,7 @@ import { chmod, lstat, mkdir } from "node:fs/promises";
 
 import {
   ArtifactReadBulkhead,
+  AzureBlobRawArtifactStore,
   cleanupOrphanedAuthenticatedArtifactSpools,
   EncryptedArtifactStore,
   FileRawArtifactStore,
@@ -48,23 +49,35 @@ export async function createApiRetentionArtifactRuntime(
   const rawStore =
     config.artifactStore === "filesystem"
       ? new FileRawArtifactStore(config.artifactDirectory)
-      : new S3RawArtifactStore({
-          accessKeyId: required(
-            config.artifactReadAccessKeyId,
-            "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
-          ),
-          bucket: required(config.artifactBucket, "EXPORT_ARTIFACT_BUCKET"),
-          endpoint: required(config.artifactEndpoint, "EXPORT_ARTIFACT_ENDPOINT"),
-          region: required(config.artifactRegion, "EXPORT_ARTIFACT_REGION"),
-          requestTimeoutMs: config.artifactRequestTimeoutMs,
-          secretAccessKey: required(
-            config.artifactReadSecretAccessKey,
-            "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
-          ),
-          ...(config.artifactReadSessionToken
-            ? { sessionToken: config.artifactReadSessionToken }
-            : {}),
-        });
+      : config.artifactStore === "azure"
+        ? new AzureBlobRawArtifactStore({
+            containerUrl: required(
+              config.artifactAzureContainerUrl,
+              "EXPORT_ARTIFACT_AZURE_CONTAINER_URL",
+            ),
+            prefix: required(config.artifactAzurePrefix, "EXPORT_ARTIFACT_AZURE_PREFIX"),
+            sasToken: required(config.artifactAzureReadSas, "EXPORT_ARTIFACT_AZURE_READ_SAS"),
+            role: "reader",
+            requestTimeoutMs: config.artifactRequestTimeoutMs,
+            maximumObjectBytes: config.artifactReadMaximumArtifactBytes + 128,
+          })
+        : new S3RawArtifactStore({
+            accessKeyId: required(
+              config.artifactReadAccessKeyId,
+              "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
+            ),
+            bucket: required(config.artifactBucket, "EXPORT_ARTIFACT_BUCKET"),
+            endpoint: required(config.artifactEndpoint, "EXPORT_ARTIFACT_ENDPOINT"),
+            region: required(config.artifactRegion, "EXPORT_ARTIFACT_REGION"),
+            requestTimeoutMs: config.artifactRequestTimeoutMs,
+            secretAccessKey: required(
+              config.artifactReadSecretAccessKey,
+              "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
+            ),
+            ...(config.artifactReadSessionToken
+              ? { sessionToken: config.artifactReadSessionToken }
+              : {}),
+          });
   const store = new EncryptedArtifactStore({
     keyRing: config.artifactEncryptionKeyRing,
     maxPlaintextBytes: config.artifactReadMaximumArtifactBytes,
