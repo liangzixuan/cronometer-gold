@@ -1,12 +1,12 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   isLocalDate,
   localDateInTimeZone,
-  localDateTimeToInstant,
   localTimeInTimeZone,
   parseSession,
   quoteRevision,
@@ -248,6 +248,16 @@ export function HealthClient() {
   const [eventWriting, setEventWriting] = useState(false);
   const eventDraftGeneration = useRef(0);
   const renderedEventDraftGeneration = eventDraftGeneration.current;
+  const eventOccurrenceEpoch = useRef(0);
+  const renderedEventOccurrenceEpoch = eventOccurrenceEpoch.current;
+  const [eventOccurrenceChoice, setEventOccurrenceChoice] = useState<{
+    occurredAt: string;
+    epoch: number;
+  } | null>(null);
+  const clearEventOccurrence = useCallback(() => {
+    eventOccurrenceEpoch.current += 1;
+    setEventOccurrenceChoice(null);
+  }, []);
   const eventWindow = history.window;
   const eventCursor = history.cursor;
   const [reminders, setRemindersState] = useState<readonly Reminder[]>([]);
@@ -289,10 +299,14 @@ export function HealthClient() {
   const [eventTime, setEventTime] = useState("");
   const [editingEvent, setEditingEventState] = useState<BiometricEvent | null>(null);
   const editingEventRef = useRef(editingEvent);
-  const setEditingEvent = useCallback((next: BiometricEvent | null) => {
-    editingEventRef.current = next;
-    setEditingEventState(next);
-  }, []);
+  const setEditingEvent = useCallback(
+    (next: BiometricEvent | null) => {
+      clearEventOccurrence();
+      editingEventRef.current = next;
+      setEditingEventState(next);
+    },
+    [clearEventOccurrence],
+  );
   const [reminder, setReminderState] = useState<ReminderDraft>(() => reminderDraft());
   const reminderRef = useRef(reminder);
   const reminderGeneration = useRef(0);
@@ -368,15 +382,19 @@ export function HealthClient() {
     selectedNutrientRef.current = next;
     setSelectedNutrientState(next);
   }, []);
-  const setSelectedDefinition = useCallback((change: string | ((value: string) => string)) => {
-    const next = typeof change === "function" ? change(selectedDefinitionRef.current) : change;
-    if (next === selectedDefinitionRef.current) return;
-    trendControllers.current.biometric?.abort();
-    trendGenerations.current.biometric += 1;
-    trendControls.current += 1;
-    selectedDefinitionRef.current = next;
-    setSelectedDefinitionState(next);
-  }, []);
+  const setSelectedDefinition = useCallback(
+    (change: string | ((value: string) => string)) => {
+      const next = typeof change === "function" ? change(selectedDefinitionRef.current) : change;
+      if (next === selectedDefinitionRef.current) return;
+      clearEventOccurrence();
+      trendControllers.current.biometric?.abort();
+      trendGenerations.current.biometric += 1;
+      trendControls.current += 1;
+      selectedDefinitionRef.current = next;
+      setSelectedDefinitionState(next);
+    },
+    [clearEventOccurrence],
+  );
   const trendScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
   function canUseTrendInputs() {
     const currentSession = installedSession.current;
@@ -489,6 +507,7 @@ export function HealthClient() {
           JSON.stringify([previous.user.id, previous.profile]) !==
             JSON.stringify([next.user.id, next.profile]))
       ) {
+        clearEventOccurrence();
         trendControls.current += 1;
         definitionGeneration.current += 1;
         abortTrendRequests();
@@ -514,6 +533,7 @@ export function HealthClient() {
     [
       installHistory,
       invalidateHistory,
+      clearEventOccurrence,
       resetHistoryMetric,
       installTrendNutrientFilter,
       abortTrendRequests,
@@ -1087,6 +1107,7 @@ export function HealthClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      clearEventOccurrence();
       definitionGeneration.current += 1;
       trendControls.current += 1;
       reminderControls.current += 1;
@@ -1097,6 +1118,7 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      eventOccurrenceEpoch.current += 1;
       definitionGeneration.current += 1;
       trendControls.current += 1;
       reminderControls.current += 1;
@@ -1110,7 +1132,7 @@ export function HealthClient() {
       for (const controller of privateReadControllers.current) controller.abort();
       privateReadControllers.current.clear();
     };
-  }, [abortTrendRequests, invalidateHistory, loadAll]);
+  }, [abortTrendRequests, clearEventOccurrence, invalidateHistory, loadAll]);
 
   const currentTrendRequest = useCallback((kind: TrendKind): TrendRequest | null => {
     const currentSession = installedSession.current;
@@ -1426,13 +1448,40 @@ export function HealthClient() {
       current !== null &&
       ownerUserId.current === current.user.id &&
       JSON.stringify([current.user.id, current.profile]) === historyScope &&
-      eventDraftGeneration.current === renderedEventDraftGeneration
+      eventDraftGeneration.current === renderedEventDraftGeneration &&
+      eventOccurrenceEpoch.current === renderedEventOccurrenceEpoch
     );
   }
-  function changeEventField(current: string, next: string, setValue: (value: string) => void) {
+  function changeEventField(
+    current: string,
+    next: string,
+    setValue: (value: string) => void,
+    timeCoordinate = false,
+  ) {
     if (!canEditEventDraft() || current === next) return;
+    if (timeCoordinate) clearEventOccurrence();
     eventDraftGeneration.current += 1;
     setValue(next);
+  }
+  const eventTimeZone = session?.profile.timeZone;
+  const eventTimeResolution = useMemo(
+    () => (eventTimeZone ? resolveHydrationLocalMinute(eventDate, eventTime, eventTimeZone) : null),
+    [eventDate, eventTime, eventTimeZone],
+  );
+  const eventOccurrence =
+    eventOccurrenceChoice?.epoch === eventOccurrenceEpoch.current
+      ? eventOccurrenceChoice.occurredAt
+      : null;
+  function chooseEventOccurrence(occurredAt: string) {
+    if (
+      !canEditEventDraft() ||
+      eventTimeResolution?.kind !== "ambiguous" ||
+      !eventTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt) ||
+      eventOccurrence === occurredAt
+    )
+      return;
+    eventDraftGeneration.current += 1;
+    setEventOccurrenceChoice({ occurredAt, epoch: eventOccurrenceEpoch.current });
   }
   function eventWriteAvailable() {
     return (
@@ -1507,21 +1556,29 @@ export function HealthClient() {
     ) {
       return setMessage("Metric, exact value, local date, and local time are required.");
     }
-    const localTimeChanged =
-      editingEvent !== null &&
+    const timeRequested =
+      editingEvent === null ||
+      eventOccurrence !== null ||
       !biometricEventLocalTimeUnchanged(editingEvent, eventDate, eventTime);
+    let measuredAt: string | undefined;
+    if (timeRequested) {
+      if (!eventTimeResolution || eventTimeResolution.kind === "invalid")
+        return setMessage("Invalid local reading time.");
+      if (eventTimeResolution.kind === "gap")
+        return setMessage("That local time does not exist in your profile time zone.");
+      if (eventTimeResolution.kind === "unique")
+        measuredAt = eventTimeResolution.candidates[0].occurredAt;
+      else {
+        const selected = eventTimeResolution.candidates.find(
+          (candidate) => candidate.occurredAt === eventOccurrence,
+        );
+        if (!selected) return setMessage("Choose Earlier or Later for this repeated local minute.");
+        measuredAt = selected.occurredAt;
+      }
+    }
     const body = editingEvent
-      ? {
-          value: eventValue,
-          ...(localTimeChanged
-            ? { measuredAt: localDateTimeToInstant(eventDate, eventTime, session.profile.timeZone) }
-            : {}),
-        }
-      : {
-          definitionId: selectedDefinitionRecord.id,
-          measuredAt: localDateTimeToInstant(eventDate, eventTime, session.profile.timeZone),
-          value: eventValue,
-        };
+      ? { value: eventValue, ...(measuredAt === undefined ? {} : { measuredAt }) }
+      : { definitionId: selectedDefinitionRecord.id, measuredAt, value: eventValue };
     const path = editingEvent ? `biometrics/events/${editingEvent.id}` : "biometrics/events";
     const key = `event:${editingEvent?.id ?? "new"}:${editingEvent?.revision ?? "0"}:${JSON.stringify(body)}`;
     const token = {},
@@ -2339,7 +2396,7 @@ export function HealthClient() {
                       type="date"
                       value={eventDate}
                       onChange={(event) =>
-                        changeEventField(eventDate, event.target.value, setEventDate)
+                        changeEventField(eventDate, event.target.value, setEventDate, true)
                       }
                     />
                   </label>
@@ -2349,15 +2406,38 @@ export function HealthClient() {
                       type="time"
                       value={eventTime}
                       onChange={(event) =>
-                        changeEventField(eventTime, event.target.value, setEventTime)
+                        changeEventField(eventTime, event.target.value, setEventTime, true)
                       }
                     />
                   </label>
                 </div>
                 <small>
-                  Interpreted in {session?.profile.timeZone ?? "your profile time zone"}. If date
-                  and time are untouched, the original seconds and milliseconds are preserved.
+                  Interpreted in {session?.profile.timeZone ?? "your profile time zone"}. For a
+                  correction, leaving date, time and occurrence untouched preserves the original
+                  seconds and milliseconds. Choosing an occurrence saves at minute precision
+                  (seconds become zero).
                 </small>
+                {eventTimeResolution?.kind === "ambiguous" ? (
+                  <fieldset className="entryActions" disabled={!canEditEventDraft()}>
+                    <legend>Repeated reading time</legend>
+                    <small className="fieldHelp" id="health-event-occurrence-help">
+                      Choose Earlier or Later when setting this repeated local minute.
+                    </small>
+                    {eventTimeResolution.candidates.map((candidate, index) => (
+                      <button
+                        aria-describedby="health-event-occurrence-help"
+                        aria-pressed={eventOccurrence === candidate.occurredAt}
+                        className="buttonQuiet"
+                        disabled={!canEditEventDraft()}
+                        key={candidate.occurredAt}
+                        onClick={() => chooseEventOccurrence(candidate.occurredAt)}
+                        type="button"
+                      >
+                        {index === 0 ? "Earlier" : "Later"} occurrence · {candidate.utcOffsetLabel}
+                      </button>
+                    ))}
+                  </fieldset>
+                ) : null}
                 <div className="entryActions">
                   <button
                     disabled={

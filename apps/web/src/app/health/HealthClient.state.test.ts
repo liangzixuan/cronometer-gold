@@ -4950,3 +4950,307 @@ describe("Health archived definition revision admission", () => {
     },
   );
 });
+
+describe("Health explicit repeated manual-reading time", () => {
+  const earlier = "Earlier occurrence · UTC−05:00";
+  const later = "Later occurrence · UTC−06:00";
+  function occurrenceWorkspace() {
+    const result = historyWorkspace("2026-11-01T12:00:00.000Z");
+    result.state.timeZone = "America/Chicago";
+    const original = {
+      ...reading(1, "2026-11-01T07:30:45.123Z"),
+      localDate: "2026-11-01",
+      timeZone: "America/Chicago",
+    };
+    result.state.eventRead = () => eventPage([original]);
+    result.state.write = () => Response.json({ error: "Unknown outcome" }, { status: 503 });
+    return { ...result, original };
+  }
+  function chicagoRows() {
+    return elements(biometricSection()).filter(
+      (node) =>
+        node.type === "li" &&
+        elements(node).some(
+          (child) => child.type === "small" && text(child).includes(" · America/Chicago · "),
+        ),
+    );
+  }
+  async function newRepeatedReading() {
+    await changeEvent("Exact value", "71.200000");
+    await changeEvent("Local date", "2026-11-01");
+    await changeEvent("Local time", "01:30");
+  }
+  function repeatedField(label: string) {
+    return label === "Metric"
+      ? requiredHistory(elements(eventForm()).find((node) => node.type === "select"))
+      : eventField(label);
+  }
+  async function changeRepeatedField(label: string, value: string) {
+    invoke(repeatedField(label), "onChange", { target: { value } });
+    await hooks.settle();
+  }
+  function bodyOf(write: ReturnType<ReturnType<typeof workspace>["writes"]>[number]) {
+    return JSON.parse(String(write?.[1]?.body));
+  }
+  function submittedKey(write: ReturnType<ReturnType<typeof workspace>["writes"]>[number]) {
+    return new Headers(write?.[1]?.headers).get("idempotency-key");
+  }
+  it("requires a choice before any new reading POST and preserves the raw draft", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await saveReading();
+    expect(writes()).toHaveLength(0);
+    expect(status()).toContain("Choose Earlier or Later");
+    expect(eventField("Exact value").props.value).toBe("71.200000");
+    expect(eventField("Local time").props.value).toBe("01:30");
+    expect(button(earlier).props["aria-pressed"]).toBe(false);
+    expect(button(later).props["aria-pressed"]).toBe(false);
+    expect(text(eventForm())).toContain(
+      "Choosing an occurrence saves at minute precision (seconds become zero).",
+    );
+  });
+  it.each([
+    [earlier, "2026-11-01T06:30:00.000Z"],
+    [later, "2026-11-01T07:30:00.000Z"],
+  ])("sends the exact selected %s instant for a new reading", async (label, measuredAt) => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await click(label);
+    expect(writes()).toHaveLength(0);
+    await saveReading();
+    expect(writes()).toHaveLength(1);
+    expect(bodyOf(requiredHistory(writes()[0]))).toEqual({
+      definitionId: historyDefinition.id,
+      measuredAt,
+      value: "71.200000",
+    });
+  });
+  it("requires a choice for a changed ambiguous correction before PATCH", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await click("Edit", chicagoRows()[0]);
+    await changeEvent("Local time", "01:31");
+    await saveReading();
+    expect(writes()).toHaveLength(0);
+    await click(later);
+    await saveReading();
+    expect(bodyOf(requiredHistory(writes()[0]))).toEqual({
+      value: "1.200",
+      measuredAt: "2026-11-01T07:31:00.000Z",
+    });
+    expect(new Headers(writes()[0]?.[1]?.headers).get("if-match")).toBe('"1"');
+  });
+  it.each([
+    [earlier, "2026-11-01T06:30:00.000Z"],
+    [later, "2026-11-01T07:30:00.000Z"],
+  ])(
+    "treats an explicit same-minute %s correction as timestamp intent",
+    async (label, measuredAt) => {
+      const { writes } = occurrenceWorkspace();
+      await mount();
+      await click("Edit", chicagoRows()[0]);
+      await click(label);
+      await saveReading();
+      expect(bodyOf(requiredHistory(writes()[0]))).toEqual({ value: "1.200", measuredAt });
+    },
+  );
+  it("omits an untouched later-fold correction timestamp and preserves exact retries", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await click("Edit", chicagoRows()[0]);
+    await changeEvent("Exact value", "72.000000");
+    await saveReading();
+    await saveReading();
+    expect(writes()).toHaveLength(2);
+    expect(bodyOf(requiredHistory(writes()[0]))).toEqual({ value: "72.000000" });
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(submittedKey(requiredHistory(writes()[1]))).toBe(
+      submittedKey(requiredHistory(writes()[0])),
+    );
+  });
+  it.each(["Local date", "Local time", "Metric"])(
+    "retains selection on a no-op %s and unrelated value changes",
+    async (label) => {
+      const { writes } = occurrenceWorkspace();
+      await mount();
+      await newRepeatedReading();
+      await click(later);
+      await changeRepeatedField(label, String(repeatedField(label).props.value));
+      await changeEvent("Exact value", "72.300000");
+      expect(button(later).props["aria-pressed"]).toBe(true);
+      await saveReading();
+      expect(bodyOf(requiredHistory(writes()[0]))).toMatchObject({
+        measuredAt: "2026-11-01T07:30:00.000Z",
+        value: "72.300000",
+      });
+    },
+  );
+  it.each(["Local date", "Local time", "Metric"])(
+    "retires selection after an actual %s round trip",
+    async (label) => {
+      const { state, writes } = occurrenceWorkspace();
+      state.definitions = [
+        historyDefinition,
+        { ...historyDefinition, id: "27c097bb-bd55-4cce-a066-bcc0309d8d7b", name: "Other weight" },
+      ];
+      await mount();
+      await newRepeatedReading();
+      await click(later);
+      const before = String(repeatedField(label).props.value);
+      await changeRepeatedField(
+        label,
+        label === "Local date"
+          ? "2026-11-02"
+          : label === "Local time"
+            ? "01:31"
+            : requiredHistory(state.definitions[1]).id,
+      );
+      await changeRepeatedField(label, before);
+      expect(button(later).props["aria-pressed"]).toBe(false);
+      await saveReading();
+      expect(writes()).toHaveLength(0);
+    },
+  );
+  it("retires selection through the trend metric selector too", async () => {
+    const { state, writes } = occurrenceWorkspace();
+    state.definitions = [
+      historyDefinition,
+      { ...historyDefinition, id: "27c097bb-bd55-4cce-a066-bcc0309d8d7b", name: "Other weight" },
+    ];
+    await mount();
+    await newRepeatedReading();
+    await click(later);
+    invoke(trendField("Biometric"), "onChange", {
+      target: { value: requiredHistory(state.definitions[1]).id },
+    });
+    await hooks.settle();
+    invoke(trendField("Biometric"), "onChange", { target: { value: historyDefinition.id } });
+    await hooks.settle();
+    await saveReading();
+    expect(writes()).toHaveLength(0);
+    expect(button(later).props["aria-pressed"]).toBe(false);
+  });
+  it("keeps separate Earlier/Later identities and exact unresolved A to B to A retries", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    for (const label of [earlier, later, earlier]) {
+      await click(label);
+      await saveReading();
+    }
+    expect(writes()).toHaveLength(3);
+    const [a, b, retry] = writes().map(requiredHistory);
+    expect(submittedKey(requiredHistory(a))).not.toBe(submittedKey(requiredHistory(b)));
+    expect(submittedKey(requiredHistory(retry))).toBe(submittedKey(requiredHistory(a)));
+    expect(retry?.[1]?.body).toBe(a?.[1]?.body);
+    expect(bodyOf(requiredHistory(b)).measuredAt).toBe("2026-11-01T07:30:00.000Z");
+  });
+  it("lets a pending draft change occurrence without an older receipt clearing the newer draft", async () => {
+    const { state, writes, original } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await click(earlier);
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    invoke(eventForm(), "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    await click(later);
+    expect(button(later).props["aria-pressed"]).toBe(true);
+    pending.resolve(
+      Response.json({
+        data: {
+          event: { ...original, measuredAt: "2026-11-01T06:30:00.000Z", value: "71.200000" },
+          replayed: false,
+        },
+      }),
+    );
+    await hooks.settle();
+    expect(eventField("Exact value").props.value).toBe("71.200000");
+    expect(button(later).props["aria-pressed"]).toBe(true);
+    expect(writes()).toHaveLength(1);
+  });
+  it("retains choice during an ordinary history reload", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await click(later);
+    await click("Reload history");
+    expect(button(later).props["aria-pressed"]).toBe(true);
+    await saveReading();
+    expect(bodyOf(requiredHistory(writes()[0])).measuredAt).toBe("2026-11-01T07:30:00.000Z");
+  });
+  it("retires old and newly rendered pre-effect controls across hidden and visible transitions", async () => {
+    const view = visibility();
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await click(later);
+    const staleChoice = button(later);
+    const staleForm = eventForm();
+    await view.set("hidden");
+    view.document.visibilityState = "visible";
+    hooks.renderWithoutEffects();
+    expect(button(later).props["aria-pressed"]).toBe(false);
+    invoke(staleChoice, "onClick");
+    invoke(staleForm, "onSubmit", { preventDefault() {} });
+    invoke(eventForm(), "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes()).toHaveLength(0);
+    await view.set("visible");
+    await click(later);
+    await saveReading();
+    expect(writes()).toHaveLength(1);
+  });
+  it("retires a choice when verified profile timezone changes", async () => {
+    const { state, writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await click(later);
+    const stale = button(later);
+    state.timeZone = "America/New_York";
+    await click("Reload history");
+    invoke(stale, "onClick");
+    await hooks.settle();
+    await saveReading();
+    expect(writes()).toHaveLength(0);
+    await click("Later occurrence · UTC−05:00");
+    await saveReading();
+    expect(bodyOf(requiredHistory(writes()[0])).measuredAt).toBe("2026-11-01T06:30:00.000Z");
+  });
+  it("clears a cancelled editor choice before another reading is edited", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await click("Edit", chicagoRows()[0]);
+    await click(earlier);
+    await click("Cancel", eventForm());
+    await click("Edit", chicagoRows()[0]);
+    expect(button(earlier).props["aria-pressed"]).toBe(false);
+    await saveReading();
+    expect(bodyOf(requiredHistory(writes()[0]))).toEqual({ value: "1.200" });
+  });
+  it.each([
+    ["2026-03-08", "02:30", "does not exist"],
+    ["2026-11-01", "25:00", "Invalid"],
+    ["2026-11-01", "", "required"],
+  ])("rejects unavailable or invalid time %s %s before dispatch", async (date, time, message) => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await changeEvent("Local date", date);
+    await changeEvent("Local time", time);
+    await saveReading();
+    expect(writes()).toHaveLength(0);
+    expect(status()).toContain(message);
+  });
+  it("logs a unique local minute without occurrence controls", async () => {
+    const { writes } = occurrenceWorkspace();
+    await mount();
+    await newRepeatedReading();
+    await changeEvent("Local time", "03:00");
+    expect(text(eventForm())).not.toContain("Later occurrence");
+    await saveReading();
+    expect(bodyOf(requiredHistory(writes()[0])).measuredAt).toBe("2026-11-01T09:00:00.000Z");
+  });
+});
