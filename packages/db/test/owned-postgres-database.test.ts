@@ -104,6 +104,10 @@ import {
   openOwnedPostgresPool,
 } from "../src/owned-postgres-database.js";
 import { normalizePostgresBackupConnection } from "../src/postgres-backup-connection.js";
+import {
+  assertDatabaseRestoreTargetIdentity,
+  prepareDatabaseRestoreReplaySession,
+} from "../src/restore.js";
 import { replayExternalErasureLedgerEntry } from "../src/retention.js";
 import {
   ERASURE_TABLE_SPECS,
@@ -673,6 +677,7 @@ it("runs committed attestation and readiness helpers over the real maintained di
       databaseOid: "123",
       reconciliationDigest: "a".repeat(64),
       replayedSubjectCount: "12",
+      restoreEpochHash: hash,
       completedAt,
     });
     expect(JSON.stringify(result)).not.toContain(epoch);
@@ -1035,3 +1040,46 @@ it.each([
     expect(client().socket.destroyed).toBe(true);
   },
 );
+
+it("runs the actual catalog identity guard with observed identity and safe result projection", async () => {
+  const owner = await openOwnedPostgresDatabase(options);
+  closers.push(owner.close);
+  reply([{ database_name: "nutrition", database_oid: "123", private_extra: "private-epoch" }]);
+  expect(
+    await assertDatabaseRestoreTargetIdentity(owner.database, {
+      databaseName: "nutrition",
+      databaseOid: "123",
+    }),
+  ).toEqual({ databaseName: "nutrition", databaseOid: "123" });
+  expect(Reflect.get(client().calls[0] as object, "text")).toContain("pg_catalog.current_database");
+});
+
+it("prepares the owner role and target on one pinned owned connection", async () => {
+  const owner = await openOwnedPostgresDatabase(options);
+  closers.push(owner.close);
+  const queries: string[] = [];
+  state.query = (query, owned) =>
+    queueMicrotask(() => {
+      const text = String(Reflect.get(query, "text")).replace(/\s+/gu, " ").trim();
+      queries.push(text);
+      if (queries.length === 1) finish(query, owned, [], "SET", null);
+      else if (queries.length === 2) finish(query, owned, [{ role: "nutrition_owner" }]);
+      else finish(query, owned, [{ database_name: "nutrition", database_oid: "123" }]);
+    });
+  await owner.database.connection().execute(async (db) => {
+    expect(
+      await prepareDatabaseRestoreReplaySession(db, {
+        databaseName: "nutrition",
+        databaseOid: "123",
+        expectedOwner: "nutrition_owner",
+      }),
+    ).toEqual({ databaseName: "nutrition", databaseOid: "123" });
+  });
+  expect(queries).toEqual([
+    'set role "nutrition_owner"',
+    "select current_user::pg_catalog.text as role",
+    "select pg_catalog.current_database() database_name, (select oid::pg_catalog.text from pg_catalog.pg_database where datname OPERATOR(pg_catalog.=) pg_catalog.current_database()) database_oid",
+  ]);
+  expect(state.clients).toHaveLength(1);
+  expect(client().calls).toHaveLength(3);
+});

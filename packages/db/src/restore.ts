@@ -4,9 +4,82 @@ import { type Kysely, sql } from "kysely";
 
 import type { Database } from "./types.js";
 
+export interface DatabaseRestoreTargetIdentity {
+  readonly databaseName: string;
+  readonly databaseOid: string;
+}
+
+/** The caller owns and pins this exclusive connection for the entire replay. */
+export async function prepareDatabaseRestoreReplaySession(
+  database: Kysely<Database>,
+  expected: DatabaseRestoreTargetIdentity & { readonly expectedOwner: string },
+): Promise<DatabaseRestoreTargetIdentity> {
+  const fields = ["databaseName", "databaseOid", "expectedOwner"];
+  if (
+    !expected ||
+    Object.getPrototypeOf(expected) !== Object.prototype ||
+    Reflect.ownKeys(expected).length !== fields.length ||
+    Reflect.ownKeys(expected).some((name) => typeof name !== "string" || !fields.includes(name))
+  )
+    throw new Error("Expected restore session is invalid");
+  const values = fields.map((name) => Object.getOwnPropertyDescriptor(expected, name));
+  if (values.some((value) => !value || !("value" in value)))
+    throw new Error("Expected restore session is invalid");
+  const [databaseName, databaseOid, expectedOwner] = values.map((value) => value?.value);
+  if (
+    !isCanonicalDatabaseIdentity(databaseName, databaseOid) ||
+    typeof expectedOwner !== "string" ||
+    !/^[a-z][a-z0-9_]{0,62}$/u.test(expectedOwner)
+  )
+    throw new Error("Expected restore session is invalid");
+  const identity = Object.freeze({
+    databaseName: databaseName as string,
+    databaseOid: databaseOid as string,
+  });
+  try {
+    await sql`set role ${sql.id(expectedOwner)}`.execute(database);
+    const result = await sql<{
+      role: string;
+    }>`select current_user::pg_catalog.text as role`.execute(database);
+    if (
+      result.rows.length !== 1 ||
+      !result.rows[0] ||
+      Reflect.ownKeys(result.rows[0]).length !== 1 ||
+      Object.getOwnPropertyDescriptor(result.rows[0], "role")?.value !== expectedOwner
+    )
+      throw new Error("role");
+  } catch {
+    throw new Error("Restore session role is unavailable");
+  }
+  return assertDatabaseRestoreTargetIdentity(database, identity);
+}
+
+/** Observes cluster-local identity only; the caller must separately bind the connection and restore evidence. */
+export async function assertDatabaseRestoreTargetIdentity(
+  database: Kysely<Database>,
+  expected: DatabaseRestoreTargetIdentity,
+): Promise<DatabaseRestoreTargetIdentity> {
+  const databaseName = expected?.databaseName;
+  const databaseOid = expected?.databaseOid;
+  if (!isCanonicalDatabaseIdentity(databaseName, databaseOid))
+    throw new Error("Expected database identity is invalid");
+  let observed: DatabaseRestoreTargetIdentity;
+  try {
+    observed = await loadDatabaseIdentity(database);
+  } catch {
+    throw new Error("Database target identity is unavailable");
+  }
+  if (!isCanonicalDatabaseIdentity(observed.databaseName, observed.databaseOid))
+    throw new Error("Database target identity is unavailable");
+  if (observed.databaseName !== databaseName || observed.databaseOid !== databaseOid)
+    throw new Error("Database target identity does not match");
+  return observed;
+}
+
 export interface DatabaseRestoreAttestationRecord {
   readonly databaseName: string;
   readonly databaseOid: string;
+  readonly restoreEpochHash: string;
   readonly replayedSubjectCount: string;
   readonly reconciliationDigest: string;
   readonly completedAt: string;
@@ -122,20 +195,44 @@ export async function completeDatabaseRestoreReplayAttestation(
       databaseOid: row.database_oid,
       reconciliationDigest: row.reconciliation_digest,
       replayedSubjectCount: row.replayed_subject_count,
+      restoreEpochHash: row.restore_epoch_hash,
     };
   });
 }
 
-async function loadDatabaseIdentity(database: Kysely<Database>): Promise<{
-  databaseName: string;
-  databaseOid: string;
-}> {
+function isCanonicalDatabaseIdentity(databaseName: unknown, databaseOid: unknown): boolean {
+  return (
+    typeof databaseName === "string" &&
+    databaseName.trim() === databaseName &&
+    /^[a-z_][a-z0-9_]{0,62}$/u.test(databaseName) &&
+    isCanonicalDatabaseOid(databaseOid)
+  );
+}
+
+function isCanonicalDatabaseOid(databaseOid: unknown): boolean {
+  return (
+    typeof databaseOid === "string" &&
+    databaseOid.trim() === databaseOid &&
+    /^[1-9][0-9]{0,9}$/u.test(databaseOid) &&
+    Number(databaseOid) <= 4_294_967_295
+  );
+}
+
+async function loadDatabaseIdentity(
+  database: Kysely<Database>,
+): Promise<DatabaseRestoreTargetIdentity> {
   const result = await sql<{ database_name: string; database_oid: string }>`
-    select current_database() database_name,
-           (select oid::text from pg_database where datname=current_database()) database_oid
+    select pg_catalog.current_database() database_name,
+           (select oid::pg_catalog.text from pg_catalog.pg_database where datname OPERATOR(pg_catalog.=) pg_catalog.current_database()) database_oid
   `.execute(database);
   const row = result.rows[0];
-  if (!row?.database_name || !/^[1-9][0-9]*$/u.test(row.database_oid))
+  if (
+    result.rows.length !== 1 ||
+    !row ||
+    typeof row.database_name !== "string" ||
+    row.database_name.length === 0 ||
+    !isCanonicalDatabaseOid(row.database_oid)
+  )
     throw new Error("Database identity is unavailable");
   return { databaseName: row.database_name, databaseOid: row.database_oid };
 }

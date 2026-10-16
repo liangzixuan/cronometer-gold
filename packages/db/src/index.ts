@@ -487,11 +487,14 @@ export {
 export {
   assertDatabaseRestoreReplayObservation,
   assertDatabaseRestoreReplayReady,
+  assertDatabaseRestoreTargetIdentity,
   type CompleteDatabaseRestoreReplayAttestationInput,
   completeDatabaseRestoreReplayAttestation,
   type DatabaseRestoreAttestationRecord,
   DatabaseRestoreReplayNotReadyError,
   type DatabaseRestoreReplayObservation,
+  type DatabaseRestoreTargetIdentity,
+  prepareDatabaseRestoreReplaySession,
 } from "./restore.js";
 export * from "./retention.js";
 export type * from "./types.js";
