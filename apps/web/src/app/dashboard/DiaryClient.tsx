@@ -1,8 +1,9 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { type ActivityDay, parseActivityDay } from "../../lib/activity";
 import {
@@ -86,6 +87,7 @@ interface EntryEditor extends DiaryEditorOrigin {
   readonly localDate: string;
   readonly localTime: string;
   readonly originalLocalTime: string;
+  readonly selectedOccurredAt: string | null;
 }
 
 interface RepeatDestination {
@@ -173,6 +175,7 @@ function editState(entry: DiaryEntry, day: DiaryDay, currentProfileTimeZone: str
     localDate,
     localTime,
     originalLocalTime: localTime,
+    selectedOccurredAt: null,
   };
 }
 
@@ -229,6 +232,16 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const [pageState, setPageState] = useState<PageLoadState>("idle");
   const [message, setMessage] = useState("Opening your private diary…");
   const [editor, setEditorState] = useState<EntryEditor | null>(null);
+  const editorDate = editor?.localDate;
+  const editorTime = editor?.localTime;
+  const editorTimeZone = editor?.originTimeZone;
+  const editorTimeResolution = useMemo(
+    () =>
+      editorDate && editorTime && editorTimeZone
+        ? resolveHydrationLocalMinute(editorDate, editorTime, editorTimeZone)
+        : null,
+    [editorDate, editorTime, editorTimeZone],
+  );
   const [repeatDestination, setRepeatDestination] = useState<RepeatDestination | null>(null);
   const repeatDestinationRef = useRef(repeatDestination);
   const repeatDestinationGeneration = useRef(0);
@@ -465,7 +478,23 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   function changeEntryEditor(next: EntryEditor | null) {
     if (!editor || !canUseEntryEditorControls()) return;
-    setEditor(next);
+    const coordinatesChanged =
+      next &&
+      (next.localDate !== editor.localDate ||
+        next.localTime !== editor.localTime ||
+        next.originTimeZone !== editor.originTimeZone);
+    setEditor(coordinatesChanged ? { ...next, selectedOccurredAt: null } : next);
+  }
+
+  function selectEntryOccurrence(occurredAt: string) {
+    if (
+      !editor ||
+      !canUseEntryEditorControls() ||
+      editorTimeResolution?.kind !== "ambiguous" ||
+      !editorTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt)
+    )
+      return;
+    changeEntryEditor({ ...editor, selectedOccurredAt: occurredAt });
   }
 
   function toggleMeal(mealSlot: MealSlot) {
@@ -1131,12 +1160,35 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       );
       return;
     }
+    const timestampChanged =
+      editor.localDate !== editor.originalEntryLocalDate ||
+      editor.localTime !== editor.originalLocalTime ||
+      editor.selectedOccurredAt !== null;
+    let occurredAt: string | undefined;
+    if (timestampChanged) {
+      if (!editorTimeResolution || editorTimeResolution.kind === "invalid") {
+        setMessage("Enter a valid local date and time.");
+        return;
+      }
+      if (editorTimeResolution.kind === "gap") {
+        setMessage("That local time does not exist in your time zone. Choose another time.");
+        return;
+      }
+      if (editorTimeResolution.kind === "unique") {
+        occurredAt = editorTimeResolution.candidates[0].occurredAt;
+      } else {
+        occurredAt = editorTimeResolution.candidates.find(
+          (candidate) => candidate.occurredAt === editor.selectedOccurredAt,
+        )?.occurredAt;
+        if (!occurredAt) {
+          setMessage("Choose an occurrence for this repeated local time before saving.");
+          return;
+        }
+      }
+    }
     const owner = beginMutation(editor.originLocalDate, editor.entryId);
     setMessage("Saving the diary entry…");
     try {
-      const timestampChanged =
-        editor.localDate !== editor.originalEntryLocalDate ||
-        editor.localTime !== editor.originalLocalTime;
       const body = {
         portion:
           entry.portion.kind === "serving"
@@ -1146,15 +1198,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
             : { kind: "grams", grams: editor.quantity },
         mealSlot: editor.mealSlot,
         ...notePatch,
-        ...(timestampChanged
-          ? {
-              occurredAt: localDateTimeToInstant(
-                editor.localDate,
-                editor.localTime,
-                editor.originTimeZone,
-              ),
-            }
-          : {}),
+        ...(timestampChanged ? { occurredAt } : {}),
       };
       const key = diaryEditorOperationKey(editor, body);
       const requestOperationId = operationId(key);
@@ -2223,6 +2267,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           entryId={entry.id}
                                           entryName={entryName(entry)}
                                           editor={editor}
+                                          timeResolution={editorTimeResolution}
+                                          onOccurrenceSelect={selectEntryOccurrence}
                                           diaryGroups={diaryGroups}
                                           entryEditorControlsDisabled={entryEditorControlsDisabled}
                                           clearDisabled={

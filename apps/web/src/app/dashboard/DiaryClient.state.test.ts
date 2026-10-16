@@ -2469,14 +2469,13 @@ function captureEditorSave(url: string, init: RequestInit) {
   if (typeof init.body !== "string") throw new Error("Expected a serialized editor save.");
   return { url, body: init.body, headers: Object.fromEntries(new Headers(init.headers)) };
 }
-function editorSaveReceipt(request: ReturnType<typeof captureEditorSave>) {
+function editorSaveReceipt(request: ReturnType<typeof captureEditorSave>, original = entry(0)) {
   const body = JSON.parse(request.body) as {
     portion: { kind: "serving"; servingId: string; amount: string };
     mealSlot: MealSlot;
     note?: string;
     occurredAt?: string;
   };
-  const original = entry(0);
   const occurredAt = body.occurredAt ?? original.occurredAt;
   const zone = request.headers["x-expected-profile-time-zone"] ?? original.timeZone;
   const instant = new Date(occurredAt);
@@ -3814,4 +3813,238 @@ describe("Diary cross-entry editor protection", () => {
       expect(text()).toContain("Pinned entry version repeated");
     },
   );
+});
+
+const occurrenceDate = "2026-11-01";
+const earlierDiaryOccurrence = "Edit diary Earlier occurrence · UTC−05:00";
+const laterDiaryOccurrence = "Edit diary Later occurrence · UTC−06:00";
+function repeatedMinuteEntry() {
+  return {
+    ...entry(0, "breakfast", occurrenceDate),
+    occurredAt: "2026-11-01T07:30:45.123Z",
+    localTime: "01:30:45",
+  };
+}
+async function mountOccurrenceEditor(
+  writes: ReturnType<typeof captureEditorSave>[],
+  respond?: (request: ReturnType<typeof captureEditorSave>) => Promise<Response>,
+) {
+  route.date = occurrenceDate;
+  const base = fetcher(
+    page([repeatedMinuteEntry(), entry(1, "lunch", occurrenceDate)], null, 2, occurrenceDate),
+  );
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "PATCH") {
+      const request = captureEditorSave(url, init);
+      writes.push(request);
+      return respond ? respond(request) : Response.json({ error: "Unavailable." }, { status: 503 });
+    }
+    if (url === "/api/auth/logout") return new Response(null, { status: 204 });
+    return base(url, init);
+  });
+  await mount(fetch);
+  await click("Edit Apple 0");
+  return fetch;
+}
+
+describe("Diary repeated correction time", () => {
+  it("requires a deliberate occurrence before dispatching a changed repeated minute", async () => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    await changeEditorField("Local time", "01:31");
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(0);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(text()).toContain("Choose an occurrence for this repeated local time before saving.");
+    expect(editorField("Local time").props.value).toBe("01:31");
+  });
+
+  it.each([
+    [earlierDiaryOccurrence, "2026-11-01T06:31:00.000Z"],
+    [laterDiaryOccurrence, "2026-11-01T07:31:00.000Z"],
+  ])("sends the exact changed-minute choice from %s", async (label, instant) => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    await changeEditorField("Local time", "01:31");
+    await click(label);
+    expect(button(label).props["aria-pressed"]).toBe(true);
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? "").occurredAt).toBe(instant);
+    expect(writes[0]?.url).toContain("profileTimeZonePrecondition=v1");
+    expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+  });
+
+  it.each([
+    [earlierDiaryOccurrence, "2026-11-01T06:30:00.000Z"],
+    [laterDiaryOccurrence, "2026-11-01T07:30:00.000Z"],
+  ])("applies the timezone contract to explicit same-minute %s", async (label, instant) => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes, async (request) =>
+      Response.json(editorSaveReceipt(request, repeatedMinuteEntry())),
+    );
+    expect(text()).toContain("seconds become zero");
+    await click(label);
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? "").occurredAt).toBe(instant);
+    expect(writes[0]?.url).toBe(
+      `/api/diary/entries/${entry(0).id}?date=${occurrenceDate}&profileTimeZonePrecondition=v1`,
+    );
+    expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+    expect(text()).toContain("Diary entry saved in Breakfast with fresh totals.");
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+  });
+
+  it("keeps the precise second occurrence when only quantity and note change", async () => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    await changeEditorField("Quantity", "2.500000");
+    await changeEditorField("Private note", "  exact note  ");
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? "")).not.toHaveProperty("occurredAt");
+    expect(writes[0]?.url).not.toContain("profileTimeZonePrecondition");
+    expect(writes[0]?.headers).not.toHaveProperty("x-expected-profile-time-zone");
+    expect(repeatedMinuteEntry().occurredAt).toBe("2026-11-01T07:30:45.123Z");
+  });
+
+  it.each(["Local date", "Local time"])(
+    "clears the choice on a real %s change and rejects its held control",
+    async (fieldName) => {
+      const writes: ReturnType<typeof captureEditorSave>[] = [];
+      await mountOccurrenceEditor(writes);
+      await click(laterDiaryOccurrence);
+      const oldChoice = button(earlierDiaryOccurrence);
+      const nextValue = fieldName === "Local date" ? "2026-11-02" : "01:31";
+      invoke(editorField(fieldName), "onChange", { target: { value: nextValue } });
+      invoke(oldChoice);
+      await hooks.settle();
+      if (fieldName === "Local date") await changeEditorField("Local date", occurrenceDate);
+      expect(button(laterDiaryOccurrence).props["aria-pressed"]).toBe(false);
+      expect(button(earlierDiaryOccurrence).props["aria-pressed"]).toBe(false);
+      if (fieldName === "Local time") {
+        await click("Save changes to Apple 0");
+        expect(writes).toHaveLength(0);
+      }
+    },
+  );
+
+  it("retains an occurrence across unrelated edits and identical coordinate events", async () => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    await click(laterDiaryOccurrence);
+    await changeEditorField("Quantity", "2.500000");
+    await changeEditorField("Private note", "Kept");
+    await changeEditorField("Local date", occurrenceDate);
+    await changeEditorField("Local time", "01:30");
+    expect(button(laterDiaryOccurrence).props["aria-pressed"]).toBe(true);
+    await click("Save changes to Apple 0");
+    expect(JSON.parse(writes[0]?.body ?? "").occurredAt).toBe("2026-11-01T07:30:00.000Z");
+  });
+
+  it.each([
+    ["2026-03-08", "02:30", "does not exist"],
+    [occurrenceDate, "25:00", "valid local date and time"],
+  ])("rejects invalid or nonexistent coordinates %s %s", async (date, time, message) => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    await changeEditorField("Local date", date);
+    await changeEditorField("Local time", time);
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(0);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(text()).toContain(message);
+  });
+
+  it("still sends an ordinary unique minute without an occurrence choice", async () => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    await changeEditorField("Local time", "02:31");
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(writes[0]?.body ?? "").occurredAt).toBe("2026-11-01T08:31:00.000Z");
+  });
+
+  it.each(["503", "network", "malformed receipt", "mismatched receipt"])(
+    "retains the exact selected request after %s and locks held choices during retry",
+    async (failure) => {
+      const writes: ReturnType<typeof captureEditorSave>[] = [];
+      const pending = deferred<Response>();
+      await mountOccurrenceEditor(writes, async (request) => {
+        if (writes.length === 2) return pending.promise;
+        if (failure === "network") throw new Error("Connection lost.");
+        if (failure === "malformed receipt") return Response.json({ data: {} });
+        if (failure === "mismatched receipt") {
+          const receipt = editorSaveReceipt(request, repeatedMinuteEntry());
+          receipt.data.entry.timeZone = "America/New_York";
+          return Response.json(receipt);
+        }
+        return Response.json({ error: "Unavailable." }, { status: 503 });
+      });
+      await changeEditorField("Local time", "01:31");
+      await click(laterDiaryOccurrence);
+      const beforeSave = button(earlierDiaryOccurrence);
+      await click("Save changes to Apple 0");
+      expect(button(laterDiaryOccurrence).props["aria-pressed"]).toBe(true);
+      const beforeRetry = button(earlierDiaryOccurrence);
+      invoke(button("Save changes to Apple 0"));
+      invoke(beforeSave);
+      invoke(beforeRetry);
+      await hooks.settle();
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(button(laterDiaryOccurrence).props["aria-pressed"]).toBe(true);
+      expect(button(earlierDiaryOccurrence).props.disabled).toBe(true);
+      expect(button(laterDiaryOccurrence).props.disabled).toBe(true);
+      pending.resolve(Response.json({ error: "Unavailable." }, { status: 503 }));
+      await hooks.settle();
+      await click("Save changes to Apple 0");
+      expect(writes).toHaveLength(3);
+      expect(writes[2]).toEqual(writes[0]);
+    },
+  );
+
+  it.each([
+    "coordinates",
+    "cancel-reopen",
+    "another editor",
+    "route-before-effects",
+    "profile",
+    "logout",
+    "unmount",
+  ])("rejects a held occurrence callback after %s", async (transition) => {
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    await mountOccurrenceEditor(writes);
+    const held = button(laterDiaryOccurrence);
+    if (transition === "coordinates") await changeEditorField("Local time", "01:31");
+    if (transition === "cancel-reopen") {
+      await click("Cancel editing Apple 0");
+      await click("Edit Apple 0");
+    }
+    if (transition === "another editor") await click("Edit Apple 1");
+    if (transition === "route-before-effects") {
+      route.date = "2026-11-02";
+      hooks.renderWithoutEffects();
+    }
+    if (transition === "profile") {
+      const next = session();
+      next.data.profile.timeZone = "America/New_York";
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(next));
+    }
+    if (transition === "logout") await click("Sign out");
+    if (transition === "unmount") hooks.unmount();
+    const before = text();
+    invoke(held);
+    if (transition === "route-before-effects" || transition === "profile")
+      hooks.renderWithoutEffects();
+    else await hooks.settle();
+    expect(text()).toBe(before);
+    expect(writes).toHaveLength(0);
+    expect(hooks.afterClose()).toBe(0);
+  });
 });

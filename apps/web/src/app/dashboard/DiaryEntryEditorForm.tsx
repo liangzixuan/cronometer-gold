@@ -1,3 +1,4 @@
+import type { HydrationLocalMinuteResolution } from "@nutrition-tracker/contracts";
 import type { ChangeEventHandler } from "react";
 
 import { type DiaryGroup, diaryEntryNoteCharacterCount, type MealSlot } from "../../lib/diary";
@@ -12,7 +13,10 @@ interface DiaryEntryEditorFormProps {
     readonly localTime: string;
     readonly note: string;
     readonly originTimeZone: string;
+    readonly selectedOccurredAt: string | null;
   };
+  readonly timeResolution: HydrationLocalMinuteResolution | null;
+  readonly onOccurrenceSelect: (occurredAt: string) => void;
   readonly diaryGroups: readonly DiaryGroup[];
   readonly entryEditorControlsDisabled: boolean;
   readonly clearDisabled: boolean;
@@ -33,6 +37,8 @@ export function DiaryEntryEditorForm({
   entryName,
   editor,
   diaryGroups,
+  timeResolution,
+  onOccurrenceSelect,
   entryEditorControlsDisabled,
   clearDisabled,
   saveDisabled,
@@ -90,6 +96,29 @@ export function DiaryEntryEditorForm({
           value={editor.localTime}
         />
       </label>
+      {timeResolution?.kind === "ambiguous" ? (
+        <fieldset className="entryActions" disabled={entryEditorControlsDisabled}>
+          <legend>Repeated correction time</legend>
+          <small className="fieldHelp" id={`diary-edit-occurrence-help-${entryId}`}>
+            Choose Earlier or Later to correct this repeated minute. Choosing saves at minute
+            precision (seconds become zero). Other edits keep the original exact time.
+          </small>
+          {timeResolution.candidates.map((candidate, index) => (
+            <button
+              aria-label={`Edit diary ${index === 0 ? "Earlier" : "Later"} occurrence · ${candidate.utcOffsetLabel}`}
+              aria-describedby={`diary-edit-occurrence-help-${entryId}`}
+              aria-pressed={editor.selectedOccurredAt === candidate.occurredAt}
+              className="buttonQuiet"
+              disabled={entryEditorControlsDisabled}
+              key={candidate.occurredAt}
+              onClick={() => onOccurrenceSelect(candidate.occurredAt)}
+              type="button"
+            >
+              {index === 0 ? "Earlier" : "Later"} occurrence · {candidate.utcOffsetLabel}
+            </button>
+          ))}
+        </fieldset>
+      ) : null}
       <label className="entryNoteField" htmlFor={`entry-note-${entryId}`}>
         Private note
         <textarea
