@@ -4697,3 +4697,256 @@ describe("Health archived metric new Log admission", () => {
     expect(button("Log event").props.disabled).toBe(true);
   });
 });
+
+describe("Health archived definition revision admission", () => {
+  const other = { ...emptyHistoryDefinition, name: "Second active metric" };
+  const archived = { ...historyDefinition, status: "archived" as const, revision: "2" };
+  function setup() {
+    const result = historyWorkspace();
+    result.state.definitions = [historyDefinition, other];
+    vi.stubGlobal("window", { confirm: vi.fn(() => true) });
+    result.state.write = (_url, init) =>
+      Response.json({
+        data: {
+          definition:
+            init.method === "DELETE"
+              ? archived
+              : { ...historyDefinition, revision: "2", name: "Raw revision" },
+        },
+      });
+    return result;
+  }
+  function form() {
+    return requiredHistory(
+      elements(biometricSection()).find(
+        (node) => node.type === "form" && text(node).includes("metric definition"),
+      ),
+    );
+  }
+  function input(label: string) {
+    const wrapper = requiredHistory(
+      elements(form()).find((node) => node.type === "label" && text(node).startsWith(label)),
+    );
+    return requiredHistory(
+      elements(wrapper).find((node) => ["input", "select"].includes(String(node.type))),
+    );
+  }
+  function row(name = historyDefinition.name) {
+    return requiredHistory(
+      elements(biometricSection()).find(
+        (node) => node.type === "li" && text(node).startsWith(`${name} (`),
+      ),
+    );
+  }
+  function values() {
+    return ["Name", "Dimension", "Canonical unit"].map((label) => input(label).props.value);
+  }
+  async function raw() {
+    await click("Revise name", row());
+    invoke(input("Name"), "onChange", { target: { value: "  Raw revision  " } });
+    await hooks.settle();
+  }
+  async function submit(node = form()) {
+    invoke(node, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+  }
+  async function archive() {
+    await click("Archive", row());
+  }
+  const accepted = () => Response.json({ data: { definition: archived, replayed: false } });
+
+  it("blocks actual PATCH after accepted same-definition Archive while preserving the raw revision", async () => {
+    const { writes } = setup();
+    await mount();
+    await raw();
+    const before = values();
+    await archive();
+    expect(status()).toContain("Metric archived");
+    await submit();
+    expect(writes().map(([, init]) => init?.method)).toEqual(["DELETE"]);
+    expect(values()).toEqual(before);
+    expect(button("Save definition revision").props.disabled).toBe(true);
+    expect(text(form())).toContain("unavailable");
+    expect(button("Cancel", form()).props.disabled).toBe(false);
+  });
+
+  it("disables ordinary Revise name for a loaded archived row", async () => {
+    const { state } = setup();
+    state.definitions = [archived, other];
+    await mount();
+    expect(button("Revise name", row()).props.disabled).toBe(true);
+  });
+
+  it("rejects a retained archived-row callback without replacing a new raw definition draft", async () => {
+    const { state, writes } = setup();
+    state.definitions = [archived, other];
+    await mount();
+    invoke(input("Name"), "onChange", { target: { value: "  New raw metric  " } });
+    await hooks.settle();
+    const before = values();
+    invoke(button("Revise name", row()), "onClick");
+    await hooks.settle();
+    expect(values()).toEqual(before);
+    expect(text(form())).toContain("Add metric definition");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("rejects the formerly active Revise callback after Archive before repaint", async () => {
+    const { state, writes } = setup();
+    await mount();
+    invoke(input("Name"), "onChange", { target: { value: "  Independent new metric  " } });
+    await hooks.settle();
+    const before = values(),
+      revise = button("Revise name", row()),
+      pending = deferred<Response>();
+    state.write = () => pending.promise;
+    invoke(button("Archive", row()), "onClick");
+    pending.resolve(accepted());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    invoke(revise, "onClick");
+    await hooks.settle();
+    expect(values()).toEqual(before);
+    expect(text(form())).toContain("Add metric definition");
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("rejects a retained revision Submit after accepted Archive before repaint", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    const before = values(),
+      oldForm = form(),
+      pending = deferred<Response>();
+    state.write = (_url, init) =>
+      init.method === "DELETE"
+        ? pending.promise
+        : Response.json({ data: { definition: historyDefinition } });
+    invoke(button("Archive", row()), "onClick");
+    pending.resolve(accepted());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await submit(oldForm);
+    expect(writes().map(([, init]) => init?.method)).toEqual(["DELETE"]);
+    expect(values()).toEqual(before);
+  });
+
+  it("keeps the raw revision unavailable when the current list no longer contains its ID", async () => {
+    const { state, writes } = setup();
+    state.read = () => Response.json({ error: "Registry unavailable" }, { status: 503 });
+    await mount();
+    await raw();
+    const before = values();
+    state.read = null;
+    state.definitions = [other];
+    await click("Retry private data");
+    await submit();
+    expect(writes()).toHaveLength(0);
+    expect(values()).toEqual(before);
+    expect(button("Save definition revision").props.disabled).toBe(true);
+    expect(text(form())).toContain("unavailable");
+  });
+
+  it("allows explicit Cancel and ordinary new metric creation after Archive", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    await archive();
+    await click("Cancel", form());
+    invoke(input("Name"), "onChange", { target: { value: "  New metric  " } });
+    invoke(input("Dimension"), "onChange", { target: { value: "count" } });
+    invoke(input("Canonical unit"), "onChange", { target: { value: "  reps  " } });
+    await hooks.settle();
+    state.write = () =>
+      Response.json({
+        data: {
+          definition: { ...other, name: "New metric", dimension: "count", canonicalUnit: "reps" },
+        },
+      });
+    await submit();
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[0]).toBe("/api/retention/biometrics/definitions");
+    expect(writes()[1]?.[1]?.method).toBe("POST");
+    expect(JSON.parse(String(writes()[1]?.[1]?.body))).toEqual({
+      name: "New metric",
+      dimension: "count",
+      canonicalUnit: "reps",
+      notes: null,
+    });
+  });
+
+  it("permits deliberate active revision choice and preserves unrelated Archive drafts", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await click("Revise name", row(other.name));
+    invoke(input("Name"), "onChange", { target: { value: "  Other raw name  " } });
+    await hooks.settle();
+    const before = values();
+    await archive();
+    expect(values()).toEqual(before);
+    expect(button("Save definition revision").props.disabled).toBe(false);
+    state.write = () =>
+      Response.json({ data: { definition: { ...other, revision: "2", name: "Other raw name" } } });
+    await submit();
+    expect(writes()[1]?.[0]).toBe(`/api/retention/biometrics/definitions/${other.id}`);
+    expect(writes()[1]?.[1]?.body).toBe(JSON.stringify({ name: "Other raw name", notes: null }));
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBe('"1"');
+  });
+
+  it("allows choosing another active metric from an unavailable revision and keeps its exact retry", async () => {
+    const { state, writes } = setup();
+    await mount();
+    await raw();
+    await archive();
+    await click("Revise name", row(other.name));
+    invoke(input("Name"), "onChange", { target: { value: "  Active revision  " } });
+    await hooks.settle();
+    state.write = () => Response.json({ error: "Unknown outcome" }, { status: 503 });
+    await submit();
+    const first = requiredHistory(writes()[1]);
+    state.write = () =>
+      Response.json({
+        data: { replayed: true, definition: { ...other, revision: "2", name: "Active revision" } },
+      });
+    await submit();
+    const retry = requiredHistory(writes()[2]);
+    expect(retry[0]).toBe(`/api/retention/biometrics/definitions/${other.id}`);
+    expect(retry[1]?.method).toBe("PATCH");
+    expect(retry[1]?.body).toBe(JSON.stringify({ name: "Active revision", notes: null }));
+    expect(retry[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(retry[1]?.headers).get("if-match")).toBe('"1"');
+  });
+
+  it.each(["canceled", "rejected", "malformed", "transport"])(
+    "preserves the active raw revision after %s Archive",
+    async (failure) => {
+      const { state, writes } = setup();
+      await mount();
+      await raw();
+      const before = values();
+      if (failure === "canceled") vi.stubGlobal("window", { confirm: vi.fn(() => false) });
+      state.write = () => {
+        if (failure === "transport") throw new Error("Lost archive receipt");
+        return failure === "rejected"
+          ? Response.json({ error: "Rejected" }, { status: 400 })
+          : Response.json({ data: {} });
+      };
+      await archive();
+      expect(values()).toEqual(before);
+      expect(button("Save definition revision").props.disabled).toBe(false);
+      expect(writes()).toHaveLength(failure === "canceled" ? 0 : 1);
+      state.write = () =>
+        Response.json({
+          data: { definition: { ...historyDefinition, revision: "2", name: "Raw revision" } },
+        });
+      await submit();
+      const write = requiredHistory(writes().at(-1));
+      expect(write[1]?.method).toBe("PATCH");
+      expect(write[1]?.body).toBe(JSON.stringify({ name: "Raw revision", notes: null }));
+      expect(new Headers(write[1]?.headers).get("if-match")).toBe('"1"');
+    },
+  );
+});

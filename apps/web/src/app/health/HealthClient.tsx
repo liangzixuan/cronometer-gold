@@ -1292,6 +1292,10 @@ export function HealthClient() {
   const newEventUnavailable =
     editingEvent === null && selectedDefinitionRecord?.status !== "active";
 
+  const definitionRevisionUnavailable =
+    editingDefinition !== null &&
+    definitions.find((definition) => definition.id === editingDefinition.id)?.status !== "active";
+
   const renderedDefinitionGeneration = definitionGeneration.current;
   const definitionScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
   function definitionViewCurrent(generation = renderedDefinitionGeneration) {
@@ -1321,6 +1325,13 @@ export function HealthClient() {
     if (!canEditDefinition()) return;
     const draft = definitionRef.current;
     const editing = draft.editing;
+    if (
+      editing &&
+      definitionsRef.current.find((definition) => definition.id === editing.id)?.status !== "active"
+    )
+      return setMessage(
+        "This metric definition is unavailable for revision. Your draft is preserved.",
+      );
     if (!draft.name.trim() || !draft.unit.trim())
       return setMessage("Metric name and unit are required.");
     const body = editing
@@ -2190,8 +2201,17 @@ export function HealthClient() {
                     />
                   </label>
                 </div>
+                {definitionRevisionUnavailable ? (
+                  <p className="finePrint">
+                    This metric definition is unavailable for revision. Your draft is preserved.
+                    Cancel or choose an active metric.
+                  </p>
+                ) : null}
                 <div className="entryActions">
-                  <button disabled={definitionSaving} type="submit">
+                  <button
+                    disabled={definitionSaving || definitionRevisionUnavailable}
+                    type="submit"
+                  >
                     {editingDefinition ? "Save definition revision" : "Add metric"}
                   </button>
                   {editingDefinition ? (
@@ -2226,9 +2246,14 @@ export function HealthClient() {
                     </div>
                     <div className="entryActions">
                       <button
-                        disabled={definitionSaving}
+                        disabled={definitionSaving || definition.status !== "active"}
                         onClick={() => {
-                          if (!canEditDefinition()) return;
+                          if (
+                            !canEditDefinition() ||
+                            definitionsRef.current.find((item) => item.id === definition.id)
+                              ?.status !== "active"
+                          )
+                            return;
                           replaceDefinitionDraft({
                             editing: definition,
                             name: definition.name,
