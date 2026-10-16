@@ -5,6 +5,7 @@ import {
   isS3CompatibleArtifactEndpoint,
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
+  validateAzureBlobCredential,
 } from "@nutrition-tracker/artifact-store";
 import { MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES } from "@nutrition-tracker/db";
 import { z } from "zod";
@@ -23,6 +24,9 @@ const workerConfigSchema = z.object({
     .trim()
     .min(1)
     .default("postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker"),
+  ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL: z.string().max(256).optional(),
+  ERASURE_REPLAY_LEDGER_AZURE_PREFIX: z.string().max(256).optional(),
+  ERASURE_REPLAY_LEDGER_AZURE_WRITE_SAS: z.string().max(8192).optional(),
   ERASURE_REPLAY_LEDGER_BUCKET: z
     .string()
     .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/)
@@ -47,10 +51,14 @@ const workerConfigSchema = z.object({
     .string()
     .regex(/^[a-z0-9-]{2,64}$/)
     .optional(),
-  ERASURE_REPLAY_LEDGER_STORE: z.enum(["filesystem", "s3"]).default("filesystem"),
+  ERASURE_REPLAY_LEDGER_STORE: z.enum(["filesystem", "s3", "azure"]).default("filesystem"),
   ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: z.string().trim().min(1).max(512).optional(),
   ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: z.string().min(1).max(2_048).optional(),
   ERASURE_REPLAY_LEDGER_WRITE_SESSION_TOKEN: z.string().min(1).max(8_192).optional(),
+  EXPORT_ARTIFACT_AZURE_CONTAINER_URL: z.string().max(256).optional(),
+  EXPORT_ARTIFACT_AZURE_PREFIX: z.string().max(256).optional(),
+  EXPORT_ARTIFACT_AZURE_WRITE_SAS: z.string().max(8192).optional(),
+  EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS: z.string().max(8192).optional(),
   EXPORT_ARTIFACT_BUCKET: z
     .string()
     .regex(/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/)
@@ -82,7 +90,7 @@ const workerConfigSchema = z.object({
   EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: z.string().trim().min(1).max(512).optional(),
   EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: z.string().min(1).max(2_048).optional(),
   EXPORT_ARTIFACT_WRITE_SESSION_TOKEN: z.string().min(1).max(8_192).optional(),
-  EXPORT_ARTIFACT_STORE: z.enum(["filesystem", "s3"]).default("filesystem"),
+  EXPORT_ARTIFACT_STORE: z.enum(["filesystem", "s3", "azure"]).default("filesystem"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   MEILI_ADMIN_KEY: z.string().trim().min(16).optional(),
   MEILI_TASK_OBSERVER_KEY: z.string().trim().min(16).optional(),
@@ -172,6 +180,87 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
     );
   }
   const productionIssues: WorkerConfigIssue[] = [];
+  for (const namespace of ["EXPORT_ARTIFACT", "ERASURE_REPLAY_LEDGER"] as const) {
+    const azureFields = [
+      `${namespace}_AZURE_CONTAINER_URL`,
+      `${namespace}_AZURE_PREFIX`,
+      `${namespace}_AZURE_WRITE_SAS`,
+    ] as const;
+    if (result.data[`${namespace}_STORE`] === "azure") {
+      try {
+        validateAzureBlobCredential({
+          containerUrl: result.data[`${namespace}_AZURE_CONTAINER_URL`] ?? "",
+          prefix: result.data[`${namespace}_AZURE_PREFIX`] ?? "",
+          sasToken: result.data[`${namespace}_AZURE_WRITE_SAS`] ?? "",
+          role: namespace === "EXPORT_ARTIFACT" ? "export-writer" : "ledger-writer",
+          ...(namespace === "EXPORT_ARTIFACT"
+            ? {
+                deletionObserverSasToken:
+                  result.data.EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS ?? "",
+              }
+            : {}),
+        });
+      } catch {
+        productionIssues.push({ field: `${namespace}_AZURE_WRITE_SAS` });
+      }
+      for (const suffix of [
+        "BUCKET",
+        "ENDPOINT",
+        "REGION",
+        "WRITE_ACCESS_KEY_ID",
+        "WRITE_SECRET_ACCESS_KEY",
+        "WRITE_SESSION_TOKEN",
+        "READ_ACCESS_KEY_ID",
+        "READ_SECRET_ACCESS_KEY",
+        "READ_SESSION_TOKEN",
+        "AZURE_READ_SAS",
+        "AZURE_RESTORE_SAS",
+      ] as const) {
+        const field = `${namespace}_${suffix}`;
+        if (environment[field] !== undefined) productionIssues.push({ field });
+      }
+      if (
+        namespace === "EXPORT_ARTIFACT" &&
+        environment.EXPORT_ARTIFACT_DELETE_VERSION_POLICY !== undefined
+      )
+        productionIssues.push({ field: "EXPORT_ARTIFACT_DELETE_VERSION_POLICY" });
+    } else {
+      for (const field of azureFields)
+        if (environment[field] !== undefined) productionIssues.push({ field });
+    }
+  }
+  if (environment.ERASURE_REPLAY_LEDGER_AZURE_DELETE_OBSERVER_SAS !== undefined)
+    productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_AZURE_DELETE_OBSERVER_SAS" });
+  if (
+    result.data.EXPORT_ARTIFACT_STORE !== "azure" &&
+    environment.EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS !== undefined
+  )
+    productionIssues.push({ field: "EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS" });
+  if (
+    result.data.EXPORT_ARTIFACT_STORE === "azure" &&
+    result.data.ERASURE_REPLAY_LEDGER_STORE === "azure"
+  ) {
+    if (
+      result.data.EXPORT_ARTIFACT_AZURE_WRITE_SAS ===
+      result.data.ERASURE_REPLAY_LEDGER_AZURE_WRITE_SAS
+    )
+      productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_AZURE_WRITE_SAS" });
+    // Account-wide retention settings for erasable exports and durable ledger must be separate.
+    if (
+      result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL &&
+      result.data.ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL
+    ) {
+      try {
+        if (
+          new URL(result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL).origin ===
+          new URL(result.data.ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL).origin
+        )
+          productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL" });
+      } catch {
+        productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL" });
+      }
+    }
+  }
   const needsRetentionSecrets =
     result.data.NODE_ENV === "production" || result.data.RETENTION_FEATURES_ENABLED;
   if (needsRetentionSecrets) {
@@ -316,10 +405,10 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
     if (new URL(result.data.MEILI_URL).protocol !== "https:") {
       productionIssues.push({ field: "MEILI_URL" });
     }
-    if (result.data.EXPORT_ARTIFACT_STORE !== "s3") {
+    if (result.data.EXPORT_ARTIFACT_STORE === "filesystem") {
       productionIssues.push({ field: "EXPORT_ARTIFACT_STORE" });
     }
-    if (result.data.ERASURE_REPLAY_LEDGER_STORE !== "s3") {
+    if (result.data.ERASURE_REPLAY_LEDGER_STORE === "filesystem") {
       productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_STORE" });
     }
     if (environment.RETENTION_EXPORT_SPOOL_DIR === undefined) {
@@ -328,23 +417,27 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
     if (result.data.RETENTION_EXPORT_SPOOL_PROTECTION === "unverified") {
       productionIssues.push({ field: "RETENTION_EXPORT_SPOOL_PROTECTION" });
     }
-    if (!result.data.EXPORT_ARTIFACT_ENDPOINT) {
-      productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
-    } else if (new URL(result.data.EXPORT_ARTIFACT_ENDPOINT).protocol !== "https:") {
-      productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
+    if (result.data.EXPORT_ARTIFACT_STORE !== "azure") {
+      if (!result.data.EXPORT_ARTIFACT_ENDPOINT) {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
+      } else if (new URL(result.data.EXPORT_ARTIFACT_ENDPOINT).protocol !== "https:") {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
+      }
+      if (
+        environment.EXPORT_ARTIFACT_DELETE_VERSION_POLICY === undefined ||
+        (result.data.EXPORT_ARTIFACT_ENDPOINT &&
+          isOciS3CompatibilityEndpoint(result.data.EXPORT_ARTIFACT_ENDPOINT) &&
+          result.data.EXPORT_ARTIFACT_DELETE_VERSION_POLICY !== "latest")
+      ) {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_DELETE_VERSION_POLICY" });
+      }
     }
-    if (
-      environment.EXPORT_ARTIFACT_DELETE_VERSION_POLICY === undefined ||
-      (result.data.EXPORT_ARTIFACT_ENDPOINT &&
-        isOciS3CompatibilityEndpoint(result.data.EXPORT_ARTIFACT_ENDPOINT) &&
-        result.data.EXPORT_ARTIFACT_DELETE_VERSION_POLICY !== "latest")
-    ) {
-      productionIssues.push({ field: "EXPORT_ARTIFACT_DELETE_VERSION_POLICY" });
-    }
-    if (!result.data.ERASURE_REPLAY_LEDGER_ENDPOINT) {
-      productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_ENDPOINT" });
-    } else if (new URL(result.data.ERASURE_REPLAY_LEDGER_ENDPOINT).protocol !== "https:") {
-      productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_ENDPOINT" });
+    if (result.data.ERASURE_REPLAY_LEDGER_STORE !== "azure") {
+      if (!result.data.ERASURE_REPLAY_LEDGER_ENDPOINT) {
+        productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_ENDPOINT" });
+      } else if (new URL(result.data.ERASURE_REPLAY_LEDGER_ENDPOINT).protocol !== "https:") {
+        productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_ENDPOINT" });
+      }
     }
     for (const field of [
       "EXPORT_ARTIFACT_BUCKET",
@@ -356,7 +449,10 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
       "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
       "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
     ] as const) {
-      if (!result.data[field]) productionIssues.push({ field });
+      const selected = field.startsWith("EXPORT_ARTIFACT_")
+        ? result.data.EXPORT_ARTIFACT_STORE
+        : result.data.ERASURE_REPLAY_LEDGER_STORE;
+      if (selected !== "azure" && !result.data[field]) productionIssues.push({ field });
     }
   }
   if (productionIssues.length > 0) {

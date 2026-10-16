@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir } from "node:fs/promises";
 
 import {
+  AzureBlobRawArtifactStore,
   cleanupOrphanedAuthenticatedArtifactSpools,
   cleanupOrphanedPrivateSpools,
   EncryptedArtifactStore,
@@ -30,7 +31,30 @@ function required(value: string | undefined, field: string): string {
 function rawStore(
   config: WorkerConfig,
   purpose: "export" | "erasure",
-): FileRawArtifactStore | S3RawArtifactStore {
+): FileRawArtifactStore | S3RawArtifactStore | AzureBlobRawArtifactStore {
+  const namespace = purpose === "export" ? "EXPORT_ARTIFACT" : "ERASURE_REPLAY_LEDGER";
+  if (config[`${namespace}_STORE`] === "azure") {
+    return new AzureBlobRawArtifactStore({
+      containerUrl: required(
+        config[`${namespace}_AZURE_CONTAINER_URL`],
+        `${namespace}_AZURE_CONTAINER_URL`,
+      ),
+      prefix: required(config[`${namespace}_AZURE_PREFIX`], `${namespace}_AZURE_PREFIX`),
+      sasToken: required(config[`${namespace}_AZURE_WRITE_SAS`], `${namespace}_AZURE_WRITE_SAS`),
+      role: purpose === "export" ? "export-writer" : "ledger-writer",
+      ...(purpose === "export"
+        ? {
+            deletionObserverSasToken: required(
+              config.EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS,
+              "EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS",
+            ),
+          }
+        : {}),
+      requestTimeoutMs: config.EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS,
+      maximumObjectBytes:
+        (purpose === "export" ? config.RETENTION_EXPORT_SPOOL_MAX_BYTES : 16_384) + 128,
+    });
+  }
   if (purpose === "export") {
     return config.EXPORT_ARTIFACT_STORE === "filesystem"
       ? new FileRawArtifactStore(config.EXPORT_ARTIFACT_DIRECTORY)
