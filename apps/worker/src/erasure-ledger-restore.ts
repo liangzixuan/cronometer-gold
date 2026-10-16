@@ -5,6 +5,8 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import {
+  AZURE_LEDGER_RESTORE_READ_BUDGET,
+  AzureBlobRawArtifactStore,
   cleanupOrphanedAuthenticatedArtifactSpools,
   EncryptedArtifactStore,
   EncryptedErasureReplayLedger,
@@ -13,6 +15,7 @@ import {
   OciNativeObjectVersionResolver,
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
+  type RawArtifactStore,
   S3RawArtifactStore,
   type SingletonObjectVersionResolver,
 } from "@nutrition-tracker/artifact-store";
@@ -262,15 +265,93 @@ export async function replayAndAttestErasureLedgerRestore(input: {
   return result;
 }
 
-export async function runErasureLedgerRestoreFromEnvironment(
-  environment: NodeJS.ProcessEnv = process.env,
-): Promise<ErasureRestoreResult> {
-  const databaseRestoreEpoch = restoreEpoch(environment);
+export async function createErasureRestoreRawStore(
+  environment: NodeJS.ProcessEnv,
+): Promise<RawArtifactStore> {
+  const requestTimeoutMs = positiveInteger(
+    environment.ERASURE_REPLAY_LEDGER_RESTORE_REQUEST_TIMEOUT_MS,
+    30_000,
+    300_000,
+  );
+  if (environment.ERASURE_REPLAY_LEDGER_STORE === "azure") {
+    if (environment.ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER !== "azure_blob")
+      throw new Error("Explicit Azure version inventory is required");
+    for (const name of Object.keys(environment)) {
+      if (
+        environment[name] !== undefined &&
+        (name.startsWith("ERASURE_REPLAY_LEDGER_RESTORE_OCI_") ||
+          [
+            "ERASURE_REPLAY_LEDGER_ENDPOINT",
+            "ERASURE_REPLAY_LEDGER_BUCKET",
+            "ERASURE_REPLAY_LEDGER_REGION",
+            "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID",
+            "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+            "ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN",
+            "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
+            "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+            "ERASURE_REPLAY_LEDGER_WRITE_SESSION_TOKEN",
+            "ERASURE_REPLAY_LEDGER_AZURE_WRITE_SAS",
+            "ERASURE_REPLAY_LEDGER_AZURE_READ_SAS",
+          ].includes(name))
+      ) {
+        throw new Error("Mixed erasure restore storage credentials are not permitted");
+      }
+    }
+    return new AzureBlobRawArtifactStore({
+      containerUrl: required(environment, "ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL"),
+      prefix: required(environment, "ERASURE_REPLAY_LEDGER_AZURE_PREFIX"),
+      sasToken: required(environment, "ERASURE_REPLAY_LEDGER_AZURE_RESTORE_SAS"),
+      role: "restore-reader",
+      requestTimeoutMs,
+      maximumObjectBytes: 16_384 + 128,
+      restoreReadBudget: AZURE_LEDGER_RESTORE_READ_BUDGET,
+    });
+  }
+  if (
+    environment.ERASURE_REPLAY_LEDGER_STORE !== undefined &&
+    environment.ERASURE_REPLAY_LEDGER_STORE !== "s3"
+  )
+    throw new Error("Invalid erasure restore storage provider");
+  if (
+    Object.keys(environment).some(
+      (name) => name.startsWith("ERASURE_REPLAY_LEDGER_AZURE_") && environment[name] !== undefined,
+    )
+  )
+    throw new Error("Azure restore must be explicitly selected");
   const endpointValue = required(environment, "ERASURE_REPLAY_LEDGER_ENDPOINT");
   const endpoint = new URL(endpointValue);
   if (environment.NODE_ENV === "production" && endpoint.protocol !== "https:") {
     throw new Error("HTTPS erasure replay ledger storage is required in production");
   }
+  const bucket = required(environment, "ERASURE_REPLAY_LEDGER_BUCKET");
+  const region = required(environment, "ERASURE_REPLAY_LEDGER_REGION");
+  const singletonVersionResolver = await restoreVersionResolver(environment, {
+    bucket,
+    endpoint: endpointValue,
+    region,
+    requestTimeoutMs,
+  });
+
+  return new S3RawArtifactStore({
+    accessKeyId: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID"),
+    bucket,
+    endpoint: endpoint.href,
+    readVersionPolicy: "require_singleton",
+    region,
+    requestTimeoutMs,
+    secretAccessKey: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY"),
+    ...(singletonVersionResolver ? { singletonVersionResolver } : {}),
+    ...(environment.ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN
+      ? { sessionToken: environment.ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN }
+      : {}),
+  });
+}
+
+export async function runErasureLedgerRestoreFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): Promise<ErasureRestoreResult> {
+  const databaseRestoreEpoch = restoreEpoch(environment);
+  const rawStore = await createErasureRestoreRawStore(environment);
   const spoolDirectory = safeDirectory(
     required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR"),
   );
@@ -301,33 +382,6 @@ export async function runErasureLedgerRestoreFromEnvironment(
     ),
   });
 
-  const bucket = required(environment, "ERASURE_REPLAY_LEDGER_BUCKET");
-  const region = required(environment, "ERASURE_REPLAY_LEDGER_REGION");
-  const requestTimeoutMs = positiveInteger(
-    environment.ERASURE_REPLAY_LEDGER_RESTORE_REQUEST_TIMEOUT_MS,
-    30_000,
-    300_000,
-  );
-  const singletonVersionResolver = await restoreVersionResolver(environment, {
-    bucket,
-    endpoint: endpointValue,
-    region,
-    requestTimeoutMs,
-  });
-
-  const rawStore = new S3RawArtifactStore({
-    accessKeyId: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID"),
-    bucket,
-    endpoint: endpoint.href,
-    readVersionPolicy: "require_singleton",
-    region,
-    requestTimeoutMs,
-    secretAccessKey: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY"),
-    ...(singletonVersionResolver ? { singletonVersionResolver } : {}),
-    ...(environment.ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN
-      ? { sessionToken: environment.ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN }
-      : {}),
-  });
   const ledger = new EncryptedErasureReplayLedger({
     artifactStore: new EncryptedArtifactStore({
       keyRing: parseArtifactEncryptionKeyRing({
