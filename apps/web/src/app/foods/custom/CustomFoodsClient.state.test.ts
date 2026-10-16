@@ -3603,3 +3603,222 @@ describe("Archive admission respects existing operation owners", () => {
     expect(text(card(first))).toContain("archived");
   });
 });
+
+const reloadConflictedFood = "Discard edits and reload saved food";
+function recoveredFood(revision = "2", index = 1): CustomFood {
+  const original = food(index);
+  return {
+    ...original,
+    revision,
+    currentVersion: {
+      ...original.currentVersion,
+      id: String(BigInt(original.currentVersion.id) + BigInt(revision)),
+      versionNumber: Number(revision),
+      name: `Current saved ${index} v${revision}`,
+    },
+  };
+}
+async function conflictedEditor() {
+  const first = allStates();
+  const result = workspace([first, food(2)]);
+  result.state.write = () => Response.json({ error: "Revision changed." }, { status: 412 });
+  await mount();
+  await click("Revise", card(first));
+  await change("Name", "  attempted raw revision  ");
+  await change("Notes (optional)", "  raw\nnotes  ");
+  const raw = formValues();
+  await submit("Save new version");
+  return { ...result, first, raw };
+}
+describe("web custom-food explicit revision-conflict recovery", () => {
+  it("preserves the draft, explains 412 and blocks stale Save including retained form", async () => {
+    const { raw, writes } = await conflictedEditor();
+    expect(formValues()).toEqual(raw);
+    await submit("Save new version");
+    expect(writes()).toHaveLength(1);
+    expect(text()).toContain("This saved food changed");
+    expect(button("Save new version").props.disabled).toBe(true);
+    expect(button(reloadConflictedFood).props.disabled).not.toBe(true);
+    await submit("Save new version");
+    await change("Name", "  still editing  ");
+    await submit("Save new version");
+    expect(writes()).toHaveLength(1);
+    expect(button("Save new version").props.disabled).toBe(true);
+  });
+  it("reads explicitly without an operation and saves only a later explicit draft with the fetched revision", async () => {
+    const { state, fetcher, writes, first } = await conflictedEditor();
+    const latest = recoveredFood();
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}`
+        ? Response.json({ data: { customFood: latest } })
+        : undefined;
+    const count = fetcher.mock.calls.length;
+    await click(reloadConflictedFood);
+    expect(fetcher).toHaveBeenCalledTimes(count + 1);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(writes()).toHaveLength(1);
+    expect(field("Name").props.value).toBe(latest.currentVersion.name);
+    expect(disclosure(latest).props["aria-expanded"]).toBe(false);
+    expect(button("Save new version").props.disabled).toBe(false);
+    await change("Name", "New explicit revision");
+    state.write = () => receipt(recoveredFood("3"));
+    await submit("Save new version");
+    expect(writes()).toHaveLength(2);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBe('"2"');
+    expect(allocate).toHaveBeenCalledOnce();
+  });
+  for (const failure of [
+    "equal",
+    "wrong-id",
+    "archived",
+    "malformed",
+    "unavailable",
+    "network",
+  ] as const) {
+    it(`retains raw work and recovery after ${failure} read`, async () => {
+      const { state, raw, writes, first } = await conflictedEditor();
+      state.sectionRead = (url) => {
+        if (url !== `/api/retention/custom-foods/${first.id}`) return undefined;
+        if (failure === "network") throw new Error("offline");
+        if (failure === "unavailable") return Response.json({ error: "offline" }, { status: 503 });
+        const latest = recoveredFood(failure === "equal" ? "1" : "2");
+        return Response.json({
+          data: {
+            customFood:
+              failure === "malformed"
+                ? {}
+                : failure === "wrong-id"
+                  ? recoveredFood("2", 2)
+                  : failure === "archived"
+                    ? { ...latest, status: "archived" }
+                    : latest,
+          },
+        });
+      };
+      await click(reloadConflictedFood);
+      expect(formValues()).toEqual(raw);
+      expect(button(reloadConflictedFood).props.disabled).not.toBe(true);
+      expect(button("Save new version").props.disabled).toBe(true);
+      expect(writes()).toHaveLength(1);
+    });
+  }
+  it("keeps the conflict through full refresh and rejects a read behind the newer loaded row", async () => {
+    const { state, raw, first } = await conflictedEditor();
+    state.items = [recoveredFood("3"), food(2)];
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(card(recoveredFood("3"))).toBeDefined();
+    expect(formValues()).toEqual(raw);
+    expect(button("Save new version").props.disabled).toBe(true);
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}`
+        ? Response.json({ data: { customFood: recoveredFood("2") } })
+        : undefined;
+    await click(reloadConflictedFood);
+    expect(formValues()).toEqual(raw);
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}`
+        ? Response.json({ data: { customFood: recoveredFood("3") } })
+        : undefined;
+    await click(reloadConflictedFood);
+    expect(field("Name").props.value).toBe(recoveredFood("3").currentVersion.name);
+  });
+  for (const replace of ["edit", "hidden", "unmount"] as const) {
+    it(`rejects obsolete recovery after ${replace}`, async () => {
+      const view = visibility();
+      const { state, fetcher, first } = await conflictedEditor();
+      const pending = deferred<Response>();
+      state.sectionRead = (url) =>
+        url === `/api/retention/custom-foods/${first.id}` ? pending.promise : undefined;
+      const old = button(reloadConflictedFood);
+      await click(reloadConflictedFood);
+      const count = fetcher.mock.calls.length;
+      invoke(old, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(count);
+      if (replace === "edit") await change("Name", "newer raw edit");
+      if (replace === "hidden") await view.set("hidden");
+      if (replace === "unmount") hooks.unmount();
+      const raw = formValues();
+      pending.resolve(Response.json({ data: { customFood: recoveredFood() } }));
+      await hooks.settle();
+      if (replace !== "unmount") expect(formValues()).toEqual(raw);
+      expect(hooks.afterClose()).toBe(0);
+    });
+  }
+  it("rejects retained recovery after raw edit-restore and closes private data on current 401", async () => {
+    const { state, fetcher, first } = await conflictedEditor();
+    const old = button(reloadConflictedFood);
+    await change("Name", "other");
+    await change("Name", "  attempted raw revision  ");
+    const count = fetcher.mock.calls.length;
+    invoke(old, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}`
+        ? new Response(null, { status: 401 })
+        : undefined;
+    await click(reloadConflictedFood);
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(field("Name").props.value).toBe("");
+  });
+});
+
+describe("web custom-food recovery operation ownership", () => {
+  it("keeps pending Cancel inert and fences retained recovery after explicit cancellation", async () => {
+    const { state, fetcher, first } = await conflictedEditor();
+    const pending = deferred<Response>();
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}` ? pending.promise : undefined;
+    await click(reloadConflictedFood);
+    const raw = formValues();
+    expect(button("Cancel edit").props.disabled).toBe(true);
+    invoke(button("Cancel edit"), "onClick");
+    await hooks.settle();
+    expect(formValues()).toEqual(raw);
+    pending.resolve(Response.json({ error: "offline" }, { status: 503 }));
+    await hooks.settle();
+    const old = button(reloadConflictedFood);
+    await click("Cancel edit");
+    const count = fetcher.mock.calls.length;
+    invoke(old, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(button("Create private food").props.disabled).toBe(false);
+  });
+  it("rechecks ownership after deferred JSON before replacing newer raw edits", async () => {
+    const { state, first, writes } = await conflictedEditor();
+    const body = deferred<unknown>();
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}`
+        ? ({ ok: true, status: 200, json: () => body.promise } as Response)
+        : undefined;
+    await click(reloadConflictedFood);
+    await change("Notes (optional)", "newer exact notes");
+    const raw = formValues();
+    body.resolve({ data: { customFood: recoveredFood() } });
+    await hooks.settle();
+    expect(formValues()).toEqual(raw);
+    expect(writes()).toHaveLength(1);
+    expect(button(reloadConflictedFood).props.disabled).toBe(false);
+  });
+  it("preserves other disclosures, filter and pinned logging while replacing just the recovered food", async () => {
+    const { state, first, writes } = await conflictedEditor();
+    await toggle(food(2));
+    await click("Log pinned v1", card(first));
+    await change(savedFilterLabel, "saved");
+    const filter = field(savedFilterLabel).props.value;
+    state.sectionRead = (url) =>
+      url === `/api/retention/custom-foods/${first.id}`
+        ? Response.json({ data: { customFood: recoveredFood() } })
+        : undefined;
+    await click(reloadConflictedFood);
+    expect(disclosure(food(2)).props["aria-expanded"]).toBe(true);
+    expect(field(savedFilterLabel).props.value).toBe(filter);
+    expect(button("Log exact version")).toBeDefined();
+    expect(writes()).toHaveLength(1);
+  });
+});

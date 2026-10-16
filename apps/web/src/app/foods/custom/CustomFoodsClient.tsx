@@ -28,6 +28,7 @@ import {
   operationId,
   parseCustomFoodList,
   parseCustomFoodMutation,
+  parseCustomFoodResponse,
 } from "../../../lib/retention";
 import { AppNavigation } from "../../ui/AppNavigation";
 import FoodsNavigation from "../../ui/FoodsNavigation";
@@ -43,6 +44,12 @@ interface CustomDraft {
   readonly servingGrams: string;
   readonly notes: string;
   readonly nutrients: readonly CustomFoodNutrient[];
+}
+
+interface CustomConflict {
+  readonly id: string;
+  readonly revision: string;
+  readonly owner: string;
 }
 
 interface CustomDraftChoice {
@@ -210,6 +217,12 @@ export function CustomFoodsClient() {
   const [customSource, setCustomSource] = useState<CustomFood | null>(null);
   const [customDraftChoice, setCustomDraftChoice] = useState<CustomDraftChoice | null>(null);
   const [customSaving, setCustomSaving] = useState(false);
+  const [customConflict, setCustomConflictState] = useState<CustomConflict | null>(null);
+  const customConflictRef = useRef<CustomConflict | null>(null);
+  const setCustomConflict = useCallback((next: CustomConflict | null) => {
+    customConflictRef.current = next;
+    setCustomConflictState(next);
+  }, []);
   const [customLog, setCustomLogState] = useState<CustomLogDraft | null>(null);
   const customLogRef = useRef<CustomLogDraft | null>(null);
   const customLogGeneration = useRef(0);
@@ -318,6 +331,7 @@ export function CustomFoodsClient() {
   }, [clearCustomDraftChoice]);
   const replaceCustom = useCallback(
     (next: CustomDraft, source: CustomFood | null = null, clean = true) => {
+      setCustomConflict(null);
       customRef.current = next;
       customGeneration.current += 1;
       customBaseline.current = clean ? next : null;
@@ -325,7 +339,7 @@ export function CustomFoodsClient() {
       setCustomState(next);
       setCustomSource(source);
     },
-    [clearCustomDraftChoice],
+    [clearCustomDraftChoice, setCustomConflict],
   );
   function canUseCustomControls() {
     const currentSession = installedSession.current;
@@ -891,8 +905,109 @@ export function CustomFoodsClient() {
     }
   }
 
+  function hasCustomConflict() {
+    const conflict = customConflictRef.current;
+    return (
+      conflict !== null &&
+      conflict.id === custom.id &&
+      conflict.revision === custom.revision &&
+      conflict.owner === session?.user.id
+    );
+  }
+  function canRecoverCustomFood() {
+    return (
+      canUseCustomControls() &&
+      session !== null &&
+      hasCustomConflict() &&
+      customConflictRef.current === customConflict &&
+      customWrite.current === null &&
+      loadController.current === null &&
+      profileRefreshController.current === null
+    );
+  }
+  async function reloadConflictedCustomFood() {
+    if (!canRecoverCustomFood() || !session || !customConflict) return;
+    retireCustomArchive();
+    clearCustomDraftChoice();
+    const token = {};
+    const controller = new AbortController();
+    const conflict = customConflict;
+    const lifecycle = customLifecycle.current;
+    const generation = customGeneration.current;
+    const controls = customControlGeneration.current;
+    const scope = customScope;
+    customWrite.current = token;
+    privateReadControllers.current.add(controller);
+    setCustomSaving(true);
+    const isCurrent = () =>
+      mounted.current &&
+      visible.current &&
+      !privateUiClosed.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !controller.signal.aborted &&
+      customWrite.current === token &&
+      customLifecycle.current === lifecycle &&
+      customGeneration.current === generation &&
+      customControlGeneration.current === controls &&
+      customRef.current === custom &&
+      customConflictRef.current === conflict &&
+      ownerUserId.current === conflict.owner &&
+      installedSession.current !== null &&
+      JSON.stringify([installedSession.current.user.id, installedSession.current.profile]) ===
+        scope &&
+      loadController.current === null &&
+      profileRefreshController.current === null;
+    try {
+      const response = await fetch(
+        `/api/retention/custom-foods/${encodeURIComponent(conflict.id)}`,
+        {
+          method: "GET",
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        },
+      );
+      if (!isCurrent()) return;
+      if (response.status === 401) return signInAgain();
+      const value = await json(response);
+      if (!isCurrent()) return;
+      if (!response.ok)
+        throw new Error(responseError(value, "The saved food could not be reloaded."));
+      const saved = parseCustomFoodResponse(value);
+      const loaded = installedFoods.current.find((item) => item.id === conflict.id);
+      if (
+        saved.id !== conflict.id ||
+        saved.status !== "active" ||
+        BigInt(saved.revision) <= BigInt(conflict.revision) ||
+        (loaded && BigInt(saved.revision) < BigInt(loaded.revision))
+      ) {
+        throw new Error("A newer active version of this saved food could not be verified.");
+      }
+      if (
+        !installCustomFoods(
+          (items) => items.map((item) => (item.id === saved.id ? saved : item)),
+          foodListGeneration.current,
+          conflict.owner,
+        )
+      )
+        return;
+      replaceCustom(customDraft(saved), saved);
+      setMessage("Current saved food loaded. Review its values before saving another version.");
+    } catch (error) {
+      if (!isCurrent()) return;
+      setMessage(error instanceof Error ? error.message : "The saved food could not be reloaded.");
+    } finally {
+      privateReadControllers.current.delete(controller);
+      if (customWrite.current === token) {
+        customWrite.current = null;
+        if (mounted.current && !privateUiClosed.current) setCustomSaving(false);
+      }
+    }
+  }
+
   async function saveCustomFood() {
-    if (!canUseCustomControls() || !session || customWrite.current !== null) return;
+    if (!canUseCustomControls() || !session || customWrite.current !== null || hasCustomConflict())
+      return;
     retireCustomArchive();
     clearCustomDraftChoice();
     if (!custom.name.trim() || custom.nutrients.length < 1)
@@ -965,6 +1080,14 @@ export function CustomFoodsClient() {
       });
       if (!isCurrent()) return;
       if (response.status === 401) return signInAgain();
+      if (response.status === 412 && custom.id && custom.revision) {
+        operations.current.delete(key);
+        setCustomConflict({ id: custom.id, revision: custom.revision, owner: initiatingOwner });
+        setMessage(
+          "This saved food changed. Your edits are kept. Reload its saved values explicitly to continue.",
+        );
+        return;
+      }
       const value = await json(response);
       if (!isCurrent()) return;
       if (!response.ok) throw new Error(responseError(value, "The personal-food request failed."));
@@ -1594,9 +1717,17 @@ export function CustomFoodsClient() {
                   onChange={(event) => setCustom({ ...custom, notes: event.target.value })}
                 />
               </label>
+              {hasCustomConflict() ? (
+                <p role="status">
+                  This saved food changed. Your edits are kept until you explicitly reload its saved
+                  values or replace this draft.
+                </p>
+              ) : null}
               <div className="entryActions">
                 <button
-                  disabled={customSaving || !canUseCustomControls() || !session}
+                  disabled={
+                    customSaving || !canUseCustomControls() || !session || hasCustomConflict()
+                  }
                   type="submit"
                 >
                   {customSaving
@@ -1605,6 +1736,15 @@ export function CustomFoodsClient() {
                       ? "Save new version"
                       : "Create private food"}
                 </button>
+                {hasCustomConflict() ? (
+                  <button
+                    disabled={!canRecoverCustomFood()}
+                    onClick={() => void reloadConflictedCustomFood()}
+                    type="button"
+                  >
+                    Discard edits and reload saved food
+                  </button>
+                ) : null}
                 {custom.id ? (
                   <button
                     disabled={customSaving || !canUseCustomControls()}
