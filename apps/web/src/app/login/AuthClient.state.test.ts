@@ -55,6 +55,14 @@ interface ElementNode {
 }
 let tree: unknown;
 const passwordFocus = vi.fn();
+const emailControl = {
+  value: "",
+  validationMessage: "",
+  setCustomValidity(message: string) {
+    this.validationMessage = message;
+  },
+};
+const reportValidity = vi.fn(() => emailControl.validationMessage === "");
 
 function elements(value: unknown = tree): ElementNode[] {
   if (Array.isArray(value)) return value.flatMap(elements);
@@ -67,6 +75,11 @@ function render() {
   hooks.begin();
   tree = AuthClient();
   for (const element of elements()) {
+    if (element.props.id === "account-email") {
+      emailControl.value = String(element.props.value);
+      const ref = element.props.ref as { current: unknown } | undefined;
+      if (ref) ref.current = emailControl;
+    }
     if (element.props.id !== "account-password") continue;
     const ref = element.props.ref as { current: unknown } | undefined;
     if (ref) ref.current = { focus: passwordFocus };
@@ -120,8 +133,9 @@ function submit() {
   const promise = (
     find((element) => element.type === "form").props.onSubmit as (event: {
       preventDefault: () => void;
+      currentTarget: { reportValidity: () => boolean };
     }) => Promise<void>
-  )({ preventDefault });
+  )({ preventDefault, currentTarget: { reportValidity } });
   expect(preventDefault).toHaveBeenCalledOnce();
   render();
   return promise;
@@ -161,6 +175,8 @@ function sessionResponse() {
 beforeEach(() => {
   hooks.reset();
   vi.clearAllMocks();
+  emailControl.validationMessage = "";
+  reportValidity.mockReset().mockImplementation(() => emailControl.validationMessage === "");
   render();
 });
 
@@ -234,7 +250,7 @@ describe("account password policy", () => {
         await invalid;
         render();
         expect(field("account-password").props.value).toBe(value);
-        expect(field("account-email").props.value).toBe(" \uff41\uff44\uff41@example.test ");
+        expect(field("account-email").props.value).toBe("ada@example.test");
         expect(passwordFocus).toHaveBeenCalledOnce();
         expect(field("account-password").props["aria-invalid"]).toBe(true);
         const status = find((element) => element.props.role === "status");
@@ -266,5 +282,87 @@ describe("account password policy", () => {
         );
       },
     );
+  }
+});
+
+describe("account email validation", () => {
+  for (const mode of ["login", "register"] as const) {
+    it(`normalizes the ${mode} email before native form validation`, async () => {
+      const fetcher = vi.fn(async () => sessionResponse());
+      vi.stubGlobal("fetch", fetcher);
+      chooseMode(mode);
+      const password = "  e\u0301 secret \u{1f642} phrase  ";
+      change("account-password", password);
+      expect(field("account-email").props.value).toBe(" \uff41\uff44\uff41@example.test ");
+      expect(find((element) => element.type === "form").props.noValidate).toBe(true);
+      reportValidity.mockImplementationOnce(() => {
+        expect(emailControl.value).toBe("ada@example.test");
+        expect(fetcher).not.toHaveBeenCalled();
+        return true;
+      });
+
+      await submit();
+      render();
+
+      expect(reportValidity).toHaveBeenCalledOnce();
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(field("account-email").props.value).toBe("ada@example.test");
+      expect(field("account-password").props.value).toBe(password);
+    });
+
+    it(`rejects an expanded ${mode} email over the length limit before sending`, async () => {
+      const fetcher = vi.fn(async () => sessionResponse());
+      vi.stubGlobal("fetch", fetcher);
+      chooseMode(mode);
+      change("account-password", "  exact password  ");
+      const draft = "\ufb00".repeat(130) + "@example.test";
+      expect(draft.length).toBeLessThan(254);
+      change("account-email", draft);
+
+      await submit();
+      render();
+
+      expect(emailControl.value.length).toBeGreaterThan(254);
+      expect(emailControl.validationMessage).toContain("254");
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(field("account-password").props.value).toBe("  exact password  ");
+
+      change("account-email", "\uff41\uff44\uff41@example.test");
+      expect(emailControl.validationMessage).toBe("");
+      await submit();
+      render();
+
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(emailControl.value).toBe("ada@example.test");
+    });
+
+    it(`keeps an invalid ${mode} form correctable without sending a request`, async () => {
+      const fetcher = vi.fn(async () => sessionResponse());
+      vi.stubGlobal("fetch", fetcher);
+      chooseMode(mode);
+      const password = "  exact password  ";
+      change("account-password", password);
+      change("account-email", " \uff41\uff44\uff41 at example.test ");
+      reportValidity.mockReturnValueOnce(false);
+
+      await submit();
+      render();
+
+      expect(emailControl.value).toBe("ada at example.test");
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(field("account-password").props.value).toBe(password);
+      expect(passwordFocus).not.toHaveBeenCalled();
+      expect(text()).not.toContain("Please wait");
+
+      change("account-email", "\uff41\uff44\uff41@example.test");
+      await submit();
+      render();
+
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(reportValidity).toHaveBeenCalledTimes(2);
+      expect(field("account-email").props.value).toBe("ada@example.test");
+      expect(field("account-password").props.value).toBe(password);
+    });
   }
 });

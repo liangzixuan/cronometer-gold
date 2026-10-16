@@ -32,6 +32,7 @@ export function AuthClient() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
+  const emailInput = useRef<HTMLInputElement>(null);
   const [password, setPassword] = useState("");
   const [passwordError, setPasswordError] = useState(false);
   const passwordInput = useRef<HTMLInputElement>(null);
@@ -49,6 +50,16 @@ export function AuthClient() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const normalizedEmail = email.normalize("NFKC").trim();
+    setEmail(normalizedEmail);
+    // Validate the canonical email without changing an in-progress typing draft.
+    if (emailInput.current) {
+      emailInput.current.value = normalizedEmail;
+      emailInput.current.setCustomValidity(
+        normalizedEmail.length > 254 ? "Use an email address of at most 254 characters." : "",
+      );
+    }
+    if (!event.currentTarget.reportValidity()) return;
     if (!isValidNewPassword(password)) {
       setPasswordError(true);
       setError(true);
@@ -65,7 +76,7 @@ export function AuthClient() {
         method: "POST",
         headers: { accept: "application/json", "content-type": "application/json" },
         body: JSON.stringify({
-          email: email.normalize("NFKC").trim(),
+          email: normalizedEmail,
           password,
           ...(mode === "register"
             ? {
@@ -136,14 +147,18 @@ export function AuthClient() {
           Create account
         </button>
       </fieldset>
-      <form onSubmit={submit}>
+      <form noValidate onSubmit={submit}>
         <label htmlFor="account-email">Email</label>
         <input
           autoComplete="email"
           id="account-email"
           inputMode="email"
           maxLength={254}
-          onChange={(event) => setEmail(event.target.value)}
+          onChange={(event) => {
+            emailInput.current?.setCustomValidity("");
+            setEmail(event.target.value);
+          }}
+          ref={emailInput}
           required
           type="email"
           value={email}
