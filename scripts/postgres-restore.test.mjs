@@ -48,7 +48,7 @@ const hooks = registerHooks({
       context.parentURL?.endsWith("/artifact-store/src/postgres-backup.ts")
     )
       return { url: "nutrition-test:artifact-fs", shortCircuit: true };
-    if (specifier === "pg" && context.parentURL?.endsWith("/owned-postgres-session.ts"))
+    if (specifier === "pg" && context.parentURL?.endsWith("/owned-postgres-owner.ts"))
       return { url: "nutrition-test:pg", shortCircuit: true };
     if (
       specifier === "../packages/db/dist/index.js" &&

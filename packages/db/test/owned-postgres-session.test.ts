@@ -164,6 +164,7 @@ function firstSocket(): TestSocket {
 function reply(rows: unknown[]) {
   state.query = (query, client) =>
     queueMicrotask(() => {
+      expect(query.listenerCount("row")).toBe(1);
       for (const row of rows) query.emit("row", row);
       client.current = undefined;
       query.emit("end", {});
@@ -182,7 +183,7 @@ it("owns one fresh verified-TLS client and closes it idempotently", async () => 
   expect(client.config).not.toHaveProperty("pipeline");
   reply([["evidence"]]);
   expect(await session.query(select)).toEqual({ rows: [["evidence"]] });
-  expect(client.queryCalls[0]?.listenerCount("row")).toBe(1);
+  expect(client.queryCalls[0]?.listenerCount("row")).toBe(0);
   expect(client.queryCalls[0]).not.toHaveProperty("callback");
   await session.close();
   await session.close();

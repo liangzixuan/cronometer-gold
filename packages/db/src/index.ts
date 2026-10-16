@@ -421,6 +421,10 @@ export {
   NutritionReportValidationError,
 } from "./nutrition-reports.js";
 export {
+  type OwnedPostgresDatabase,
+  openOwnedPostgresDatabase,
+} from "./owned-postgres-database.js";
+export {
   type OwnedPostgresQuery,
   type OwnedPostgresSession,
   OwnedPostgresSessionError,
