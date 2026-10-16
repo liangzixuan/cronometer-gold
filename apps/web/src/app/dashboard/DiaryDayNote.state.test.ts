@@ -769,3 +769,139 @@ describe("actual web day-note state transitions", () => {
     },
   );
 });
+
+describe("day-note controls while the diary view is paused", () => {
+  function pauseBeforeEffects() {
+    viewCurrent = false;
+    props = { ...props };
+    hooks.renderWithoutEffects();
+  }
+  async function resume() {
+    viewCurrent = true;
+    props = { ...props };
+    hooks.render();
+    await hooks.settle();
+  }
+
+  it("keeps an exact raw draft visible but disables editing and draft actions before route effects", async () => {
+    head = noteFixture("original saved", "4");
+    await mount();
+    const raw = " exact raw\r\n😀 draft  ";
+    await change(raw);
+    pauseBeforeEffects();
+    const requests = calls.length;
+    expect(field().props.value).toBe(raw);
+    expect(field().props.disabled).toBe(true);
+    for (const label of ["Save note", "Clear and save note", "Cancel note draft"]) {
+      expect(button(label).props.disabled).toBe(true);
+      invoke(button(label));
+    }
+    invoke(field(), "onChange", { currentTarget: { value: "lost replacement" } });
+    hooks.renderWithoutEffects();
+    expect(calls).toHaveLength(requests);
+    expect(field().props.value).toBe(raw);
+    await resume();
+    expect(field().props.disabled).toBe(false);
+    expect(button("Save note").props.disabled).toBe(false);
+    expect(field().props.value).toBe(raw);
+    await click("Save note");
+    expect(puts()).toHaveLength(1);
+    expect(head.note).toBe(raw);
+  });
+
+  it("disables uncertain-save retry while paused and resumes its exact request", async () => {
+    put = async () => Response.json({}, { status: 503 });
+    await mount();
+    await change(" uncertain raw\r\n ");
+    await click("Save note");
+    const original = puts()[0];
+    pauseBeforeEffects();
+    expect(button("Retry note save").props.disabled).toBe(true);
+    invoke(button("Retry note save"));
+    expect(puts()).toHaveLength(1);
+    await resume();
+    expect(button("Retry note save").props.disabled).toBe(false);
+    await click("Retry note save");
+    expect(puts()).toHaveLength(2);
+    expect(puts()[1]).toEqual(original);
+    expect(field().props.value).toBe(" uncertain raw\r\n ");
+  });
+
+  it("disables an unavailable note read while the selected view is not current", async () => {
+    read = async () => Response.json({}, { status: 503 });
+    await mount();
+    pauseBeforeEffects();
+    const requests = calls.length;
+    expect(button("Retry note load").props.disabled).toBe(true);
+    invoke(button("Retry note load"));
+    expect(calls).toHaveLength(requests);
+    read = async () => noteResponse(head);
+    await resume();
+    expect(field().props.disabled).toBe(false);
+    expect(puts()).toHaveLength(0);
+  });
+
+  it("disables reviewed choices while paused without discarding either note", async () => {
+    await prepareReviewedFocusConflict();
+    const raw = field().props.value;
+    pauseBeforeEffects();
+    const requests = calls.length;
+    for (const label of [
+      "Review current note",
+      "Keep my draft",
+      "Use saved note",
+      "Cancel note draft",
+    ]) {
+      expect(button(label).props.disabled).toBe(true);
+      invoke(button(label));
+    }
+    hooks.renderWithoutEffects();
+    expect(calls).toHaveLength(requests);
+    expect(field().props.value).toBe(raw);
+    expect(text()).toContain("reviewed saved");
+    await resume();
+    expect(button("Keep my draft").props.disabled).toBe(false);
+    await click("Keep my draft");
+    expect(field().props.disabled).toBe(false);
+    expect(field().props.value).toBe(raw);
+    expect(puts()).toHaveLength(1);
+  });
+
+  it("disables the return action during a paused away view and keeps its original date", async () => {
+    await mount();
+    await change("old day raw");
+    await navigate("2026-09-16");
+    pauseBeforeEffects();
+    expect(button("Return to note date").props.disabled).toBe(true);
+    invoke(button("Return to note date"));
+    expect(returned).not.toHaveBeenCalled();
+    await resume();
+    expect(button("Return to note date").props.disabled).toBe(false);
+    await click("Return to note date");
+    expect(returned).toHaveBeenCalledOnce();
+    expect(returned).toHaveBeenCalledWith(noteDate);
+    expect(field().props.value).toBe("old day raw");
+  });
+
+  it("disables acknowledged-save read recovery while paused without repeating its PUT", async () => {
+    await mount();
+    await change("acknowledged raw");
+    read = async () => Response.json({}, { status: 503 });
+    await click("Save note");
+    expect(puts()).toHaveLength(1);
+    pauseBeforeEffects();
+    const requests = calls.length;
+    expect(button("Reload saved note").props.disabled).toBe(true);
+    invoke(button("Reload saved note"));
+    expect(calls).toHaveLength(requests);
+    await resume();
+    read = async () => noteResponse(head);
+    expect(button("Reload saved note").props.disabled).toBe(false);
+    const before = calls.length;
+    await click("Reload saved note");
+    expect(calls.slice(before)).toHaveLength(1);
+    expect(calls[before]?.init.method).toBeUndefined();
+    expect(puts()).toHaveLength(1);
+    expect(field().props.value).toBe("acknowledged raw");
+  });
+});

@@ -269,8 +269,10 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
   } catch {
     validation = "Use up to 2,000 characters without invalid or null characters.";
   }
+  const controlsCurrent = canInteract();
   const blocked = state.busy || !!state.operation || !!state.conflict || !!state.acknowledgement;
-  const editable = !blocked && !away && snapshot?.phase === "ready" && !!snapshot.note;
+  const editable =
+    controlsCurrent && !blocked && !away && snapshot?.phase === "ready" && !!snapshot.note;
   const base = draft?.base ?? snapshot?.note;
   const changed = !!base && raw !== (base.note ?? "");
 
@@ -509,6 +511,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
           <p>Your draft belongs to {draft.base.localDate}. Return to edit or resolve it.</p>
           <button
             type="button"
+            disabled={!controlsCurrent}
             onClick={() => {
               if (currentState()) props.onReturn(draft.base.localDate);
             }}
@@ -525,6 +528,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
       {snapshot?.phase === "error" && !state.acknowledgement ? (
         <button
           type="button"
+          disabled={!controlsCurrent}
           onClick={() => {
             if (currentState()) void load(props.localDate);
           }}
@@ -569,20 +573,26 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
         </button>
         <button
           type="button"
-          disabled={!draft || state.busy || !!state.operation || !!state.acknowledgement}
+          disabled={
+            !controlsCurrent || !draft || state.busy || !!state.operation || !!state.acknowledgement
+          }
           onClick={cancel}
         >
           Cancel note draft
         </button>
         {state.operation ? (
-          <button type="button" disabled={state.busy} onClick={retry}>
+          <button type="button" disabled={!controlsCurrent || state.busy} onClick={retry}>
             {state.busy ? "Saving note…" : "Retry note save"}
           </button>
         ) : null}
       </div>
       {state.conflict ? (
         <div>
-          <button type="button" disabled={state.busy || away} onClick={() => void review()}>
+          <button
+            type="button"
+            disabled={!controlsCurrent || state.busy || away}
+            onClick={() => void review()}
+          >
             Review current note
           </button>
           {state.conflict.ready ? (
@@ -596,14 +606,24 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
               </pre>
               <button
                 type="button"
-                disabled={state.busy || away || state.conflict.ready.source !== props.session}
+                disabled={
+                  !controlsCurrent ||
+                  state.busy ||
+                  away ||
+                  state.conflict.ready.source !== props.session
+                }
                 onClick={rebase}
               >
                 Keep my draft
               </button>
               <button
                 type="button"
-                disabled={state.busy || away || state.conflict.ready.source !== props.session}
+                disabled={
+                  !controlsCurrent ||
+                  state.busy ||
+                  away ||
+                  state.conflict.ready.source !== props.session
+                }
                 onClick={() => {
                   if (
                     state.conflict?.ready &&
@@ -622,6 +642,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
       {state.acknowledgement?.failed ? (
         <button
           type="button"
+          disabled={!controlsCurrent}
           onClick={() => {
             if (!currentState() || !state.acknowledgement) return;
             const acknowledgement = { date: state.acknowledgement.date, failed: false };
