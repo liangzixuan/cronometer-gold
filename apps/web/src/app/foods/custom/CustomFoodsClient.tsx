@@ -1,14 +1,14 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   defaultDiaryGroups,
   diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
-  localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
   mealSlots,
@@ -65,6 +65,12 @@ interface CustomLogDraft {
   readonly mealSlot: MealSlot;
   readonly localDate: string;
   readonly localTime: string;
+  readonly occurrence: {
+    readonly occurredAt: string;
+    readonly route: object;
+    readonly lifecycle: number;
+    readonly profile: string;
+  } | null;
 }
 
 const unknownNutrientReasons = {
@@ -314,12 +320,74 @@ export function CustomFoodsClient() {
   function setCustomLog(next: CustomLogDraft | null) {
     if (!canUseCustomLogControls() || JSON.stringify(next) === JSON.stringify(customLogRef.current))
       return;
-    replaceCustomLog(next);
+    const previous = customLogRef.current;
+    const coordinatesChanged =
+      next !== null &&
+      (previous === null ||
+        next.food.id !== previous.food.id ||
+        next.food.currentVersion.id !== previous.food.currentVersion.id ||
+        next.localDate !== previous.localDate ||
+        next.localTime !== previous.localTime);
+    replaceCustomLog(coordinatesChanged ? { ...next, occurrence: null } : next);
   }
 
   const renderedCustomGeneration = customGeneration.current;
   const renderedCustomControl = customControlGeneration.current;
   const customScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+  const customLogDate = customLog?.localDate;
+  const customLogTime = customLog?.localTime;
+  const customLogZone = session?.profile.timeZone;
+  const customLogTimeResolution = useMemo(
+    () =>
+      customLogDate !== undefined && customLogTime !== undefined && customLogZone !== undefined
+        ? resolveHydrationLocalMinute(customLogDate, customLogTime, customLogZone)
+        : null,
+    [customLogDate, customLogTime, customLogZone],
+  );
+  const customLogOccurrence =
+    customLog?.occurrence?.route === renderedRouteDestination &&
+    customLog.occurrence.lifecycle === customLifecycle.current &&
+    customLog.occurrence.profile === customScope
+      ? customLog.occurrence.occurredAt
+      : null;
+
+  function chooseCustomLogOccurrence(occurredAt: string) {
+    if (
+      !canUseCustomLogControls() ||
+      !customLog ||
+      !customScope ||
+      customLogTimeResolution?.kind !== "ambiguous" ||
+      !customLogTimeResolution.candidates.some(
+        (candidate) => candidate.occurredAt === occurredAt,
+      ) ||
+      customLogOccurrence === occurredAt
+    )
+      return;
+    // A route round trip can have equal values but a different ownership identity.
+    replaceCustomLog({
+      ...customLog,
+      occurrence: {
+        occurredAt,
+        route: renderedRouteDestination,
+        lifecycle: customLifecycle.current,
+        profile: customScope,
+      },
+    });
+  }
+
+  function customLogInstant(): string {
+    if (!customLogTimeResolution || customLogTimeResolution.kind === "invalid")
+      throw new Error("Invalid local diary time.");
+    if (customLogTimeResolution.kind === "gap")
+      throw new Error("That local time does not exist in the selected time zone.");
+    if (customLogTimeResolution.kind === "unique")
+      return customLogTimeResolution.candidates[0].occurredAt;
+    const selected = customLogTimeResolution.candidates.find(
+      (candidate) => candidate.occurredAt === customLogOccurrence,
+    );
+    if (!selected) throw new Error("Choose Earlier or Later for this repeated local minute.");
+    return selected.occurredAt;
+  }
 
   const clearCustomDraftChoice = useCallback(() => {
     customDraftChoiceRef.current = null;
@@ -476,6 +544,12 @@ export function CustomFoodsClient() {
 
   const setSession = useCallback(
     (next: SessionSummary | null) => {
+      const previous = installedSession.current;
+      const previousScope = previous ? JSON.stringify([previous.user.id, previous.profile]) : null;
+      const nextScope = next ? JSON.stringify([next.user.id, next.profile]) : null;
+      if (previousScope !== nextScope && customLogRef.current?.occurrence) {
+        replaceCustomLog({ ...customLogRef.current, occurrence: null });
+      }
       if (installedSession.current !== next) {
         retireCustomArchive();
         closeFoodDetails();
@@ -493,7 +567,13 @@ export function CustomFoodsClient() {
       installedSession.current = next;
       setSessionState(next);
     },
-    [closeFoodDetails, invalidateCustomControls, resetSavedFoodFilter, retireCustomArchive],
+    [
+      closeFoodDetails,
+      invalidateCustomControls,
+      replaceCustomLog,
+      resetSavedFoodFilter,
+      retireCustomArchive,
+    ],
   );
   const installCustomFoods = useCallback(
     (
@@ -1238,11 +1318,7 @@ export function CustomFoodsClient() {
       return setMessage("This food has no serving definition.");
     let occurredAt: string;
     try {
-      occurredAt = localDateTimeToInstant(
-        customLog.localDate,
-        customLog.localTime,
-        session.profile.timeZone,
-      );
+      occurredAt = customLogInstant();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Enter a valid diary date and time.");
       return;
@@ -1359,6 +1435,12 @@ export function CustomFoodsClient() {
       setMessage(
         "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
       );
+      return;
+    }
+    try {
+      customLogInstant();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Enter a valid diary date and time.");
       return;
     }
     setCustomLogDateReviewRequired(false);
@@ -1855,6 +1937,7 @@ export function CustomFoodsClient() {
                                 const now = new Date();
                                 setCustomLog({
                                   food,
+                                  occurrence: null,
                                   kind: food.currentVersion.serving ? "serving" : "grams",
                                   quantity: "1",
                                   mealSlot: validatedMeal ?? "snacks",
@@ -2018,6 +2101,28 @@ export function CustomFoodsClient() {
                     Uses {session?.profile.timeZone ?? "your verified profile zone"} local time.
                     This entry keeps the saved nutrition even if you revise the food later.
                   </small>
+                  {customLogTimeResolution?.kind === "ambiguous" ? (
+                    <fieldset className="entryActions" disabled={!canUseCustomLogControls()}>
+                      <legend>Repeated private-food time</legend>
+                      <small className="fieldHelp" id="custom-food-log-occurrence-help">
+                        Choose Earlier or Later for this repeated local minute.
+                      </small>
+                      {customLogTimeResolution.candidates.map((candidate, index) => (
+                        <button
+                          aria-describedby="custom-food-log-occurrence-help"
+                          aria-pressed={customLogOccurrence === candidate.occurredAt}
+                          className="buttonQuiet"
+                          disabled={!canUseCustomLogControls()}
+                          key={candidate.occurredAt}
+                          onClick={() => chooseCustomLogOccurrence(candidate.occurredAt)}
+                          type="button"
+                        >
+                          {index === 0 ? "Earlier" : "Later"} occurrence ·{" "}
+                          {candidate.utcOffsetLabel}
+                        </button>
+                      ))}
+                    </fieldset>
+                  ) : null}
                   <div className="entryActions">
                     {customLogDateReviewRequired ? (
                       <button

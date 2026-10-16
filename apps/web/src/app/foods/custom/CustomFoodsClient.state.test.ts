@@ -3822,3 +3822,335 @@ describe("web custom-food recovery operation ownership", () => {
     expect(writes()).toHaveLength(1);
   });
 });
+
+describe("My foods repeated local logging minute", () => {
+  const earlier = "Earlier occurrence · UTC−05:00";
+  const later = "Later occurrence · UTC−06:00";
+  async function prepareRepeatedLog(item = food()) {
+    await click("Log pinned v1", card(item));
+    await change("Local date", "2026-11-01");
+    await change("Local time", "01:30");
+    await change("Exact quantity", "0.500000");
+  }
+  function repeatedReceipt() {
+    return Response.json({
+      data: {
+        replayed: false,
+        entry: null,
+        affectedDays: [{ localDate: "2026-11-01", revision: "1" }],
+      },
+    });
+  }
+  function unavailable() {
+    return Response.json({ error: "Response unavailable" }, { status: 503 });
+  }
+  function occurrenceSelected(label: string) {
+    return button(label).props["aria-pressed"] === true;
+  }
+
+  it("requires an explicit occurrence before allocating or posting and keeps the raw draft", async () => {
+    const { state, writes } = workspace([food()]);
+    await mount();
+    await prepareRepeatedLog();
+    const original = formValues();
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    state.write = unavailable;
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(0);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(status()).toContain("Choose Earlier or Later");
+    expect(formValues()).toEqual(original);
+    expect(occurrenceSelected(earlier)).toBe(false);
+    expect(occurrenceSelected(later)).toBe(false);
+  });
+
+  it("rejects a skipped local minute before allocating or posting and retains the raw draft", async () => {
+    const { state, writes } = workspace([food()]);
+    await mount();
+    await prepareRepeatedLog();
+    await change("Local date", "2026-03-08");
+    await change("Local time", "02:30");
+    const raw = formValues();
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    state.write = unavailable;
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(0);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(formValues()).toEqual(raw);
+    expect(status()).toContain("does not exist");
+  });
+
+  it.each([
+    [earlier, "2026-11-01T06:30:00.000Z"],
+    [later, "2026-11-01T07:30:00.000Z"],
+  ])(
+    "logs %s with the exact private version, raw portion and verified zone",
+    async (label, expected) => {
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareRepeatedLog();
+      const meal = logMealField();
+      invoke(meal, "onChange", { target: { value: "lunch" } });
+      await hooks.settle();
+      state.write = repeatedReceipt;
+      await click(label);
+      expect(writes()).toHaveLength(0);
+      expect(occurrenceSelected(label)).toBe(true);
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+      const request = writes()[0];
+      expect(request?.[0]).toBe(
+        `/api/retention/custom-foods/${food().id}/log?profileTimeZonePrecondition=v1`,
+      );
+      expect(JSON.parse(String(request?.[1]?.body))).toEqual({
+        customFoodVersionId: food().currentVersion.id,
+        portion: { kind: "serving", servingId: "1", amount: "0.500000" },
+        mealSlot: "lunch",
+        occurredAt: expected,
+      });
+      const headers = new Headers(request?.[1]?.headers);
+      expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+      expect(headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(status()).toContain("2026-11-01");
+    },
+  );
+
+  it.each(["date-noop", "time-noop", "quantity", "meal", "portion", "route-noop"])(
+    "retains the occurrence after %s",
+    async (edit) => {
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareRepeatedLog();
+      await click(later);
+      if (edit === "date-noop") await change("Local date", "2026-11-01");
+      if (edit === "time-noop") await change("Local time", "01:30");
+      if (edit === "quantity") await change("Exact quantity", "0.750000");
+      if (edit === "meal") {
+        invoke(logMealField(), "onChange", { target: { value: "dinner" } });
+        await hooks.settle();
+      }
+      if (edit === "portion") {
+        const select = elements(logForm()).find(
+          (node) => node.type === "select" && node.props.value === "serving",
+        );
+        if (!select) throw new Error("Missing portion selector");
+        invoke(select, "onChange", { target: { value: "grams" } });
+        await hooks.settle();
+      }
+      if (edit === "route-noop") hooks.renderWithoutEffects();
+      expect(occurrenceSelected(later)).toBe(true);
+      state.write = unavailable;
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+      expect(JSON.parse(String(writes()[0]?.[1]?.body)).occurredAt).toBe(
+        "2026-11-01T07:30:00.000Z",
+      );
+    },
+  );
+
+  it.each([
+    ["Local date", "2026-11-02", "2026-11-01"],
+    ["Local time", "01:31", "01:30"],
+  ])(
+    "retires choice and retained callbacks after changing %s and returning",
+    async (label, away, back) => {
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareRepeatedLog();
+      await click(later);
+      const oldChoice = button(later);
+      const oldForm = logForm();
+      await change(label, away);
+      await change(label, back);
+      invoke(oldChoice, "onClick");
+      invoke(oldForm, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes()).toHaveLength(0);
+      expect(occurrenceSelected(later)).toBe(false);
+      state.write = unavailable;
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(0);
+      await click(later);
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+    },
+  );
+
+  it.each(["date", "meal"])(
+    "retires a choice across route %s A→B→A before effects and accepts a new choice",
+    async (coordinate) => {
+      navigation.search = "date=2026-11-01&meal=lunch";
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareRepeatedLog();
+      await click(later);
+      const oldChoice = button(later);
+      const oldForm = logForm();
+      navigation.search =
+        coordinate === "date" ? "date=2026-11-02&meal=lunch" : "date=2026-11-01&meal=dinner";
+      hooks.renderWithoutEffects();
+      navigation.search = "date=2026-11-01&meal=lunch";
+      hooks.renderWithoutEffects();
+      expect(occurrenceSelected(later)).toBe(false);
+      invoke(oldChoice, "onClick");
+      invoke(oldForm, "onSubmit", { preventDefault() {} });
+      invoke(logForm(), "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes()).toHaveLength(0);
+      expect(occurrenceSelected(later)).toBe(false);
+      state.write = unavailable;
+      await click(later);
+      expect(occurrenceSelected(later)).toBe(true);
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+    },
+  );
+
+  it("retires the displayed and submitted occurrence on background/foreground before effects", async () => {
+    const view = visibility();
+    const { state, writes } = workspace([food()]);
+    await mount();
+    await prepareRepeatedLog();
+    await click(later);
+    const oldChoice = button(later);
+    const oldForm = logForm();
+    const hidden = view.set("hidden");
+    const visible = view.set("visible");
+    hooks.renderWithoutEffects();
+    expect(occurrenceSelected(later)).toBe(false);
+    invoke(oldChoice, "onClick");
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    invoke(logForm(), "onSubmit", { preventDefault() {} });
+    await Promise.all([hidden, visible]);
+    await hooks.settle();
+    expect(writes()).toHaveLength(0);
+    state.write = unavailable;
+    await click(later);
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(1);
+  });
+
+  it.each(["same-food", "other-food", "new-version"])(
+    "requires a new choice after cancelling and opening %s",
+    async (next) => {
+      const second =
+        next === "new-version"
+          ? { ...food(2), currentVersion: { ...food(2).currentVersion, versionNumber: 2 } }
+          : food(2);
+      const { state, writes } = workspace([food(), second]);
+      await mount();
+      await prepareRepeatedLog();
+      await click(later);
+      const retained = button(later);
+      await click("Cancel");
+      if (next === "same-food") await prepareRepeatedLog();
+      else {
+        await click(next === "new-version" ? "Log pinned v2" : "Log pinned v1", card(second));
+        await change("Local date", "2026-11-01");
+        await change("Local time", "01:30");
+      }
+      invoke(retained, "onClick");
+      await hooks.settle();
+      expect(occurrenceSelected(later)).toBe(false);
+      state.write = unavailable;
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(0);
+    },
+  );
+
+  it("keeps occurrence controls and the new draft editable while an older log is pending", async () => {
+    const pending = deferred<Response>();
+    const { state, writes } = workspace([food()]);
+    await mount();
+    await prepareRepeatedLog();
+    await click(earlier);
+    state.write = () => pending.promise;
+    invoke(logForm(), "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes()).toHaveLength(1);
+    await click(later);
+    await change("Exact quantity", "0.750000");
+    pending.resolve(repeatedReceipt());
+    await hooks.settle();
+    expect(field("Exact quantity").props.value).toBe("0.750000");
+    expect(occurrenceSelected(later)).toBe(true);
+    state.write = unavailable;
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(2);
+    expect(JSON.parse(String(writes()[0]?.[1]?.body)).occurredAt).toBe("2026-11-01T06:30:00.000Z");
+    expect(JSON.parse(String(writes()[1]?.[1]?.body)).occurredAt).toBe("2026-11-01T07:30:00.000Z");
+  });
+
+  it.each(["503", "malformed", "transport"])(
+    "preserves exact unresolved A→B→A operation bodies and headers after %s",
+    async (failure) => {
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareRepeatedLog();
+      state.write = () => {
+        if (failure === "transport") throw new Error("Connection closed");
+        return failure === "malformed" ? Response.json({ data: {} }) : unavailable();
+      };
+      for (const label of [earlier, later, earlier]) {
+        await click(label);
+        await submit("Log exact version");
+      }
+      expect(writes()).toHaveLength(3);
+      const requests = writes().map(([, init]) => ({
+        body: init?.body,
+        headers: [...new Headers(init?.headers)],
+      }));
+      expect(requests[0]).toEqual(requests[2]);
+      expect(requests[0]?.body).not.toBe(requests[1]?.body);
+      expect(new Headers(writes()[0]?.[1]?.headers).get("idempotency-key")).not.toBe(
+        new Headers(writes()[1]?.[1]?.headers).get("idempotency-key"),
+      );
+      expect(field("Exact quantity").props.value).toBe("0.500000");
+    },
+  );
+
+  it.each(["America/Chicago", "America/New_York"])(
+    "requires a fresh occurrence at typed409 confirmation in %s",
+    async (zone) => {
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareRepeatedLog();
+      await click(later);
+      const retained = button(later);
+      state.write = () => {
+        state.timeZone = zone;
+        return Response.json(
+          { error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" },
+          { status: 409 },
+        );
+      };
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+      const nextLabel = zone === "America/Chicago" ? later : "Later occurrence · UTC−05:00";
+      expect(occurrenceSelected(nextLabel)).toBe(false);
+      invoke(retained, "onClick");
+      await hooks.settle();
+      await click("Confirm 2026-11-01 as local day");
+      expect(button("Log exact version").props.disabled).toBe(true);
+      expect(status()).toContain("Choose Earlier or Later");
+      expect(writes()).toHaveLength(1);
+      expect(field("Exact quantity").props.value).toBe("0.500000");
+      expect(field("Local time").props.value).toBe("01:30");
+      await click(nextLabel);
+      await click("Confirm 2026-11-01 as local day");
+      state.write = unavailable;
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      const before = new Headers(writes()[0]?.[1]?.headers);
+      const after = new Headers(writes()[1]?.[1]?.headers);
+      expect(after.get("idempotency-key")).not.toBe(before.get("idempotency-key"));
+      expect(after.get("x-expected-profile-time-zone")).toBe(zone);
+      expect(JSON.parse(String(writes()[1]?.[1]?.body)).occurredAt).toBe(
+        zone === "America/Chicago" ? "2026-11-01T07:30:00.000Z" : "2026-11-01T06:30:00.000Z",
+      );
+      if (zone === "America/Chicago") expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    },
+  );
+});
