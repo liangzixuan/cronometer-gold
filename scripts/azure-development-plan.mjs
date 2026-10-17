@@ -123,8 +123,25 @@ export async function openPlan(path) {
     );
     const digest = async () => {
       const hash = createHash("sha256");
-      for await (const block of handle.createReadStream({ start: 0, autoClose: false }))
-        hash.update(block);
+      const buffer = Buffer.alloc(64 * 1024);
+      let position = 0;
+      try {
+        const length = Number(before.size);
+        while (position < length) {
+          const { bytesRead } = await handle.read(
+            buffer,
+            0,
+            Math.min(buffer.length, length - position),
+            position,
+          );
+          requireValue(bytesRead > 0);
+          hash.update(buffer.subarray(0, bytesRead));
+          position += bytesRead;
+        }
+        requireValue((await handle.read(buffer, 0, 1, position)).bytesRead === 0);
+      } finally {
+        buffer.fill(0);
+      }
       return hash.digest("hex");
     };
     const expected = await digest();
