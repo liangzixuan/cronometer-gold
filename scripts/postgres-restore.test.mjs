@@ -17,6 +17,7 @@ import {
   azureLedgerSettings,
   syntheticOperatorAssemblyFixture,
 } from "./postgres-backup-azure-fixture.mjs";
+import { withOperatorTestEnvironment } from "./postgres-operator-fixture.mjs";
 
 const stateKey = Symbol.for("nutrition.test.localRestore");
 const state = { registrations: 0 };
@@ -240,7 +241,15 @@ const { discoverMigrations } = await import("../packages/db/src/migrator.ts");
 const { EXPORT_ENTITY_SPECS, USER_LINKED_EXPORT_EXCLUSIONS, ERASURE_TABLE_SPECS } = await import(
   "../packages/db/src/retention-privacy-policy.ts"
 );
-const { runPostgresOperator } = await import("./postgres-operator.mjs");
+const { runPostgresOperator: dispatchOperator } = await import("./postgres-operator.mjs");
+async function runPostgresOperator(...args) {
+  const inherited = process.env;
+  try {
+    return await withOperatorTestEnvironment(() => dispatchOperator(...args));
+  } finally {
+    assert.equal(process.env, inherited);
+  }
+}
 hooks.deregister();
 
 function close(child) {

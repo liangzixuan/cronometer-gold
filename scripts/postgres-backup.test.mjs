@@ -12,11 +12,11 @@ import { PassThrough } from "node:stream";
 import test from "node:test";
 import { rootCertificates } from "node:tls";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
 import {
   azureBackupFixture,
   syntheticOperatorAssemblyFixture,
 } from "./postgres-backup-azure-fixture.mjs";
+import { withOperatorTestEnvironment } from "./postgres-operator-fixture.mjs";
 
 const stateKey = Symbol.for("nutrition.test.localBackup");
 const state = {
@@ -339,7 +339,15 @@ const { runPostgresBackup, testedRunTool } = await import("./postgres-backup.mjs
 const { EncryptedPostgresBackupStore, FileRawArtifactStore, AzureBlobRawArtifactStore } =
   await import("nutrition-test:artifact");
 const { parsePostgresBackupEvidence } = await import("./postgres-backup-evidence.mjs");
-const { runPostgresOperator } = await import("./postgres-operator.mjs");
+const { runPostgresOperator: dispatchOperator } = await import("./postgres-operator.mjs");
+async function runPostgresOperator(...args) {
+  const inherited = process.env;
+  try {
+    return await withOperatorTestEnvironment(() => dispatchOperator(...args));
+  } finally {
+    assert.equal(process.env, inherited);
+  }
+}
 hooks.deregister();
 
 async function setup() {
@@ -1243,6 +1251,69 @@ for (const changed of ["pgDump", "pgRestore"]) {
       assert.ok(state.children.every((child) => child.closed));
       assert.deepEqual(await fs.readdir(fixture.temporary), []);
     } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
+for (const name of [
+  "NODE_OPTIONS",
+  "PGHOST",
+  "AZURE_NOURISHING_TEST_SENTINEL",
+  "https_proxy",
+  "SSL_CERT_FILE",
+]) {
+  test("real protected operator rejects contaminated fixture environment " + name, async () => {
+    const fixture = await setup(),
+      azure = azureBackupFixture({ hosted: true });
+    state.azure = azure;
+    const inherited = process.env;
+    try {
+      const assembly = await syntheticOperatorAssemblyFixture(fixture.local);
+      const settings = {
+        ...fixture.options,
+        sourceRevision: assembly.sourceRevision,
+        deploymentTarget: assembly.deploymentTarget,
+        storage: azure.storage("c"),
+        keyRing: {
+          currentKeyId: fixture.options.keyRing.currentKeyId,
+          keys: Object.fromEntries(
+            [...fixture.options.keyRing.keys].map(([id, b]) => [
+              id,
+              Buffer.from(b).toString("base64"),
+            ]),
+          ),
+        },
+      };
+      const document = {
+        schemaVersion: 1,
+        assembly: assembly.binding,
+        operation: "backup",
+        notAfterUtc: new Date(Date.now() + 120000).toISOString(),
+        settings,
+      };
+      const raw = JSON.stringify(document),
+        path = join(fixture.local, "contaminated-operator.json");
+      await fs.writeFile(path, raw, { mode: 0o600, flag: "wx" });
+      await assert.rejects(
+        withOperatorTestEnvironment(
+          () => dispatchOperator(["backup", "--input", path, "--input-sha256", hash(raw)]),
+          { [name]: "synthetic-refuse" },
+        ),
+        (e) => {
+          assert.equal(String(e).includes("synthetic-refuse"), false);
+          return true;
+        },
+      );
+      assert.equal(process.env, inherited);
+      assert.equal(state.calls.length, 0);
+      assert.equal(state.clients.length, 0);
+      assert.equal(azure.requests.length, 0);
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      assert.equal(process.env, inherited);
+      azure.dispose();
+      state.azure = undefined;
       await fixture.dispose();
     }
   });
