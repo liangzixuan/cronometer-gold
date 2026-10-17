@@ -132,3 +132,60 @@ test("rejects duplicate steps, version drift, and extra Terraform inputs", () =>
     );
   }
 });
+
+function assertIndependentSecurityJobs(source) {
+  const quality = workflowJob(source, "quality");
+  const audit = workflowJob(source, "production-dependency-audit");
+  for (const [name, block] of [
+    ["quality", quality],
+    ["production-dependency-audit", audit],
+  ]) {
+    assert.doesNotMatch(
+      block,
+      /^ {4}(?:needs|if|continue-on-error):/mu,
+      `${name} must run independently`,
+    );
+  }
+  assert.doesNotMatch(quality, /pnpm audit:prod/u);
+  const license = workflowStep(quality, "Enforce production license allowlist");
+  assert.match(license, /run: pnpm licenses:check/u);
+  assert.doesNotMatch(license, /^ {8}(?:if|continue-on-error):/mu);
+  const install = workflowStep(audit, "Install locked dependencies");
+  assert.match(install, /pnpm install --frozen-lockfile --strict-peer-dependencies/u);
+  const scan = workflowStep(audit, "Reject high-severity production dependency advisories");
+  assert.match(scan, /run: pnpm audit:prod/u);
+  assert.doesNotMatch(scan, /^ {8}(?:if|continue-on-error):/mu);
+}
+
+test("security results remain failing independently of behavioral and license checks", () => {
+  assertIndependentSecurityJobs(ciWorkflow);
+});
+
+for (const [name, before, after] of [
+  [
+    "quality waits for security",
+    "  quality:\n",
+    "  quality:\n    needs: production-dependency-audit\n",
+  ],
+  [
+    "audit waits for quality",
+    "  production-dependency-audit:\n",
+    "  production-dependency-audit:\n    needs: quality\n",
+  ],
+  [
+    "audit failure ignored",
+    "  production-dependency-audit:\n",
+    "  production-dependency-audit:\n    continue-on-error: true\n",
+  ],
+  ["audit disabled", "        run: pnpm audit:prod", "        run: true"],
+  [
+    "license skipped",
+    "      - name: Enforce production license allowlist\n",
+    "      - name: Enforce production license allowlist\n        if: false\n",
+  ],
+]) {
+  test(`rejects security/behavior coupling: ${name}`, () => {
+    assert.ok(ciWorkflow.includes(before));
+    assert.throws(() => assertIndependentSecurityJobs(ciWorkflow.replace(before, after)));
+  });
+}

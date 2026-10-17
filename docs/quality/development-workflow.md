@@ -126,8 +126,13 @@ The user's October 16, 2026 priority applies to all security findings: keep audi
 and security checks enabled, report their actual failures, and continue product
 work and routine source commits/pushes without another security approval request.
 Security remediation stays at the lowest priority. A red security result is not
-reported as a pass. Separate deployment, spending, credential, destructive-action
-and native-release permissions still apply.
+reported as a pass. CI runs production dependency and object-store vulnerability
+checks in independent failing jobs. Their outcomes do not skip functional,
+persistence, restore or license checks. The database job still verifies the exact
+object-store digest and provenance before startup and keeps its runtime identity,
+private credentials and owned cleanup checks. Image publication and deployment
+retain their separate supply-chain acceptance requirements. Separate deployment,
+spending, credential, destructive-action and native-release permissions still apply.
 
 ## Reliable command and evidence capture
 

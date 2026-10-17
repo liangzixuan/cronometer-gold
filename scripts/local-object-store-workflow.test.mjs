@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import { workflowJob } from "./workflow-contract-helpers.mjs";
+
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 function step(text, name) {
   const marker = `      - name: ${name}\n`;
@@ -15,8 +17,6 @@ function verifyStorageWorkflow(text) {
     "Set up pinned Buildx metadata inspection",
     "Install pinned Cosign for the object-store fixture",
     "Verify the qualified patched object-store image",
-    "Initialize an empty object-store vulnerability-ignore policy",
-    "Reject high or critical object-store vulnerabilities before execution",
     "Prepare private object-store fixture credentials",
     "Validate local service topology",
     "Bootstrap least-privilege private object storage",
@@ -40,11 +40,19 @@ function verifyStorageWorkflow(text) {
   assert.match(ordered[1].text, /cosign-release: v3\.1\.3\n/);
   assert.match(ordered[2].text, /set -euo pipefail/);
   assert.match(ordered[2].text, /node scripts\/prepare-ci-object-store\.mjs verify \| tee/);
+  const security = workflowJob(text, "object-store-vulnerabilities");
+  assert.doesNotMatch(security, /^ {4}(?:if|needs|continue-on-error):/m);
+  const ignore = step(security, "Initialize an empty object-store vulnerability-ignore policy");
+  const scanStep = step(security, "Reject high or critical object-store vulnerabilities");
+  assert.ok(ignore.start < scanStep.start);
+  for (const block of [ignore.text, scanStep.text]) {
+    assert.doesNotMatch(block, /^ {8}(?:if|continue-on-error):/m);
+  }
   assert.match(
-    ordered[3].text,
+    ignore.text,
     /install -m 600 \/dev\/null "\$\{RUNNER_TEMP\}\/object-store\.trivyignore"/,
   );
-  const scan = ordered[4].text;
+  const scan = scanStep.text;
   for (const value of [
     "TRIVY_PLATFORM: linux/arm64",
     "uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
@@ -59,22 +67,23 @@ function verifyStorageWorkflow(text) {
   ])
     assert.ok(scan.includes(value), `missing strict scan setting ${value}`);
   assert.match(ordered[2].text, /GH_TOKEN: \$\{\{ github\.token \}\}/);
-  assert.match(ordered[6].text, /node scripts\/prepare-ci-object-store\.mjs prepare/);
+  assert.match(ordered[4].text, /node scripts\/prepare-ci-object-store\.mjs prepare/);
   assert.match(
-    ordered[7].text,
+    ordered[5].text,
     /docker compose -f infra\/docker\/compose\.yml -f "\$\{RUNNER_TEMP\}\/patched-object-store\.compose\.json" up -d --wait object-store\n/,
   );
-  assert.match(ordered[7].text, /node scripts\/local-object-store\.mjs bootstrap/);
-  assert.match(ordered[7].text, /node scripts\/prepare-ci-object-store\.mjs runtime/);
+  assert.match(ordered[5].text, /node scripts\/local-object-store\.mjs bootstrap/);
+  assert.match(ordered[5].text, /node scripts\/prepare-ci-object-store\.mjs runtime/);
   assert.ok(
-    ordered[7].text.indexOf(" bootstrap") < ordered[7].text.indexOf(" runtime"),
+    ordered[5].text.indexOf(" bootstrap") < ordered[5].text.indexOf(" runtime"),
     "inspect the bootstrapped process before integration tests",
   );
   const database = text.slice(
     text.indexOf("  database:\n"),
     text.indexOf("    steps:\n", text.indexOf("  database:\n")),
   );
-  assert.doesNotMatch(database, /^ {4}(?:if|needs):/m);
+  assert.doesNotMatch(database, /^ {4}(?:if|needs|continue-on-error):/m);
+  assert.doesNotMatch(workflowJob(text, "database"), /trivy-action|object-store\.trivyignore/);
   assert.doesNotMatch(text, /^ {2}storage-image:|cosign sign|docker login/m);
   for (const name of [
     "Exercise encrypted artifact storage with split credentials",
@@ -113,6 +122,21 @@ for (const [name, before, after] of [
     "mutable scan",
     "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30",
     "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store:latest",
+  ],
+  [
+    "security dependency",
+    "  database:\n",
+    "  database:\n    needs: object-store-vulnerabilities\n",
+  ],
+  [
+    "skipped scan job",
+    "  object-store-vulnerabilities:\n",
+    "  object-store-vulnerabilities:\n    if: false\n",
+  ],
+  [
+    "ignored scan failure",
+    "  object-store-vulnerabilities:\n",
+    "  object-store-vulnerabilities:\n    continue-on-error: true\n",
   ],
   ["publisher dependency", "  database:\n", "  database:\n    needs: storage-image\n"],
   ["skipped database", "  database:\n", "  database:\n    if: false\n"],

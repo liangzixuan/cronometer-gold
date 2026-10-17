@@ -168,8 +168,8 @@ for (const [field, value] of [
     assert.throws(() => selectLatestRun([{ ...run("ci.yml"), [field]: value }], "ci.yml", SHA));
   });
 }
-test("requires all three CI, ten container and one browser jobs", () => {
-  assert.equal(jobs("ci.yml").length, 3);
+test("requires all five CI, ten container and one browser jobs", () => {
+  assert.equal(jobs("ci.yml").length, 5);
   assert.equal(jobs("container-supply-chain.yml").length, 10);
   assert.equal(jobs("browserstack-web.yml").length, 1);
   assert.doesNotThrow(() => validateGitHubEvidence(evidence(), context));
@@ -548,3 +548,22 @@ test("manual prepare and activate require the exact trusted source and private r
   assert.match(upload, /retention-days: 1/);
   assert.doesNotMatch(upload, /secrets\.|github-evidence|\.log|qualification/);
 });
+
+for (const securityJob of ["production dependency advisories", "object-store vulnerabilities"]) {
+  for (const failure of ["job-failed", "job-missing", "step-skipped", "step-failed"]) {
+    test(`release acceptance rejects ${securityJob}: ${failure}`, () => {
+      const data = evidence();
+      const ci = data.requiredRuns.find((entry) => entry.workflow === "ci.yml");
+      assert.ok(ci);
+      const job = ci.jobs.find((entry) => entry.name === securityJob);
+      assert.ok(job);
+      if (failure === "job-failed") job.conclusion = "failure";
+      if (failure === "job-missing") ci.jobs = ci.jobs.filter((entry) => entry !== job);
+      const scan = job.steps.at(-1);
+      assert.ok(scan);
+      if (failure === "step-skipped") scan.conclusion = "skipped";
+      if (failure === "step-failed") scan.conclusion = "failure";
+      assert.throws(() => validateGitHubEvidence(data, context));
+    });
+  }
+}

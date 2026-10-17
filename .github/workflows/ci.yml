@@ -90,9 +90,6 @@ jobs:
           NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: ${{ secrets.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON }}
         run: pnpm --filter @nutrition-tracker/mobile ci:release-state
 
-      - name: Reject high-severity production dependency advisories
-        run: pnpm audit:prod
-
       - name: Enforce production license allowlist
         run: pnpm licenses:check
 
@@ -197,27 +194,6 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/prepare-ci-object-store.mjs verify | tee "${RUNNER_TEMP}/object-store-provenance.json"
-
-      - name: Initialize an empty object-store vulnerability-ignore policy
-        run: install -m 600 /dev/null "${RUNNER_TEMP}/object-store.trivyignore"
-
-      - name: Reject high or critical object-store vulnerabilities before execution
-        env:
-          TRIVY_PLATFORM: linux/arm64
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          version: v0.74.0
-          scan-type: image
-          image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30
-          scanners: vuln
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          trivyignores: ${{ runner.temp }}/object-store.trivyignore
-          exit-code: "1"
-          format: table
-          hide-progress: true
-          timeout: 15m
 
       - name: Prepare private object-store fixture credentials
         run: node scripts/local-object-store.mjs prepare
@@ -420,3 +396,61 @@ jobs:
           docker compose -f infra/docker/compose.yml down --volumes --timeout 10 || cleanup_status=$?
           node scripts/local-object-store.mjs cleanup || cleanup_status=$?
           exit "${cleanup_status}"
+
+  production-dependency-audit:
+    name: production dependency advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install locked dependencies
+        run: |
+          test "$(pnpm --version)" = "11.19.0"
+          pnpm install --frozen-lockfile --strict-peer-dependencies
+
+      - name: Reject high-severity production dependency advisories
+        run: pnpm audit:prod
+
+  object-store-vulnerabilities:
+    name: object-store vulnerabilities
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize an empty object-store vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/object-store.trivyignore"
+
+      - name: Reject high or critical object-store vulnerabilities
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: image
+          image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/object-store.trivyignore
+          exit-code: "1"
+          format: table
+          hide-progress: true
+          timeout: 15m

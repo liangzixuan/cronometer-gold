@@ -121,6 +121,7 @@ function assertCiToolchain(source) {
   const jobs = [
     ["quality", workflowJob(source, "quality")],
     ["database", workflowJob(source, "database")],
+    ["production-dependency-audit", workflowJob(source, "production-dependency-audit")],
   ];
 
   for (const [name, job] of jobs) {
@@ -144,23 +145,23 @@ function assertCiToolchain(source) {
   const lines = source.split("\n");
   assert.deepEqual(
     lines.filter((line) => line.toLowerCase().includes("pnpm/action-setup")),
-    [pnpmUseLine, pnpmUseLine],
-    "CI must contain exactly the two reviewed pnpm setup references",
+    [pnpmUseLine, pnpmUseLine, pnpmUseLine],
+    "CI must contain exactly the three reviewed pnpm setup references",
   );
   assert.deepEqual(
     lines.filter((line) => line.toLowerCase().includes("actions/setup-node")),
-    [setupNodeUseLine, setupNodeUseLine],
-    "CI must contain exactly the two reviewed Node setup references",
+    [setupNodeUseLine, setupNodeUseLine, setupNodeUseLine],
+    "CI must contain exactly the three reviewed Node setup references",
   );
   assert.deepEqual(
     lines.filter((line) => line.trimStart().startsWith("node-version:")),
-    [nodeVersionLine, nodeVersionLine],
-    "CI must contain only the two reviewed Node 22 selections",
+    [nodeVersionLine, nodeVersionLine, nodeVersionLine],
+    "CI must contain only the three reviewed Node 22 selections",
   );
   assert.deepEqual(
     lines.filter((line) => line.includes("pnpm install")),
-    [installRunLine, installRunLine],
-    "CI must contain only the two reviewed frozen installs",
+    [installRunLine, installRunLine, installRunLine],
+    "CI must contain only the three reviewed frozen installs",
   );
   assert.deepEqual(
     continuationNormalizedLines(source).filter((line) => isPackageManagerOverride(line, true)),
