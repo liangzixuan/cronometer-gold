@@ -63,6 +63,7 @@ describe("hosted development captured email", () => {
 
   it("selects the exact HTTPS origin while retaining loopback captured SMTP", () => {
     expect(loadApiDependencyConfig(environment).emailVerification).toEqual({
+      transport: "smtp",
       profile: HOSTED_DEVELOPMENT_PROFILE,
       from: environment.SMTP_FROM,
       host: "127.0.0.1",
@@ -214,6 +215,7 @@ describe("loadApiDependencyConfig", () => {
         SMTP_PORT: "1025",
       }).emailVerification,
     ).toEqual({
+      transport: "smtp",
       from: "Nutrition Tracker Local <no-reply@nutrition.local>",
       host: "127.0.0.1",
       nodeEnv: "development",
@@ -404,5 +406,103 @@ describe("loadApiDependencyConfig", () => {
         ]),
       }),
     );
+  });
+});
+
+describe("hosted development HTTPS capture configuration", () => {
+  const captureCA =
+    "-----BEGIN CERTIFICATE-----\nMIIDNTCCAh2gAwIBAgIUfhGNwiFK+WISIjNgIwuS6PE1nHIwDQYJKoZIhvcNAQEL\nBQAwKjEoMCYGA1UEAwwfTm91cmlzaGluZy1TeW50aGV0aWMtQ2FwdHVyZS1DQTAe\nFw0yNjEwMDkwNjQzNTRaFw0yNjEwMTAwNjQzNTRaMCoxKDAmBgNVBAMMH05vdXJp\nc2hpbmctU3ludGhldGljLUNhcHR1cmUtQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IB\nDwAwggEKAoIBAQCbRVy+5ToKMriZSKAo7Ch4sikx06eNU6WMY8xDYmLt32zyDnlY\n8mnAG3jewra45Ea1Si6a7QciE5eC8Rzk2JV+hzbQiTIlL5Ejnp/LdT+b1WbpCz3U\nuZQaG7fMyEjzUdj0DhHfBJ+CF5Abg3iv1U4Zg0BfhkH+w9QgtNBtmbDRScfkUje7\n4k7lnFrHAIJkHPuhQjJvGhUuAJCrjQP2RTLlkKcWPS218Pt/4hWpfwlii+6HEYmA\n3KJ9ff4PV2FhUcIQzT6py8KpIuNlsWVegRvFSKHEoPmFpFLkf+9mqOb9duM8r+FV\nbKaGepfItHkVk/hf+xxBs6I4npBqmxEw72OtAgMBAAGjUzBRMB0GA1UdDgQWBBRN\nss4zzgKX3/G9hCeLdoLrSF/CdTAfBgNVHSMEGDAWgBRNss4zzgKX3/G9hCeLdoLr\nSF/CdTAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQBswJHuTrRI\nftcr2Mscper809Mx+5+YmP8wFJkx4CJkcX3JqkbBpO06+XszYnB3kWZjzRUv83xW\nlY3SF020kDHqD9RVZQIlsRPhNDgnXqmTNE4b0pVpF5F7qySKIYjy0lWeXS2DQWpn\nW0i38lTd84DuUxpl03w+fID2mBH70q0M1msWWvf+8/g1Fi7uN0FcPXmWcs5UtFIb\nK0Lbcc0eBuhe4Pzs7r2ogsw70ZzC3CyX/hz6ng0qM0GRegVA0rP7nUOyzYBBd+av\ntdlWPpUmhva+nINSDIycXFiKBK7o8kLzJNCFZAOugDbBhWx3vzTqXc5Yxggax1GP\nKs7AegrIAInt\n-----END CERTIFICATE-----\n";
+  const environment: NodeJS.ProcessEnv = {
+    DATABASE_URL: "postgresql://synthetic.invalid/nutrition",
+    NOURISHING_API_PROFILE: HOSTED_DEVELOPMENT_PROFILE,
+    NODE_ENV: "development",
+    EMAIL_DELIVERY_TRANSPORT: "https-capture",
+    EMAIL_CAPTURE_URL: "https://mail-capture:8025/api/v1/send",
+    EMAIL_CAPTURE_CA: captureCA,
+    EMAIL_CAPTURE_USERNAME: "capture-send",
+    EMAIL_CAPTURE_PASSWORD: "synthetic-send-secret-0123456789abcdef",
+    EMAIL_CAPTURE_FROM: "Nourishing Development <no-reply@example.invalid>",
+    EMAIL_CAPTURE_TIMEOUT_MS: "1000",
+    EMAIL_VERIFICATION_PUBLIC_ORIGIN: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+    PASSWORD_RECOVERY_PUBLIC_ORIGIN: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+  };
+
+  it("selects explicit HTTPS capture without loopback SMTP", () => {
+    expect(loadApiDependencyConfig(environment).emailVerification).toEqual({
+      transport: "https-capture",
+      profile: HOSTED_DEVELOPMENT_PROFILE,
+      nodeEnv: "development",
+      captureUrl: environment.EMAIL_CAPTURE_URL,
+      ca: captureCA,
+      username: environment.EMAIL_CAPTURE_USERNAME,
+      password: environment.EMAIL_CAPTURE_PASSWORD,
+      from: environment.EMAIL_CAPTURE_FROM,
+      timeoutMs: 1000,
+      publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+      passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+    });
+  });
+
+  it.each([
+    "NOURISHING_API_PROFILE",
+    "NODE_ENV",
+    "EMAIL_DELIVERY_TRANSPORT",
+    "EMAIL_CAPTURE_URL",
+    "EMAIL_CAPTURE_CA",
+    "EMAIL_CAPTURE_USERNAME",
+    "EMAIL_CAPTURE_PASSWORD",
+    "EMAIL_CAPTURE_FROM",
+    "EMAIL_CAPTURE_TIMEOUT_MS",
+    "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+    "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+  ])("requires owned explicit %s", (field) => {
+    const missing = { ...environment };
+    delete missing[field];
+    expect(() => loadApiDependencyConfig(missing)).toThrow(ConfigValidationError);
+    Object.setPrototypeOf(missing, { [field]: environment[field] });
+    expect(() => loadApiDependencyConfig(missing)).toThrow(ConfigValidationError);
+  });
+
+  it.each<NodeJS.ProcessEnv>([
+    { NODE_ENV: "production" },
+    { NODE_ENV: "test" },
+    { NOURISHING_API_PROFILE: "other" },
+    { EMAIL_DELIVERY_TRANSPORT: "smtp" },
+    { EMAIL_CAPTURE_URL: "http://mail-capture:8025/api/v1/send" },
+    { EMAIL_CAPTURE_URL: "https://mail-capture:8025/api/v1/send/" },
+    { EMAIL_CAPTURE_URL: "https://other.invalid:8025/api/v1/send" },
+    { EMAIL_CAPTURE_URL: "https://mail-capture:8025/api/v1/send?secret=hidden" },
+    { EMAIL_CAPTURE_CA: "" },
+    { EMAIL_CAPTURE_CA: "private-ca-value-must-not-leak" },
+    { EMAIL_CAPTURE_USERNAME: "send:read" },
+    { EMAIL_CAPTURE_USERNAME: "send\r\nAuthorization: invalid" },
+    { EMAIL_CAPTURE_PASSWORD: "" },
+    { EMAIL_CAPTURE_PASSWORD: "short" },
+    { EMAIL_CAPTURE_PASSWORD: "x".repeat(257) },
+    { EMAIL_CAPTURE_FROM: "no-reply@example.invalid\r\nBcc: other@example.invalid" },
+    { EMAIL_CAPTURE_TIMEOUT_MS: "99" },
+    { EMAIL_CAPTURE_TIMEOUT_MS: "10001" },
+    { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://localhost:3443/" },
+    { PASSWORD_RECOVERY_PUBLIC_ORIGIN: "https://other.invalid" },
+    { SMTP_HOST: "127.0.0.1" },
+    { SMTP_PORT: "1025" },
+    { SMTP_FROM: "no-reply@example.invalid" },
+    { SMTP_TIMEOUT_MS: "1000" },
+  ])("rejects unsafe or mixed capture configuration %#", (overrides) => {
+    expect(() => loadApiDependencyConfig({ ...environment, ...overrides })).toThrow(
+      ConfigValidationError,
+    );
+  });
+
+  it("reports only configuration field names, excluding private inputs", () => {
+    const privateValue = "private-ca-value-must-not-leak";
+    try {
+      loadApiDependencyConfig({ ...environment, EMAIL_CAPTURE_CA: privateValue });
+      throw new Error("expected rejection");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError);
+      expect(JSON.stringify(error)).not.toContain(privateValue);
+      expect((error as Error).message).not.toContain(environment.EMAIL_CAPTURE_PASSWORD);
+    }
   });
 });

@@ -14,6 +14,10 @@ import {
 } from "@nutrition-tracker/contracts";
 import { MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES } from "@nutrition-tracker/db";
 import { z } from "zod";
+import {
+  type HostedMailpitEmailDeliveryOptions,
+  validateHostedMailpitEmailDeliveryOptions,
+} from "./modules/auth/email-delivery.js";
 
 const environmentSchema = z.object({
   API_HOST: z.string().trim().min(1).default("127.0.0.1"),
@@ -112,6 +116,13 @@ const dependencyEnvironmentSchema = z.object({
   SEARCH_DB_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(4),
   SEARCH_DB_MAX_QUEUE: z.coerce.number().int().min(0).max(100).default(16),
   SEARCH_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(10).max(60_000).default(5_000),
+  EMAIL_DELIVERY_TRANSPORT: z.literal("https-capture").optional(),
+  EMAIL_CAPTURE_URL: z.string().max(256).optional(),
+  EMAIL_CAPTURE_CA: z.string().max(65536).optional(),
+  EMAIL_CAPTURE_USERNAME: z.string().max(128).optional(),
+  EMAIL_CAPTURE_PASSWORD: z.string().max(256).optional(),
+  EMAIL_CAPTURE_FROM: z.string().min(3).max(200).optional(),
+  EMAIL_CAPTURE_TIMEOUT_MS: z.coerce.number().int().min(100).max(10000).optional(),
   SMTP_FROM: z.string().trim().min(3).max(200).optional(),
   SMTP_HOST: z.string().trim().min(1).max(253).optional(),
   SMTP_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
@@ -157,7 +168,17 @@ export interface ApiDependencyConfig {
   readonly retention: ApiRetentionDependencyConfig | null;
 }
 
-export interface ApiEmailVerificationDependencyConfig {
+export type ApiEmailVerificationDependencyConfig =
+  | ApiSmtpEmailDependencyConfig
+  | (HostedMailpitEmailDeliveryOptions & {
+      readonly transport: "https-capture";
+      readonly nodeEnv: "development";
+      readonly publicOrigin: string;
+      readonly passwordRecoveryPublicOrigin: string;
+    });
+
+export interface ApiSmtpEmailDependencyConfig {
+  readonly transport: "smtp";
   readonly profile?: typeof HOSTED_DEVELOPMENT_PROFILE;
   readonly from: string;
   readonly host: "127.0.0.1";
@@ -307,75 +328,142 @@ export function loadApiDependencyConfig(
       message: "Hosted development requires an explicit development mode and profile",
     });
   }
-  const emailEnvironmentFields = [
-    "SMTP_HOST",
-    "SMTP_PORT",
-    "SMTP_FROM",
-    "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
-    "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+
+  const captureEnvironmentFields = [
+    "EMAIL_DELIVERY_TRANSPORT",
+    "EMAIL_CAPTURE_URL",
+    "EMAIL_CAPTURE_CA",
+    "EMAIL_CAPTURE_USERNAME",
+    "EMAIL_CAPTURE_PASSWORD",
+    "EMAIL_CAPTURE_FROM",
+    "EMAIL_CAPTURE_TIMEOUT_MS",
   ] as const;
-  if (profile !== undefined) {
-    for (const field of emailEnvironmentFields) {
+  const captureConfigured = captureEnvironmentFields.some(
+    (field) => environment[field] !== undefined,
+  );
+  let emailVerification: ApiEmailVerificationDependencyConfig | null = null;
+  if (captureConfigured) {
+    for (const field of [
+      ...captureEnvironmentFields,
+      "NOURISHING_API_PROFILE",
+      "NODE_ENV",
+      "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+      "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+    ]) {
       if (!Object.hasOwn(environment, field) || environment[field] === undefined) {
-        issues.push({ field, message: "Hosted development requires explicit mail configuration" });
+        issues.push({ field, message: "HTTPS capture requires explicit owned configuration" });
       }
     }
-  }
-  const emailEnvironmentConfigured =
-    profile !== undefined ||
-    emailEnvironmentFields.some((field) => environment[field] !== undefined);
-  let emailVerification: ApiEmailVerificationDependencyConfig | null = null;
-  if (emailEnvironmentConfigured) {
-    if (result.data.NODE_ENV === "production") {
-      issues.push({ field: "SMTP_HOST", message: "Production email provider is not approved" });
-    } else {
-      if (result.data.SMTP_HOST !== "127.0.0.1") {
-        issues.push({ field: "SMTP_HOST", message: "Exact loopback Mailpit host is required" });
+    for (const field of ["SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_TIMEOUT_MS"]) {
+      if (environment[field] !== undefined) {
+        issues.push({ field, message: "Mixed SMTP and HTTPS capture configuration is forbidden" });
       }
-      if (result.data.SMTP_PORT !== 1025) {
-        issues.push({ field: "SMTP_PORT", message: "Exact loopback Mailpit port is required" });
+    }
+    const options = {
+      profile: result.data.NOURISHING_API_PROFILE,
+      nodeEnv: result.data.NODE_ENV,
+      captureUrl: result.data.EMAIL_CAPTURE_URL,
+      ca: result.data.EMAIL_CAPTURE_CA,
+      username: result.data.EMAIL_CAPTURE_USERNAME,
+      password: result.data.EMAIL_CAPTURE_PASSWORD,
+      from: result.data.EMAIL_CAPTURE_FROM,
+      timeoutMs: result.data.EMAIL_CAPTURE_TIMEOUT_MS,
+    };
+    try {
+      if (result.data.EMAIL_DELIVERY_TRANSPORT !== "https-capture") {
+        throw new Error("Explicit capture selection is required");
       }
-      if (!result.data.SMTP_FROM || !safeMailFrom(result.data.SMTP_FROM)) {
-        issues.push({ field: "SMTP_FROM", message: "A safe local sender is required" });
-      }
-      const defaultOrigin = profile === undefined ? "http://127.0.0.1:3000" : "";
-      const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? defaultOrigin;
-      const passwordRecoveryPublicOrigin =
-        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN ?? defaultOrigin;
-      const validOrigin = (value: string) =>
-        profile === HOSTED_DEVELOPMENT_PROFILE
-          ? value === HOSTED_DEVELOPMENT_WEB_ORIGIN
-          : isExactLoopbackOrigin(value);
-      if (!validOrigin(publicOrigin)) {
-        issues.push({
-          field: "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
-          message: "The exact email verification origin for the selected profile is required",
-        });
-      }
-      if (!validOrigin(passwordRecoveryPublicOrigin)) {
-        issues.push({
-          field: "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
-          message: "The exact password recovery origin for the selected profile is required",
-        });
-      }
+      validateHostedMailpitEmailDeliveryOptions(options as HostedMailpitEmailDeliveryOptions);
       if (
-        result.data.SMTP_HOST === "127.0.0.1" &&
-        result.data.SMTP_PORT === 1025 &&
-        result.data.SMTP_FROM &&
-        safeMailFrom(result.data.SMTP_FROM) &&
-        validOrigin(publicOrigin) &&
-        validOrigin(passwordRecoveryPublicOrigin)
+        result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN !== HOSTED_DEVELOPMENT_WEB_ORIGIN ||
+        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN !== HOSTED_DEVELOPMENT_WEB_ORIGIN
       ) {
-        emailVerification = {
-          ...(profile === undefined ? {} : { profile }),
-          from: result.data.SMTP_FROM,
-          host: result.data.SMTP_HOST,
-          nodeEnv: result.data.NODE_ENV,
-          port: result.data.SMTP_PORT,
-          publicOrigin,
-          passwordRecoveryPublicOrigin,
-          timeoutMs: result.data.SMTP_TIMEOUT_MS,
-        };
+        throw new Error("Exact hosted origins are required");
+      }
+      emailVerification = {
+        ...(options as HostedMailpitEmailDeliveryOptions),
+        nodeEnv: "development",
+        transport: "https-capture",
+        publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+        passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+      };
+    } catch {
+      issues.push({ field: "EMAIL_CAPTURE", message: "Invalid hosted development HTTPS capture" });
+    }
+  } else {
+    const emailEnvironmentFields = [
+      "SMTP_HOST",
+      "SMTP_PORT",
+      "SMTP_FROM",
+      "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+      "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+    ] as const;
+    if (profile !== undefined) {
+      for (const field of emailEnvironmentFields) {
+        if (!Object.hasOwn(environment, field) || environment[field] === undefined) {
+          issues.push({
+            field,
+            message: "Hosted development requires explicit mail configuration",
+          });
+        }
+      }
+    }
+    const emailEnvironmentConfigured =
+      profile !== undefined ||
+      emailEnvironmentFields.some((field) => environment[field] !== undefined);
+    if (emailEnvironmentConfigured) {
+      if (result.data.NODE_ENV === "production") {
+        issues.push({ field: "SMTP_HOST", message: "Production email provider is not approved" });
+      } else {
+        if (result.data.SMTP_HOST !== "127.0.0.1") {
+          issues.push({ field: "SMTP_HOST", message: "Exact loopback Mailpit host is required" });
+        }
+        if (result.data.SMTP_PORT !== 1025) {
+          issues.push({ field: "SMTP_PORT", message: "Exact loopback Mailpit port is required" });
+        }
+        if (!result.data.SMTP_FROM || !safeMailFrom(result.data.SMTP_FROM)) {
+          issues.push({ field: "SMTP_FROM", message: "A safe local sender is required" });
+        }
+        const defaultOrigin = profile === undefined ? "http://127.0.0.1:3000" : "";
+        const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? defaultOrigin;
+        const passwordRecoveryPublicOrigin =
+          result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN ?? defaultOrigin;
+        const validOrigin = (value: string) =>
+          profile === HOSTED_DEVELOPMENT_PROFILE
+            ? value === HOSTED_DEVELOPMENT_WEB_ORIGIN
+            : isExactLoopbackOrigin(value);
+        if (!validOrigin(publicOrigin)) {
+          issues.push({
+            field: "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+            message: "The exact email verification origin for the selected profile is required",
+          });
+        }
+        if (!validOrigin(passwordRecoveryPublicOrigin)) {
+          issues.push({
+            field: "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+            message: "The exact password recovery origin for the selected profile is required",
+          });
+        }
+        if (
+          result.data.SMTP_HOST === "127.0.0.1" &&
+          result.data.SMTP_PORT === 1025 &&
+          result.data.SMTP_FROM &&
+          safeMailFrom(result.data.SMTP_FROM) &&
+          validOrigin(publicOrigin) &&
+          validOrigin(passwordRecoveryPublicOrigin)
+        ) {
+          emailVerification = {
+            transport: "smtp",
+            ...(profile === undefined ? {} : { profile }),
+            from: result.data.SMTP_FROM,
+            host: result.data.SMTP_HOST,
+            nodeEnv: result.data.NODE_ENV,
+            port: result.data.SMTP_PORT,
+            publicOrigin,
+            passwordRecoveryPublicOrigin,
+            timeoutMs: result.data.SMTP_TIMEOUT_MS,
+          };
+        }
       }
     }
   }

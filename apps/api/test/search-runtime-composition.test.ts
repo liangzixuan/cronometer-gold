@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   createApiRetentionArtifactRuntime: vi.fn(),
   createDatabaseFromEnvironment: vi.fn(),
   localMailpitEmailDelivery: vi.fn(),
+  hostedMailpitEmailDelivery: vi.fn(),
   databaseAuthRepository: vi.fn(),
   databaseBackedFoodSearchService: vi.fn(),
   databaseDiaryService: vi.fn(),
@@ -57,6 +58,11 @@ vi.mock("../src/modules/auth/auth-service.js", () => ({
 }));
 
 vi.mock("../src/modules/auth/email-delivery.js", () => ({
+  HostedMailpitEmailDelivery: class {
+    constructor(options: unknown) {
+      mocks.hostedMailpitEmailDelivery(options);
+    }
+  },
   LocalMailpitEmailDelivery: class {
     constructor(options: unknown) {
       mocks.localMailpitEmailDelivery(options);
@@ -184,6 +190,76 @@ beforeEach(() => {
 });
 
 describe("API dependency runtime composition", () => {
+  it("composes HTTPS capture for both auth flows without constructing SMTP", async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    mocks.createDatabaseFromEnvironment.mockReturnValue({ destroy });
+    const emailVerification: NonNullable<ApiDependencyConfig["emailVerification"]> = {
+      transport: "https-capture" as const,
+      profile: HOSTED_DEVELOPMENT_PROFILE,
+      nodeEnv: "development" as const,
+      captureUrl: "https://mail-capture:8025/api/v1/send",
+      ca: "synthetic validated CA",
+      username: "capture-send",
+      password: "synthetic-send-secret-0123456789abcdef",
+      from: "no-reply@example.invalid",
+      timeoutMs: 1000,
+      publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+      passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+    };
+    const runtime = await createApiSearchRuntime(
+      { NODE_ENV: "development" },
+      {
+        ...dependencyConfig(),
+        retention: null,
+        emailVerification,
+      },
+    );
+    try {
+      expect(mocks.hostedMailpitEmailDelivery).toHaveBeenCalledExactlyOnceWith(emailVerification);
+      expect(mocks.localMailpitEmailDelivery).not.toHaveBeenCalled();
+      const auth = mocks.secureAuthService.mock.calls[0]?.[0];
+      expect(auth.emailVerificationDelivery).toBe(auth.passwordRecoveryDelivery);
+      expect(auth.emailVerificationPublicOrigin).toBe(HOSTED_DEVELOPMENT_WEB_ORIGIN);
+      expect(auth.passwordRecoveryPublicOrigin).toBe(HOSTED_DEVELOPMENT_WEB_ORIGIN);
+    } finally {
+      await runtime.close();
+    }
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes composition after capture constructor failure without SMTP fallback", async () => {
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    mocks.createDatabaseFromEnvironment.mockReturnValue({ destroy });
+    mocks.hostedMailpitEmailDelivery.mockImplementationOnce(() => {
+      throw new Error("synthetic rejected capture configuration");
+    });
+    await expect(
+      createApiSearchRuntime(
+        { NODE_ENV: "development" },
+        {
+          ...dependencyConfig(),
+          retention: null,
+          emailVerification: {
+            transport: "https-capture",
+            profile: HOSTED_DEVELOPMENT_PROFILE,
+            nodeEnv: "development",
+            captureUrl: "https://mail-capture:8025/api/v1/send",
+            ca: "synthetic validated CA",
+            username: "capture-send",
+            password: "synthetic-send-secret-0123456789abcdef",
+            from: "no-reply@example.invalid",
+            timeoutMs: 1000,
+            publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+            passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+          },
+        },
+      ),
+    ).rejects.toThrow("synthetic rejected capture configuration");
+    expect(mocks.localMailpitEmailDelivery).not.toHaveBeenCalled();
+    expect(mocks.secureAuthService).not.toHaveBeenCalled();
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates the validated hosted email profile and exact origins", async () => {
     const destroy = vi.fn().mockResolvedValue(undefined);
     mocks.createDatabaseFromEnvironment.mockReturnValue({ destroy });
@@ -191,6 +267,7 @@ describe("API dependency runtime composition", () => {
       ...dependencyConfig(),
       retention: null,
       emailVerification: {
+        transport: "smtp",
         profile: HOSTED_DEVELOPMENT_PROFILE,
         from: "Nourishing Development <no-reply@example.invalid>",
         host: "127.0.0.1",
@@ -237,6 +314,7 @@ describe("API dependency runtime composition", () => {
     const config = {
       ...dependencyConfig(),
       emailVerification: {
+        transport: "smtp",
         from: "Nutrition Tracker Local <no-reply@nutrition.local>",
         host: "127.0.0.1",
         nodeEnv: "test",

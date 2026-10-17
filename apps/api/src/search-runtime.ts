@@ -9,7 +9,10 @@ import type { ApiDependencyConfig } from "./config.js";
 import { DatabaseDayNoteService } from "./day-note-persistence-service.js";
 import type { ActivityService } from "./modules/activity/activity.routes.js";
 import { type AuthService, SecureAuthService } from "./modules/auth/auth-service.js";
-import { LocalMailpitEmailDelivery } from "./modules/auth/email-delivery.js";
+import {
+  HostedMailpitEmailDelivery,
+  LocalMailpitEmailDelivery,
+} from "./modules/auth/email-delivery.js";
 import type { DayNoteService } from "./modules/diary/day-note.routes.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import { DatabaseBackedFoodSearchService } from "./modules/foods/search-service.js";
@@ -84,16 +87,18 @@ export async function createApiSearchRuntime(
 
   try {
     const localEmailDelivery = config.emailVerification
-      ? new LocalMailpitEmailDelivery({
-          ...(config.emailVerification.profile === undefined
-            ? {}
-            : { profile: config.emailVerification.profile }),
-          from: config.emailVerification.from,
-          host: config.emailVerification.host,
-          nodeEnv: config.emailVerification.nodeEnv,
-          port: config.emailVerification.port,
-          timeoutMs: config.emailVerification.timeoutMs,
-        })
+      ? config.emailVerification.transport === "https-capture"
+        ? new HostedMailpitEmailDelivery(config.emailVerification)
+        : new LocalMailpitEmailDelivery({
+            ...(config.emailVerification.profile === undefined
+              ? {}
+              : { profile: config.emailVerification.profile }),
+            from: config.emailVerification.from,
+            host: config.emailVerification.host,
+            nodeEnv: config.emailVerification.nodeEnv,
+            port: config.emailVerification.port,
+            timeoutMs: config.emailVerification.timeoutMs,
+          })
       : null;
     const authService = new SecureAuthService({
       repository: new DatabaseAuthRepository(database),

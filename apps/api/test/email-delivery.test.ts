@@ -209,7 +209,7 @@ describe("captured email profile boundaries", () => {
         EMAIL_VERIFICATION_PUBLIC_ORIGIN: origin,
         PASSWORD_RECOVERY_PUBLIC_ORIGIN: origin,
       }).emailVerification;
-      if (!email) throw new Error("Expected selected captured email");
+      if (!email || email.transport !== "smtp") throw new Error("Expected selected captured SMTP");
       const delivery = new LocalMailpitEmailDelivery(email);
       const repository: AuthRepository = {
         confirmEmailVerificationToken: vi.fn(async () => undefined),
