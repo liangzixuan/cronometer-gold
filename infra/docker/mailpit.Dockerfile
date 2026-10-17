@@ -76,8 +76,8 @@ RUN node /review/scripts/verify-mailpit-build.mjs notices /go-evidence /evidence
 FROM ${GO_IMAGE} AS rootfs
 ADD --checksum=sha256:81a2c508dcdb3295196e6a8987274e3bc3487f99ad8d18e985f20bb2c336b5e6 \
     https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/ca-certificates-bundle-20260909-r0.apk /tmp/ca.apk
-ADD --checksum=sha256:361f751cc2100ff7c979372e9ac0a93bd932ac58580bb723df2ecbea36b96baf \
-    https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/tzdata-2026d-r0.apk /tmp/tz.apk
+ADD --checksum=sha256:fd091890b7042a28126f7312cdf531bdf9048b04f21d92e50d063590bcfa7bec \
+    https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/tzdata-2026e-r0.apk /tmp/tz.apk
 RUN set -eux; apk add --no-cache --no-network /tmp/ca.apk /tmp/tz.apk; \
     mkdir -p /rootfs/etc/ssl/certs /rootfs/usr/share /rootfs/data /rootfs/tmp /rootfs/home/mailpit; \
     cp /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/certs/; \
