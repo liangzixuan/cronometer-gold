@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import * as processTools from "./postgres-operator-process.mjs";
 
 const hash = (value) => createHash("sha256").update(value).digest("hex");
-const tool = { path: process.execPath, sha256: hash(await readFile(process.execPath)) };
 
 async function fixture(work) {
   const directory = await mkdtemp(join(homedir(), "nourishing-stderr-test-"));
   await chmod(directory, 0o700);
   try {
-    await work(directory);
+    const tool = { path: join(directory, "node"), sha256: hash(await readFile(process.execPath)) };
+    await copyFile(process.execPath, tool.path);
+    await chmod(tool.path, 0o500);
+    await work(directory, tool);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -34,7 +36,7 @@ test("diagnostic callback shares the existing fixed byte ceiling", () => {
 });
 
 test("diagnostic callback receives exact isolated bytes while the receipt retains their hash", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     const chunks = [];
     const result = await processTools.runTool(
       tool,
@@ -59,7 +61,7 @@ test("diagnostic callback receives exact isolated bytes while the receipt retain
   }));
 
 test("empty diagnostics make no callback and retain the empty digest", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     let calls = 0;
     const result = await processTools.runTool(
       tool,
@@ -77,7 +79,7 @@ test("empty diagnostics make no callback and retain the empty digest", () =>
   }));
 
 test("omitting the callback preserves diagnostic counts without returning raw bytes", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     const result = await processTools.runTool(
       tool,
       ["-e", 'process.stderr.write("private synthetic diagnostic"); process.stdout.write("ok")'],
@@ -93,7 +95,7 @@ test("omitting the callback preserves diagnostic counts without returning raw by
   }));
 
 test("failed child diagnostics reach the callback while the public error stays redacted", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     const chunks = [];
     await assert.rejects(
       processTools.runTool(
@@ -114,7 +116,7 @@ test("failed child diagnostics reach the callback while the public error stays r
   }));
 
 test("invalid diagnostic callbacks refuse before child dispatch or output creation", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     const outputPath = join(directory, "output");
     const started = join(directory, "started");
     for (const onStderr of [null, 42, {}, "callback"]) {
@@ -131,7 +133,7 @@ test("invalid diagnostic callbacks refuse before child dispatch or output creati
   }));
 
 test("callback failure rejects after the owned child group has terminated", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     const pidPath = join(directory, "descendant-pid");
     const program = `
       const {spawn} = require("node:child_process");
@@ -165,7 +167,7 @@ test("callback failure rejects after the owned child group has terminated", () =
   }));
 
 test("diagnostics at the exact existing ceiling are fully delivered and hashed", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     const chunks = [];
     const result = await processTools.runTool(
       tool,
@@ -183,7 +185,7 @@ test("diagnostics at the exact existing ceiling are fully delivered and hashed",
   }));
 
 test("diagnostic overflow still fails and forwards no bytes above the existing ceiling", () =>
-  fixture(async (directory) => {
+  fixture(async (directory, tool) => {
     let received = 0;
     await assert.rejects(
       processTools.runTool(
@@ -198,3 +200,38 @@ test("diagnostic overflow still fails and forwards no bytes above the existing c
     );
     assert.ok(received <= 65536);
   }));
+
+for (const refusal of ["writable ancestor", "incorrect digest"]) {
+  test(`tool admission still rejects ${refusal} before output or callback`, () =>
+    fixture(async (directory, tool) => {
+      const parent = join(directory, "refused-tool");
+      await mkdir(parent, { mode: 0o700 });
+      const path = join(parent, "node");
+      await copyFile(tool.path, path);
+      await chmod(path, 0o500);
+      if (refusal === "writable ancestor") await chmod(parent, 0o770);
+      const candidate = {
+        path,
+        sha256: refusal === "incorrect digest" ? "0".repeat(64) : tool.sha256,
+      };
+      const started = join(directory, "started");
+      const outputPath = join(directory, "output");
+      let calls = 0;
+      await assert.rejects(
+        processTools.runTool(
+          candidate,
+          ["-e", 'require("node:fs").writeFileSync(process.argv[1], "started")', started],
+          options(directory, {
+            outputPath,
+            onStderr() {
+              calls++;
+            },
+          }),
+        ),
+        { message: "PostgreSQL local backup configuration failed" },
+      );
+      assert.equal(calls, 0);
+      await assert.rejects(readFile(outputPath), { code: "ENOENT" });
+      await assert.rejects(readFile(started), { code: "ENOENT" });
+    }));
+}
