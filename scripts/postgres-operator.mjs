@@ -241,8 +241,8 @@ function parseArguments(args) {
 }
 
 const recoverySources = [
-  "infra/development/azure/runtime-assembly.py",
-  "infra/development/azure/runtime-installation-storage.py",
+  "infra/development/azure/storage-recovery-assembly.py",
+  "infra/development/azure/storage-recovery-context.py",
   "infra/development/azure/storage-acquisition.py",
   "scripts/postgres-operator.mjs",
 ];

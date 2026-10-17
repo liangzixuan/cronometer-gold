@@ -181,8 +181,8 @@ export async function syntheticOperatorAssemblyFixture(parent) {
   });
   const sourceFiles = Object.fromEntries(
     [
-      "infra/development/azure/runtime-assembly.py",
-      "infra/development/azure/runtime-installation-storage.py",
+      "infra/development/azure/storage-recovery-assembly.py",
+      "infra/development/azure/storage-recovery-context.py",
       "infra/development/azure/storage-acquisition.py",
       "scripts/postgres-operator.mjs",
     ].map((p) => [p, { path: "/synthetic/source/" + p, sha256: "0".repeat(64) }]),

@@ -526,9 +526,10 @@ class RepairTests(unittest.TestCase):
             self.assertEqual(len(T.validate_phases(d,"plan",expected,NOW)),8)
 
 
-def gateway_main(context=False):
+def gateway_main(context=False, assembly=False):
     import sys
-    consumer=module("recovery_context_gateway",ROOT/"storage-recovery-context.py") if context else None
+    consumer=(module("recovery_assembly_gateway",ROOT/"storage-recovery-assembly.py") if assembly else
+              module("recovery_context_gateway",ROOT/"storage-recovery-context.py") if context else None)
     G=consumer.Q if consumer else T
     clock=datetime.fromisoformat(os.environ["NOURISHING_TEST_CLOCK"])
     class FixedDateTime(datetime):
@@ -550,9 +551,12 @@ def gateway_main(context=False):
          patch.object(G.A,"prepare_provider",side_effect=provider_copy):
         sys.argv=[sys.argv[0],*sys.argv[2:]]
         if consumer:
+            if assembly and os.environ.get("NOURISHING_TEST_ASSEMBLY_POST_READ"):
+                with patch.object(consumer,"read_bundle",side_effect=OSError("synthetic post-publication read failure")):consumer.main()
+                return
             replacement=os.environ.get("NOURISHING_TEST_CONTEXT_REPLACE")
             if replacement:
-                original=consumer.storage_context
+                original=consumer.context_qualification if assembly else consumer.storage_context
                 changed=False
                 def replace_after_real_context(*args):
                     nonlocal changed
@@ -561,7 +565,7 @@ def gateway_main(context=False):
                         path=Path(replacement);raw=path.read_bytes();path.rename(path.with_suffix(".retained"))
                         path.write_bytes(raw);path.chmod(0o600);changed=True
                     return result
-                with patch.object(consumer,"storage_context",side_effect=replace_after_real_context):consumer.main()
+                with patch.object(consumer,"context_qualification" if assembly else "storage_context",side_effect=replace_after_real_context):consumer.main()
             else:consumer.main()
         else:G.main()
 
@@ -581,4 +585,5 @@ if __name__=="__main__":
     if sys.argv[1:]==["--fixture"]:emit_fixture()
     elif sys.argv[1:2] == ["--gateway"]:gateway_main()
     elif sys.argv[1:2] == ["--context-gateway"]:gateway_main(True)
+    elif sys.argv[1:2] == ["--assembly-gateway"]:gateway_main(assembly=True)
     else:unittest.main()

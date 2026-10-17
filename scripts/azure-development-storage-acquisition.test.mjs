@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { registerHooks, stripTypeScriptTypes } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { openPlan } from "./azure-development-plan.mjs";
 import { runStorageAcquisition, sourceDigest } from "./azure-development-storage-acquisition.mjs";
+import { withOperatorTestEnvironment } from "./postgres-operator-fixture.mjs";
 import { ChildCleanupError } from "./postgres-operator-process.mjs";
 
 const child = promisify(execFile);
@@ -713,6 +717,345 @@ test("actual acquisition producers join held historical qualification and expire
         ]),
       );
     });
+
+    // Actual producer -> independent regeneration -> protected parser; native work is mocked.
+    const assemblyCommand = async (args, fault = {}) => {
+      const response = await child(
+        "/usr/bin/python3.12",
+        ["-I", "-B", gateway, "--assembly-gateway", ...args],
+        {
+          env: {
+            PATH: "/usr/bin:/bin",
+            NOURISHING_TEST_CLOCK: new Date(now).toISOString(),
+            ...(fault.replace ? { NOURISHING_TEST_CONTEXT_REPLACE: fault.replace } : {}),
+            ...(fault.postRead ? { NOURISHING_TEST_ASSEMBLY_POST_READ: "1" } : {}),
+          },
+          timeout: 60000,
+          maxBuffer: 1048576,
+        },
+      );
+      assert.equal(response.stderr, "");
+      return response.stdout;
+    };
+    const assemblySource = (await assemblyCommand(["source-digest"])).trim();
+    const recoverySources = [
+      "infra/development/azure/storage-recovery-assembly.py",
+      "infra/development/azure/storage-recovery-context.py",
+      "infra/development/azure/storage-acquisition.py",
+      "scripts/postgres-operator.mjs",
+    ];
+    const sourceFiles = Object.fromEntries(
+      await Promise.all(
+        recoverySources.map(async (name) => {
+          const path = resolve(name);
+          return [name, { path, sha256: sha(await readFile(path)) }];
+        }),
+      ),
+    );
+    const assemblyInput = {
+      schema_version: 1,
+      kind: "nutrition-storage-recovery-assembly-input-v1",
+      target: "development",
+      classification: "synthetic",
+      source_revision: "a".repeat(40),
+      source_files: sourceFiles,
+      acquisition,
+      storage_request: observationRef,
+      storage_manifest: manifestRef,
+      not_after_utc: new Date(initial + 600000).toISOString(),
+    };
+    const assemblyInputRef = await privateDoc(join(dir, "assembly-input.json"), assemblyInput);
+    const bundlePath = join(dir, "recovery-bundle.json");
+    const assemblyArgs = (mode, inputRef = assemblyInputRef, output = bundlePath) => [
+      mode,
+      inputRef.path,
+      inputRef.sha256,
+      contextSource,
+      assemblySource,
+      new Date(now).toISOString(),
+      new Date(initial + 900000).toISOString(),
+      output,
+    ];
+    let bundleRef, generated;
+    await t.test(
+      "maintained recovery prepare and independent qualify regenerate exact bundle",
+      async () => {
+        const preparedBundle = JSON.parse(await assemblyCommand(assemblyArgs("prepare")));
+        const raw = await readFile(bundlePath);
+        bundleRef = { path: bundlePath, sha256: sha(raw) };
+        generated = JSON.parse(raw);
+        const qualified = JSON.parse(
+          await assemblyCommand([...assemblyArgs("qualify"), bundleRef.sha256]),
+        );
+        assert.deepEqual(qualified, preparedBundle);
+        assert.equal(qualified.bundle_sha256, bundleRef.sha256);
+        assert.equal(qualified.localOnly, true);
+        assert.equal(qualified.operationalAcceptance, false);
+        assert.equal(qualified.executable, false);
+        assert.equal(qualified.component_count, 0);
+        assert.equal(
+          generated.storage_context_sha256,
+          (await readContext()).storage_context_sha256,
+        );
+        assert.deepEqual(generated.source_files, sourceFiles);
+        assert.deepEqual(generated.admitted_components, []);
+        assert.equal(generated.members["recovery-references.json"].mode, "0600");
+        assert.equal(applies, 1);
+      },
+    );
+    await t.test("recovery prepare is create-only and conserves published bytes", async () => {
+      const raw = await readFile(bundlePath);
+      await assert.rejects(assemblyCommand(assemblyArgs("prepare")));
+      assert.deepEqual(await readFile(bundlePath), raw);
+    });
+    await t.test(
+      "independent recovery qualification refuses self-consistent member substitution",
+      async () => {
+        const changed = structuredClone(generated);
+        const member = changed.members["recovery-references.json"];
+        const refs = JSON.parse(member.content);
+        refs.postgres_backup_destination.prefix = "foreign/";
+        member.content = JSON.stringify(refs);
+        member.sha256 = sha(member.content);
+        const forgedRef = await privateDoc(join(dir, "forged-bundle.json"), changed);
+        await assert.rejects(
+          assemblyCommand([
+            ...assemblyArgs("qualify", assemblyInputRef, forgedRef.path),
+            forgedRef.sha256,
+          ]),
+        );
+      },
+    );
+    await t.test(
+      "recovery prepare preserves a published bundle after readback failure",
+      async () => {
+        const output = join(dir, "uncertain-bundle.json");
+        await assert.rejects(
+          assemblyCommand(assemblyArgs("prepare", assemblyInputRef, output), { postRead: true }),
+          (error) => {
+            assert.match(error.stderr, /published; final readback unconfirmed/u);
+            return true;
+          },
+        );
+        assert.equal(sha(await readFile(output)), bundleRef.sha256);
+      },
+    );
+    await t.test("recovery prepare refuses same-byte held input replacement", async () => {
+      const output = join(dir, "replaced-input-bundle.json");
+      await assert.rejects(
+        assemblyCommand(assemblyArgs("prepare", assemblyInputRef, output), {
+          replace: assemblyInputRef.path,
+        }),
+      );
+      await assert.rejects(readFile(output), { code: "ENOENT" });
+      assert.equal(sha(await readFile(assemblyInputRef.path)), assemblyInputRef.sha256);
+    });
+    for (const [label, change] of [
+      [
+        "source reference",
+        (v) => {
+          v.source_files[recoverySources[0]].path += ".copied";
+        },
+      ],
+      [
+        "source digest",
+        (v) => {
+          v.source_files[recoverySources[0]].sha256 = "0".repeat(64);
+        },
+      ],
+      [
+        "expiry",
+        (v) => {
+          v.not_after_utc = new Date(initial).toISOString();
+        },
+      ],
+      [
+        "kind",
+        (v) => {
+          v.classification = "actual";
+        },
+      ],
+    ])
+      await t.test(`recovery prepare refuses changed ${label}`, async () => {
+        const changed = structuredClone(assemblyInput);
+        change(changed);
+        const ref = await privateDoc(
+          join(dir, `assembly-${label.replaceAll(" ", "-")}.json`),
+          changed,
+        );
+        const output = join(dir, `refused-${label.replaceAll(" ", "-")}-bundle.json`);
+        await assert.rejects(assemblyCommand(assemblyArgs("prepare", ref, output)));
+        await assert.rejects(readFile(output), { code: "ENOENT" });
+      });
+    await t.test("recovery prepare requires independent producer and context digests", async () => {
+      for (const index of [3, 4]) {
+        const args = assemblyArgs(
+          "prepare",
+          assemblyInputRef,
+          join(dir, `wrong-digest-${index}.json`),
+        );
+        args[index] = "0".repeat(64);
+        await assert.rejects(assemblyCommand(args));
+        await assert.rejects(readFile(args.at(-1)), { code: "ENOENT" });
+      }
+    });
+    await t.test(
+      "maintained qualified recovery bundle reaches actual protected parser",
+      async () => {
+        const refs = JSON.parse(generated.members["recovery-references.json"].content);
+        assert.equal(
+          refs.postgres_backup_destination.containerUrl,
+          contextManifest.storage.backup.container_url,
+        );
+        assert.equal(
+          refs.ledger_consumers.worker.ERASURE_REPLAY_LEDGER_AZURE_CONTAINER_URL,
+          contextManifest.storage.erasure.container_url,
+        );
+        const symbol = Symbol.for("nutrition.test.generatedRecoveryParser");
+        const state = { calls: 0, key: null };
+        globalThis[symbol] = state;
+        const sourceURL = (name) => pathToFileURL(resolve(name)).href;
+        const hooks = registerHooks({
+          resolve(specifier, context, next) {
+            if (
+              specifier === "./postgres-backup.mjs" &&
+              context.parentURL?.endsWith("/postgres-operator.mjs")
+            )
+              return { url: "generated-recovery:native", shortCircuit: true };
+            if (
+              specifier === "../packages/artifact-store/dist/index.js" &&
+              ["/postgres-operator.mjs", "/postgres-backup-storage.mjs"].some((name) =>
+                context.parentURL?.endsWith(name),
+              )
+            )
+              return { url: "generated-recovery:artifact-source", shortCircuit: true };
+            if (
+              context.parentURL?.includes("/packages/") &&
+              specifier.startsWith(".") &&
+              specifier.endsWith(".js")
+            ) {
+              const candidate = new URL(specifier.slice(0, -3) + ".ts", context.parentURL);
+              if (existsSync(candidate)) return { url: candidate.href, shortCircuit: true };
+            }
+            return next(specifier, context);
+          },
+          load(url, context, next) {
+            if (/\/packages\/[^/]+\/dist\//u.test(url))
+              throw new Error("Workspace dist load refused by recovery source proof");
+            if (url === "generated-recovery:native")
+              return {
+                format: "module",
+                shortCircuit: true,
+                source:
+                  "export const runPostgresBackup=s=>globalThis[Symbol.for('nutrition.test.generatedRecoveryParser')].backup(s);",
+              };
+            if (url === "generated-recovery:artifact-source")
+              return {
+                format: "module",
+                shortCircuit: true,
+                source: ["artifact-encryption", "postgres-backup", "azure-blob-raw-artifact-store"]
+                  .map(
+                    (name) =>
+                      "export * from " +
+                      JSON.stringify(sourceURL(`packages/artifact-store/src/${name}.ts`)) +
+                      ";",
+                  )
+                  .join("\n"),
+              };
+            if (url.startsWith("file:") && url.endsWith(".ts") && url.includes("/packages/"))
+              return {
+                format: "module",
+                shortCircuit: true,
+                source: stripTypeScriptTypes(readFileSync(fileURLToPath(url), "utf8"), {
+                  mode: "transform",
+                  sourceUrl: url,
+                }),
+              };
+            return next(url, context);
+          },
+        });
+        try {
+          state.backup = async (settings) => {
+            state.calls++;
+            assert.deepEqual(settings.storage, refs.postgres_backup_destination);
+            state.key = settings.keyRing.keys.get("synthetic");
+            assert.deepEqual(state.key, Buffer.alloc(32, 7));
+            return {
+              kind: "publication",
+              storage: "azure-blob",
+              localOnly: true,
+              operationalRecoveryAccepted: false,
+              manifestSha256: "e".repeat(64),
+              manifest: {
+                backupId: "a0000000-0000-4000-8000-000000000001",
+                databaseName: "nutrition",
+                deploymentTarget: "development",
+                snapshotId: "synthetic",
+                sourceRevision: assemblyInput.source_revision,
+              },
+            };
+          };
+          const { runPostgresOperator } = await import("./postgres-operator.mjs");
+          const settings = {
+            timeoutMs: 1000,
+            storage: refs.postgres_backup_destination,
+            sourceRevision: assemblyInput.source_revision,
+            deploymentTarget: "development",
+            keyRing: {
+              currentKeyId: "synthetic",
+              keys: { synthetic: Buffer.alloc(32, 7).toString("base64") },
+            },
+          };
+          const dispatch = async (binding = bundleRef, changedSettings = settings) => {
+            const document = {
+              schemaVersion: 1,
+              operation: "backup",
+              notAfterUtc: new Date(now + 180000).toISOString(),
+              assembly: binding,
+              settings: changedSettings,
+            };
+            const raw = JSON.stringify(document);
+            const path = join(dir, `generated-operator-${++rejectedIndex}.json`);
+            await writeFile(path, raw, { mode: 0o600, flag: "wx" });
+            const inherited = process.env;
+            try {
+              return await withOperatorTestEnvironment(() =>
+                runPostgresOperator(["backup", "--input", path, "--input-sha256", sha(raw)]),
+              );
+            } finally {
+              assert.equal(process.env, inherited);
+            }
+          };
+          const receipt = await dispatch();
+          assert.equal(state.calls, 1);
+          assert.deepEqual(state.key, Buffer.alloc(32));
+          assert.equal(receipt.assemblySha256, bundleRef.sha256);
+          assert.equal(receipt.result.operationalRecoveryAccepted, false);
+          assert.equal(
+            JSON.stringify(receipt).includes(Buffer.alloc(32, 7).toString("base64")),
+            false,
+          );
+          await assert.rejects(
+            dispatch(bundleRef, {
+              ...settings,
+              storage: { ...settings.storage, prefix: "foreign/" },
+            }),
+          );
+          assert.equal(state.calls, 1);
+          const obsolete = structuredClone(generated);
+          obsolete.source_files["infra/development/azure/runtime-installation-storage.py"] =
+            obsolete.source_files[recoverySources[1]];
+          delete obsolete.source_files[recoverySources[1]];
+          const obsoleteRef = await privateDoc(join(dir, "obsolete-source-bundle.json"), obsolete);
+          await assert.rejects(dispatch(obsoleteRef));
+          assert.equal(state.calls, 1);
+        } finally {
+          hooks.deregister();
+          delete globalThis[symbol];
+        }
+      },
+    );
+
     const statePath = join(done.directory, "work/terraform.tfstate");
     const bytes = await readFile(statePath);
     await writeFile(statePath, Buffer.concat([bytes, Buffer.from(" ")]));
