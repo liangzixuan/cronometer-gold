@@ -415,3 +415,52 @@ SSH is restricted to one globally routable administrator IPv4 /32. Public TCP443
 Mailpit must use a separate capture-only network and cannot share API/object-store egress. This root configures no listener, DNS, certificate, secret or application runtime.
 
 The native schedule is only a planned UTC shutdown contract. Before any real session is activated, an independently qualified executor must audit/apply the saved plan, bind actual resource ownership, read the schedule back and prove failure cleanup through deallocation or disposal. The authentication preflight does not execute such a session or provide a Windows/Linux Azure CLI bridge. Daily shutdown is best effort; retained disks/IP need explicit owned cleanup. Fixed Docker package eligibility and all runtime/image, DNS, access-control and hosted journey gates remain separate prerequisites. No provisioning is authorized by a successful local audit.
+
+## Azure credential maintenance canary
+
+The worker image includes the separate maintenance entrypoint
+`node dist/azure-object-storage-credential-canary.js`. It does not start the normal
+worker or discover credentials. Running it against Azure requires its own accepted
+resource, credential-custody and synthetic-write/deletion scope. Source checks do
+not authorize execution or establish hosted readiness.
+
+The command requires `NODE_ENV=development`,
+`NOURISHING_API_PROFILE=hosted-development`, and both `EXPORT_ARTIFACT_STORE` and
+`ERASURE_REPLAY_LEDGER_STORE` set to `azure`. Supply the existing container URLs,
+prefixes and writer SAS fields explicitly. Also supply
+`EXPORT_ARTIFACT_AZURE_READ_SAS`, `EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS` and
+`ERASURE_REPLAY_LEDGER_AZURE_RESTORE_SAS`. Their exact permissions are respectively
+`r`, `l` and `rl`; export and ledger writers use `rcd` and `rc`. Export and ledger
+accounts must differ. No issuer login, SAS creation or application-key input is
+part of this command.
+
+Within a 60-second deadline and 5-second operation deadlines, the command creates
+64-byte random synthetic export and ledger objects, verifies full reads, and reads
+exact observed ledger versions. Direct Azure SDK probes test forbidden writes,
+deletes, lists and cross-account reads. A local role guard or an unrelated error
+cannot count as a provider denial. Positive reads after the probes must still
+work, and the ledger version must remain unchanged. Container SAS permissions do
+not prove isolation between prefixes inside one container.
+
+Only a complete successful probe sequence permits export cleanup. The separate
+list-only credential must observe the live unversioned export before the probes
+and again before cleanup. After deletion it must observe an empty exact-name inventory, including
+versions and snapshots. The ledger canary remains. Failures preserve uncertain
+objects and return a generic error. The command publishes its nonsecret ID and
+fixed object-key suffixes before its first write, and aborts requests on SIGINT or
+SIGTERM. A hard process loss cannot produce a final result; reconcile the recorded
+names before another run. Both success and operation failure include a
+nonsecret `canaryId`; reconcile the owned names
+`<export-prefix>exports/v1/credential-canary/<canaryId>` and
+`<ledger-prefix>erasure-ledger/v1/credential-canary/<canaryId>` within the accepted
+scope. Keep command output in the operator's private evidence log. The command
+prints no SAS, container URL, payload or native version token. No automatic retry
+or failed-run cleanup is performed.
+
+Controlled-response tests use the installed SDK and bounded HTTPS transport. They
+prove request generation and response handling only. Actual issuer grants,
+versioning settings, retained-resource policy and hosted recovery remain separate
+acceptance requirements. Azure protocol permission references:
+[delegation SAS](https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas),
+[Put Block](https://learn.microsoft.com/en-us/rest/api/storageservices/put-block),
+[Put Block List](https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list).

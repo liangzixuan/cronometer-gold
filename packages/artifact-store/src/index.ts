@@ -1,6 +1,7 @@
 export * from "./artifact-encryption.js";
 export * from "./artifact-read-bulkhead.js";
 export * from "./artifact-spool-cleanup.js";
+export * from "./azure-blob-credential-canary.js";
 export * from "./azure-blob-raw-artifact-store.js";
 export * from "./erasure-ledger-locator.js";
 export * from "./erasure-replay-ledger.js";
