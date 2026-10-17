@@ -195,7 +195,7 @@ for (const scenario of ["command", "cleanup", "overflow", "join", "reservation",
 test("source closure agrees between actual Python and Node", async () => {
   assert.equal((await fixture()).source, await sourceDigest());
 });
-test("actual acquisition producers join held historical qualification and expired-origin reconciliation", async () => {
+test("actual acquisition producers join held historical qualification and expired-origin reconciliation", async (t) => {
   const dir = await mkdtemp(join(homedir(), "nourishing-acquisition-test-"));
   await chmod(dir, 0o700);
   const OriginalDate = globalThis.Date;
@@ -427,6 +427,292 @@ test("actual acquisition producers join held historical qualification and expire
     const beforeQualification = await readFile(join(done.directory, "result.json"));
     const binding = await qualify(done, result.ownership);
     assert.equal(binding.original_execution_outcome, "observed-complete");
+
+    // This consumer uses real retained-acquisition regeneration, not a mocked context.
+    const contextCommand = async (args, replacement) => {
+      const response = await child(
+        "/usr/bin/python3.12",
+        ["-I", "-B", gateway, "--context-gateway", ...args],
+        {
+          env: {
+            PATH: "/usr/bin:/bin",
+            NOURISHING_TEST_CLOCK: new Date(now).toISOString(),
+            ...(replacement ? { NOURISHING_TEST_CONTEXT_REPLACE: replacement } : {}),
+          },
+          timeout: 20000,
+          maxBuffer: 1048576,
+        },
+      );
+      assert.equal(response.stderr, "");
+      return response.stdout;
+    };
+    const contextSource = (await contextCommand(["source-digest"])).trim();
+    assert.match(contextSource, /^[a-f0-9]{64}$/u);
+    const acquisition = { path: join(done.directory, "result.json"), sha256: done.resultSha256 };
+    const contextManifest = {
+      schema_version: 1,
+      kind: "nutrition-azure-storage-observation-manifest-v1",
+      storage: Object.fromEntries(
+        ["artifact", "erasure", "backup"].map((name) => [
+          name,
+          {
+            provider: "azure-blob",
+            container_url:
+              f.live[name + "-account"].properties.primaryEndpoints.blob +
+              "nourishing-development-" +
+              name,
+            prefix: "development/" + name + "/",
+            ownership_sha256: result.ownership[name].sha256,
+          },
+        ]),
+      ),
+      lease: {
+        started_at_utc: new Date(initial).toISOString(),
+        shutdown_at_utc: new Date(initial + 7200000).toISOString(),
+        cleanup_seconds: 900,
+      },
+    };
+    const manifestRef = await privateDoc(join(dir, "recovery-manifest.json"), contextManifest);
+    const observation = {
+      kind: "nutrition-azure-storage-observation-request-v1",
+      schema_version: 1,
+      source_sha256: contextSource,
+      acquisition,
+      identity_file: identity.path,
+      identity_sha256: identity.sha256,
+      profile_directory: input.profile_directory,
+      profile_sha256: { synthetic: true },
+      manifest_sha256: manifestRef.sha256,
+      not_after_utc: new Date(initial + 3600000).toISOString(),
+      lifecycle_not_after_utc: contextManifest.lease.shutdown_at_utc,
+    };
+    const observationRef = await privateDoc(join(dir, "recovery-request.json"), observation);
+    const readContext = async (
+      requestRef = observationRef,
+      selectedManifest = manifestRef,
+      selectedAcquisition = acquisition,
+      replacement,
+    ) =>
+      JSON.parse(
+        await contextCommand(
+          [
+            "qualify",
+            requestRef.path,
+            requestRef.sha256,
+            selectedManifest.path,
+            selectedManifest.sha256,
+            selectedAcquisition.path,
+            selectedAcquisition.sha256,
+            contextSource,
+            new Date(now).toISOString(),
+          ],
+          replacement,
+        ),
+      );
+    await t.test(
+      "recovery context regenerates acquisition and binds all original destinations",
+      async () => {
+        const value = await readContext();
+        assert.equal(value.kind, "nutrition-azure-storage-recovery-context-v1");
+        assert.equal(value.localOnly, true);
+        assert.equal(value.operationalAcceptance, false);
+        assert.equal(value.source_sha256, contextSource);
+        assert.equal(value.request_sha256, observationRef.sha256);
+        assert.equal(value.acquisition_sha256, acquisition.sha256);
+        assert.equal(value.manifest_sha256, manifestRef.sha256);
+        assert.deepEqual(value.manifest, contextManifest);
+        assert.deepEqual(value.expected, { subscriptionId: f.sub, tenantId: f.sub });
+        assert.match(value.storage_context_sha256, /^[a-f0-9]{64}$/u);
+        assert.deepEqual(await readContext(), value);
+        assert.deepEqual(await readFile(acquisition.path), beforeQualification);
+        assert.equal(applies, 1);
+      },
+    );
+    let rejectedIndex = 0;
+    const changedObservation = async (change, changeManifest) => {
+      const requestValue = structuredClone(observation);
+      const manifestValue = structuredClone(contextManifest);
+      let selectedManifest = manifestRef;
+      if (changeManifest) {
+        changeManifest(manifestValue);
+        selectedManifest = await privateDoc(
+          join(dir, `recovery-manifest-${++rejectedIndex}.json`),
+          manifestValue,
+        );
+        requestValue.manifest_sha256 = selectedManifest.sha256;
+      }
+      if (change) change(requestValue);
+      const ref = await privateDoc(
+        join(dir, `recovery-request-${++rejectedIndex}.json`),
+        requestValue,
+      );
+      await assert.rejects(readContext(ref, selectedManifest));
+    };
+    for (const [label, change] of [
+      [
+        "source",
+        (v) => {
+          v.source_sha256 = "0".repeat(64);
+        },
+      ],
+      [
+        "acquisition",
+        (v) => {
+          v.acquisition.sha256 = "0".repeat(64);
+        },
+      ],
+      [
+        "identity",
+        (v) => {
+          v.identity_sha256 = "0".repeat(64);
+        },
+      ],
+      [
+        "profile",
+        (v) => {
+          v.profile_sha256 = { changed: true };
+        },
+      ],
+      [
+        "manifest",
+        (v) => {
+          v.manifest_sha256 = "0".repeat(64);
+        },
+      ],
+      [
+        "expired observation",
+        (v) => {
+          v.not_after_utc = new Date(initial).toISOString();
+        },
+      ],
+      [
+        "unreviewed field",
+        (v) => {
+          v.unreviewed = true;
+        },
+      ],
+    ])
+      await t.test(`recovery context refuses changed ${label}`, () => changedObservation(change));
+    for (const [label, change] of [
+      [
+        "destination",
+        (v) => {
+          v.storage.backup.container_url += "-foreign";
+        },
+      ],
+      [
+        "ownership",
+        (v) => {
+          v.storage.backup.ownership_sha256 = "0".repeat(64);
+        },
+      ],
+      [
+        "prefix",
+        (v) => {
+          v.storage.erasure.prefix = "foreign/";
+        },
+      ],
+      [
+        "storage field",
+        (v) => {
+          v.storage.unreviewed = {};
+        },
+      ],
+      [
+        "zero cleanup",
+        (v) => {
+          v.lease.cleanup_seconds = 0;
+        },
+      ],
+      [
+        "boolean cleanup",
+        (v) => {
+          v.lease.cleanup_seconds = true;
+        },
+      ],
+      [
+        "overlong lease",
+        (v) => {
+          v.lease.shutdown_at_utc = new Date(initial + 18000000).toISOString();
+        },
+      ],
+      [
+        "fractional minute lease",
+        (v) => {
+          v.lease.started_at_utc = new Date(initial - 1000).toISOString();
+        },
+      ],
+    ])
+      await t.test(`recovery context refuses changed ${label}`, () =>
+        changedObservation(null, change),
+      );
+    await t.test(
+      "recovery context refuses changed original state through genuine regeneration",
+      async () => {
+        const path = join(done.directory, "work/terraform.tfstate");
+        const raw = await readFile(path);
+        try {
+          await writeFile(path, Buffer.concat([raw, Buffer.from(" ")]));
+          await assert.rejects(readContext());
+        } finally {
+          await writeFile(path, raw);
+        }
+      },
+    );
+    await t.test(
+      "recovery context refuses self-consistent forged acquisition metadata",
+      async () => {
+        const forged = JSON.parse(beforeQualification);
+        forged.phases_sha256 = "0".repeat(64);
+        const raw = JSON.stringify(forged) + "\n";
+        try {
+          await writeFile(acquisition.path, raw);
+          const ref = { ...acquisition, sha256: sha(raw) };
+          const requestRef = await privateDoc(join(dir, "recovery-forged-request.json"), {
+            ...observation,
+            acquisition: ref,
+          });
+          await assert.rejects(readContext(requestRef, manifestRef, ref));
+        } finally {
+          await writeFile(acquisition.path, beforeQualification);
+        }
+      },
+    );
+    await t.test(
+      "recovery context conserves a held request against same-byte replacement",
+      async () => {
+        await assert.rejects(
+          readContext(observationRef, manifestRef, acquisition, observationRef.path),
+        );
+        assert.equal(sha(await readFile(observationRef.path)), observationRef.sha256);
+        assert.deepEqual((await readContext()).manifest, contextManifest);
+      },
+    );
+
+    await t.test("recovery context does not renew an expired lease", async () => {
+      const previous = now;
+      now = initial + 7200000;
+      try {
+        await assert.rejects(readContext());
+      } finally {
+        now = previous;
+      }
+    });
+    await t.test("recovery context requires the independent source digest", async () => {
+      await assert.rejects(
+        contextCommand([
+          "qualify",
+          observationRef.path,
+          observationRef.sha256,
+          manifestRef.path,
+          manifestRef.sha256,
+          acquisition.path,
+          acquisition.sha256,
+          "0".repeat(64),
+          new Date(now).toISOString(),
+        ]),
+      );
+    });
     const statePath = join(done.directory, "work/terraform.tfstate");
     const bytes = await readFile(statePath);
     await writeFile(statePath, Buffer.concat([bytes, Buffer.from(" ")]));
