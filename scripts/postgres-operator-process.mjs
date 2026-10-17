@@ -8,7 +8,7 @@ import { Readable, Transform, Writable } from "node:stream";
 import { finished, pipeline } from "node:stream/promises";
 
 const MAX_TOOL_BYTES = 134_217_728;
-const STDERR_BYTES = 65_536;
+export const MAX_STDERR_BYTES = 65_536;
 const TERMINATE_MS = 2_000;
 const failure = (phase) => new Error("PostgreSQL local backup " + phase + " failed");
 export class ChildCleanupError extends AggregateError {
@@ -151,12 +151,15 @@ async function observeGroupTermination(identity) {
   }
 }
 
-/** The fixed supervisor pins the PGID until our final group KILL. */
+/** The fixed supervisor pins the PGID until our final group KILL.
+ * onStderr is an optional synchronous consumer of bounded diagnostic copies.
+ */
 export async function runTool(
   tool,
   args,
-  { signal, env, directory, limit, outputPath, input, inputBytes },
+  { signal, env, directory, limit, outputPath, input, inputBytes, onStderr },
 ) {
+  requireValue(onStderr === undefined || typeof onStderr === "function");
   requireValue(
     input === undefined ||
       (input instanceof Readable &&
@@ -353,8 +356,9 @@ export async function runTool(
       (async () => {
         for await (const chunk of child.stderr) {
           stderrBytes += chunk.byteLength;
-          if (stderrBytes > STDERR_BYTES) throw failure("diagnostic limit");
+          if (stderrBytes > MAX_STDERR_BYTES) throw failure("diagnostic limit");
           stderrHash.update(chunk);
+          onStderr?.(Buffer.from(chunk));
         }
       })().catch(() => {
         failed = true;
