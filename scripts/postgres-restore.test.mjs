@@ -2116,3 +2116,85 @@ for (const publicationFault of ["none", "evidence", "handoff", "late-close", "fi
       }
     },
   );
+
+for (const format of ["Ubuntu", "mixed"]) {
+  test("restore accepts pinned PostgreSQL 17.11 " + format + " tool outputs", async () => {
+    const fixture = await setup();
+    try {
+      state.versionOutputs = {};
+      for (const [index, tool] of Object.values(fixture.options.tools).entries()) {
+        const name = tool.version.split(" ")[0];
+        tool.version =
+          name +
+          " (PostgreSQL) 17.11" +
+          (format === "mixed" && index === 1 ? "" : " (Ubuntu 17.11-1.pgdg24.04+2)");
+        state.versionOutputs[name] = tool.version;
+      }
+      const pinned = structuredClone(fixture.options.tools);
+      const result = await runPostgresRestore(fixture.options);
+      assert.equal(result.localOnly, true);
+      assert.deepEqual(fixture.options.tools, pinned);
+      assert.equal(state.calls.filter((call) => call.args[0] === "--version").length, 2);
+      assert.ok(state.clients.every((client) => client.closed));
+      assert.ok(state.children.every((child) => child.closed));
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
+for (const [label, version] of [
+  ["wrong tool", "pg_restore (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  ["wrong major", "psql (PostgreSQL) 18.11 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  ["different minor with identical suffix", "psql (PostgreSQL) 17.10 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  ["noncanonical minor", "psql (PostgreSQL) 17.011 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  ["empty suffix", "psql (PostgreSQL) 17.11 ()"],
+  ["nested suffix", "psql (PostgreSQL) 17.11 (Ubuntu (17.11))"],
+  ["suffix padding", "psql (PostgreSQL) 17.11 ( Ubuntu 17.11 )"],
+  ["metadata padding", " psql (PostgreSQL) 17.11"],
+  ["trailing newline", "psql (PostgreSQL) 17.11\n"],
+  ["multiline suffix", "psql (PostgreSQL) 17.11 (Ubuntu\n17.11)"],
+  ["control character", "psql (PostgreSQL) 17.11 (Ubuntu\u000017.11)"],
+  ["oversized suffix", "psql (PostgreSQL) 17.11 (" + "a".repeat(256) + ")"],
+  ["non-string", null],
+]) {
+  test("restore rejects tool metadata: " + label, async () => {
+    const fixture = await setup();
+    try {
+      for (const tool of Object.values(fixture.options.tools))
+        tool.version =
+          tool.version.split(" ")[0] + " (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)";
+      fixture.options.tools.psql.version = version;
+      await assert.rejects(runPostgresRestore(fixture.options), /PostgreSQL local restore/u);
+      assert.equal(state.children.length, 0);
+      assert.equal(state.clients.length, 0);
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
+for (const changed of ["pgRestore", "psql"]) {
+  test("restore rejects runtime suffix drift for " + changed, async () => {
+    const fixture = await setup();
+    try {
+      state.versionOutputs = {};
+      for (const [key, tool] of Object.entries(fixture.options.tools)) {
+        const name = tool.version.split(" ")[0];
+        tool.version = name + " (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)";
+        state.versionOutputs[name] =
+          key === changed ? tool.version.replace("+2)", "+3)") : tool.version;
+      }
+      await assert.rejects(runPostgresRestore(fixture.options), /PostgreSQL local restore/u);
+      assert.equal(state.calls.length, changed === "pgRestore" ? 1 : 2);
+      assert.ok(state.calls.every((call) => call.args[0] === "--version"));
+      assert.equal(state.clients.length, 0);
+      assert.ok(state.children.every((child) => child.closed));
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}

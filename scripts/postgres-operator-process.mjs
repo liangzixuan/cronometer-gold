@@ -23,6 +23,16 @@ const requireValue = (condition) => {
   if (!condition) throw failure("configuration");
 };
 
+// Parse release compatibility without changing the separately pinned full output.
+export function postgresToolRelease(version, tool) {
+  if (typeof version !== "string" || version.length > 256) return undefined;
+  const match =
+    /^(psql|pg_dump|pg_restore) \(PostgreSQL\) (17\.(?:0|[1-9][0-9]*))(?: \([A-Za-z0-9][A-Za-z0-9.+:~_-]*(?: [A-Za-z0-9][A-Za-z0-9.+:~_-]*)*\))?$/u.exec(
+      version,
+    );
+  return match?.[0] === version && match[1] === tool ? match[2] : undefined;
+}
+
 export async function trustedPath(path, { directory = false, privateLeaf = false } = {}) {
   requireValue(
     typeof path === "string" &&

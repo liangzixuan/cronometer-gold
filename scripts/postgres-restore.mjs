@@ -32,7 +32,12 @@ import {
   parsePostgresBackupEvidence,
 } from "./postgres-backup-evidence.mjs";
 import { createPostgresBackupRawStore, postgresBackupStorage } from "./postgres-backup-storage.mjs";
-import { ChildCleanupError, runTool, trustedPath } from "./postgres-operator-process.mjs";
+import {
+  ChildCleanupError,
+  postgresToolRelease,
+  runTool,
+  trustedPath,
+} from "./postgres-operator-process.mjs";
 import {
   AUTHORITY_POLICY_SQL,
   compareRestoreEvidence,
@@ -118,6 +123,7 @@ function settings(input) {
   requireValue(input.signal === undefined || input.signal instanceof AbortSignal);
   requireValue(input.tools && Object.keys(input.tools).sort().join(",") === "pgRestore,psql");
   const tools = {};
+  const releases = [];
   for (const name of ["pgRestore", "psql"]) {
     const tool = input.tools[name];
     requireValue(tool && Object.keys(tool).sort().join(",") === "path,sha256,version");
@@ -125,16 +131,12 @@ function settings(input) {
       typeof tool.path === "string" && isAbsolute(tool.path) && resolve(tool.path) === tool.path,
     );
     requireValue(typeof tool.sha256 === "string" && SHA.test(tool.sha256));
-    requireValue(
-      typeof tool.version === "string" &&
-        new RegExp(
-          "^" + (name === "pgRestore" ? "pg_restore" : "psql") + " \\(PostgreSQL\\) 17\\.[0-9]+$",
-          "u",
-        ).test(tool.version),
-    );
+    const release = postgresToolRelease(tool.version, name === "pgRestore" ? "pg_restore" : "psql");
+    requireValue(release !== undefined);
+    releases.push(release);
     tools[name] = Object.freeze({ ...tool });
   }
-  requireValue(tools.pgRestore.version.split(" ").at(-1) === tools.psql.version.split(" ").at(-1));
+  requireValue(releases[0] === releases[1]);
   requireValue(
     input.keyRing?.purpose === "postgres_backup" &&
       input.keyRing.keys instanceof Map &&

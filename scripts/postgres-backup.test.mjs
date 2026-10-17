@@ -108,7 +108,8 @@ state.spawn = (executable, supervisorArgs, options) => {
       if (args[0] === "--version") {
         const kind = file.endsWith("pg_dump") ? "pg_dump" : "pg_restore";
         child.stdout.write(
-          kind + " (PostgreSQL) " + (state.mode === "version" ? "17.7" : "17.6") + "\n",
+          (state.versionOutputs?.[kind] ??
+            kind + " (PostgreSQL) " + (state.mode === "version" ? "17.7" : "17.6")) + "\n",
         );
         finishChild(child);
         return;
@@ -343,6 +344,7 @@ hooks.deregister();
 
 async function setup() {
   state.real = false;
+  state.versionOutputs = undefined;
   state.descendantPid = undefined;
   state.children = [];
   state.clients = [];
@@ -786,6 +788,7 @@ for (const mode of ["cancel", "normal"]) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal(running(await liveIdentity(state.descendantPid)) || false, false);
       state.real = false;
+      state.versionOutputs = undefined;
       await fixture.dispose();
     }
   });
@@ -857,6 +860,7 @@ for (const diagnostic of ["", "PRIVATE_DIAGNOSTIC_µ\nsecond chunk\n"]) {
       assert.ok(state.children.every((child) => child.closed));
     } finally {
       state.real = false;
+      state.versionOutputs = undefined;
       await fixture.dispose();
     }
   });
@@ -1154,6 +1158,91 @@ for (const fault of [
     } finally {
       azure.dispose();
       state.azure = undefined;
+      await fixture.dispose();
+    }
+  });
+}
+
+for (const format of ["Ubuntu", "mixed"]) {
+  test("backup accepts pinned PostgreSQL 17.11 " + format + " tool outputs", async () => {
+    const fixture = await setup();
+    try {
+      state.versionOutputs = {};
+      for (const [index, tool] of Object.values(fixture.options.tools).entries()) {
+        const name = tool.version.split(" ")[0];
+        tool.version =
+          name +
+          " (PostgreSQL) 17.11" +
+          (format === "mixed" && index === 1 ? "" : " (Ubuntu 17.11-1.pgdg24.04+2)");
+        state.versionOutputs[name] = tool.version;
+      }
+      const pinned = structuredClone(fixture.options.tools);
+      const result = await runPostgresBackup(fixture.options);
+      assert.equal(result.localOnly, true);
+      assert.deepEqual(fixture.options.tools, pinned);
+      assert.equal(state.calls.filter((call) => call.args[0] === "--version").length, 2);
+      assert.ok(state.clients.every((client) => client.closed));
+      assert.ok(state.children.every((child) => child.closed));
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
+for (const [label, version] of [
+  ["wrong tool", "pg_dump (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  ["wrong major", "pg_restore (PostgreSQL) 18.11 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  [
+    "different minor with identical suffix",
+    "pg_restore (PostgreSQL) 17.10 (Ubuntu 17.11-1.pgdg24.04+2)",
+  ],
+  ["noncanonical minor", "pg_restore (PostgreSQL) 17.011 (Ubuntu 17.11-1.pgdg24.04+2)"],
+  ["empty suffix", "pg_restore (PostgreSQL) 17.11 ()"],
+  ["nested suffix", "pg_restore (PostgreSQL) 17.11 (Ubuntu (17.11))"],
+  ["suffix padding", "pg_restore (PostgreSQL) 17.11 ( Ubuntu 17.11 )"],
+  ["metadata padding", " pg_restore (PostgreSQL) 17.11"],
+  ["trailing newline", "pg_restore (PostgreSQL) 17.11\n"],
+  ["multiline suffix", "pg_restore (PostgreSQL) 17.11 (Ubuntu\n17.11)"],
+  ["control character", "pg_restore (PostgreSQL) 17.11 (Ubuntu\u000017.11)"],
+  ["oversized suffix", "pg_restore (PostgreSQL) 17.11 (" + "a".repeat(256) + ")"],
+  ["non-string", null],
+]) {
+  test("backup rejects tool metadata: " + label, async () => {
+    const fixture = await setup();
+    try {
+      for (const tool of Object.values(fixture.options.tools))
+        tool.version =
+          tool.version.split(" ")[0] + " (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)";
+      fixture.options.tools.pgRestore.version = version;
+      await assert.rejects(runPostgresBackup(fixture.options), /PostgreSQL local backup/u);
+      assert.equal(state.children.length, 0);
+      assert.equal(state.clients.length, 0);
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+}
+
+for (const changed of ["pgDump", "pgRestore"]) {
+  test("backup rejects runtime suffix drift for " + changed, async () => {
+    const fixture = await setup();
+    try {
+      state.versionOutputs = {};
+      for (const [key, tool] of Object.entries(fixture.options.tools)) {
+        const name = tool.version.split(" ")[0];
+        tool.version = name + " (PostgreSQL) 17.11 (Ubuntu 17.11-1.pgdg24.04+2)";
+        state.versionOutputs[name] =
+          key === changed ? tool.version.replace("+2)", "+3)") : tool.version;
+      }
+      await assert.rejects(runPostgresBackup(fixture.options), /PostgreSQL local backup/u);
+      assert.equal(state.calls.length, changed === "pgDump" ? 1 : 2);
+      assert.ok(state.calls.every((call) => call.args[0] === "--version"));
+      assert.equal(state.clients.length, 0);
+      assert.ok(state.children.every((child) => child.closed));
+      assert.deepEqual(await fs.readdir(fixture.temporary), []);
+    } finally {
       await fixture.dispose();
     }
   });

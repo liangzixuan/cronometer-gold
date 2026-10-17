@@ -12,7 +12,12 @@ import {
 } from "../packages/db/dist/index.js";
 import { withPostgresBackupSnapshot } from "./postgres-backup-snapshot.mjs";
 import { createPostgresBackupRawStore, postgresBackupStorage } from "./postgres-backup-storage.mjs";
-import { ChildCleanupError, runTool, trustedPath } from "./postgres-operator-process.mjs";
+import {
+  ChildCleanupError,
+  postgresToolRelease,
+  runTool,
+  trustedPath,
+} from "./postgres-operator-process.mjs";
 
 const SHA = /^[0-9a-f]{64}$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -62,6 +67,7 @@ function inputSettings(input) {
   requireValue(input.signal === undefined || input.signal instanceof AbortSignal);
   requireValue(input.tools && Object.keys(input.tools).sort().join(",") === "pgDump,pgRestore");
   const tools = {};
+  const releases = [];
   for (const name of ["pgDump", "pgRestore"]) {
     const value = input.tools?.[name];
     requireValue(value && Object.keys(value).sort().join(",") === "path,sha256,version");
@@ -72,15 +78,12 @@ function inputSettings(input) {
     );
     requireValue(typeof value.sha256 === "string" && SHA.test(value.sha256));
     const prefix = name === "pgDump" ? "pg_dump" : "pg_restore";
-    requireValue(
-      typeof value.version === "string" &&
-        new RegExp("^" + prefix + " \\(PostgreSQL\\) 17\\.[0-9]+$", "u").test(value.version),
-    );
+    const release = postgresToolRelease(value.version, prefix);
+    requireValue(release !== undefined);
+    releases.push(release);
     tools[name] = Object.freeze({ ...value });
   }
-  requireValue(
-    tools.pgDump.version.split(" ").at(-1) === tools.pgRestore.version.split(" ").at(-1),
-  );
+  requireValue(releases[0] === releases[1]);
   requireValue(input.keyRing?.purpose === "postgres_backup" && input.keyRing.keys instanceof Map);
   requireValue(input.keyRing.keys.size >= 1 && input.keyRing.keys.size <= 16);
   requireValue(
