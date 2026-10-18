@@ -1315,6 +1315,102 @@ describe("environment replay database cleanup", () => {
     }
   });
 
+  it("binds environment replay to the admitted source database before migration", async () => {
+    const db = database();
+    const target = {
+      databaseName: "nutrition_isolated_restore",
+      databaseOid: "4567",
+      expectedOwner: "nutrition_owner",
+    };
+    operations.createDatabase.mockReturnValue(db);
+    environment.ERASURE_REPLAY_LEDGER_RESTORE_MAX_CONCURRENCY = "1";
+    const result = await runErasureLedgerRestoreFromEnvironment(environment, {
+      expectedTarget: target,
+    });
+    expect(operations.prepare).toHaveBeenCalledExactlyOnceWith(db, target);
+    expect(operations.prepare.mock.invocationCallOrder[0]).toBeLessThan(
+      operations.migration.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(result.attestation.databaseName).toBe(target.databaseName);
+    expect(result.attestation.databaseOid).toBe(target.databaseOid);
+    expect(db.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a different source database observation before readiness", async () => {
+    const db = database();
+    operations.createDatabase.mockReturnValue(db);
+    environment.ERASURE_REPLAY_LEDGER_RESTORE_MAX_CONCURRENCY = "1";
+    await expect(
+      runErasureLedgerRestoreFromEnvironment(environment, {
+        expectedTarget: {
+          databaseName: "different_source_database",
+          databaseOid: "4567",
+          expectedOwner: "nutrition_owner",
+        },
+      }),
+    ).rejects.toThrow("Restore attestation does not match replay");
+    expect(operations.ready).not.toHaveBeenCalled();
+    expect(db.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an already cancelled controller before configuration or database acquisition", async () => {
+    const controller = new AbortController();
+    const reason = new Error("synthetic controller cancellation");
+    controller.abort(reason);
+    await expect(
+      runErasureLedgerRestoreFromEnvironment({}, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(operations.createDatabase).not.toHaveBeenCalled();
+  });
+
+  it("settles cancellation during migration and closes the acquired database", async () => {
+    const db = database();
+    const controller = new AbortController();
+    const reason = new Error("synthetic migration cancellation");
+    operations.createDatabase.mockReturnValue(db);
+    operations.migration.mockImplementation(async () => controller.abort(reason));
+    await expect(
+      runErasureLedgerRestoreFromEnvironment(environment, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(query.execute).not.toHaveBeenCalled();
+    expect(operations.attest).not.toHaveBeenCalled();
+    expect(db.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("preserves cancellation observed while database closure settles", async () => {
+    const db = database();
+    const controller = new AbortController();
+    const reason = new Error("synthetic closure cancellation");
+    operations.createDatabase.mockReturnValue(db);
+    db.destroy.mockImplementation(async () => controller.abort(reason));
+    await expect(
+      runErasureLedgerRestoreFromEnvironment(environment, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    expect(operations.ready).toHaveBeenCalledOnce();
+    expect(db.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("captures the admitted target before asynchronous private-spool preparation", async () => {
+    const db = database();
+    const target = {
+      databaseName: "nutrition_isolated_restore",
+      databaseOid: "4567",
+      expectedOwner: "nutrition_owner",
+    };
+    operations.createDatabase.mockReturnValue(db);
+    environment.ERASURE_REPLAY_LEDGER_RESTORE_MAX_CONCURRENCY = "1";
+    const work = runErasureLedgerRestoreFromEnvironment(environment, { expectedTarget: target });
+    target.databaseName = "later_mutated_target";
+    await expect(work).resolves.toMatchObject({
+      attestation: { databaseName: "nutrition_isolated_restore", databaseOid: "4567" },
+    });
+    expect(operations.prepare).toHaveBeenCalledWith(db, {
+      databaseName: "nutrition_isolated_restore",
+      databaseOid: "4567",
+      expectedOwner: "nutrition_owner",
+    });
+  });
+
   it.each(["fulfilled", "rejected"] as const)(
     "waits for %s replay and then actual destruction",
     async (outcome) => {

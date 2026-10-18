@@ -559,11 +559,23 @@ export async function createErasureRestoreRawStore(
   });
 }
 
+export interface ErasureRestoreExecution {
+  readonly expectedTarget?: ExpectedReplayTarget;
+  readonly signal?: AbortSignal;
+}
+
 export async function runErasureLedgerRestoreFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
+  execution: ErasureRestoreExecution = {},
 ): Promise<ErasureRestoreResult> {
+  const { signal } = execution;
+  signal?.throwIfAborted();
+  // Bind the controller's source database before the first asynchronous preparation.
+  const expectedTarget =
+    execution.expectedTarget === undefined ? undefined : replayTarget(execution.expectedTarget);
   const databaseRestoreEpoch = restoreEpoch(environment);
   const rawStore = await createErasureRestoreRawStore(environment);
+  signal?.throwIfAborted();
   const spoolDirectory = safeDirectory(
     required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR"),
   );
@@ -575,8 +587,11 @@ export async function runErasureLedgerRestoreFromEnvironment(
   ) {
     throw new Error("Protected erasure restore spool storage is required in production");
   }
+  signal?.throwIfAborted();
   await mkdir(spoolDirectory, { mode: 0o700, recursive: true });
+  signal?.throwIfAborted();
   const spoolDetails = await lstat(spoolDirectory);
+  signal?.throwIfAborted();
   if (
     !spoolDetails.isDirectory() ||
     spoolDetails.isSymbolicLink() ||
@@ -585,6 +600,7 @@ export async function runErasureLedgerRestoreFromEnvironment(
     throw new Error("Erasure restore spool directory is not private");
   }
   await chmod(spoolDirectory, 0o700);
+  signal?.throwIfAborted();
   await cleanupOrphanedAuthenticatedArtifactSpools({
     directory: spoolDirectory,
     olderThanMs: positiveInteger(
@@ -594,6 +610,7 @@ export async function runErasureLedgerRestoreFromEnvironment(
     ),
   });
 
+  signal?.throwIfAborted();
   const ledger = new EncryptedErasureReplayLedger({
     artifactStore: new EncryptedArtifactStore({
       keyRing: parseArtifactEncryptionKeyRing({
@@ -610,9 +627,11 @@ export async function runErasureLedgerRestoreFromEnvironment(
       serializedKeys: environment.ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS,
     }),
   });
+  signal?.throwIfAborted();
   const database = createDatabaseFromEnvironment(environment);
   let work: { failed: false; result: ErasureRestoreResult } | { failed: true; reason: unknown };
   try {
+    signal?.throwIfAborted();
     const result = await replayAndAttestErasureLedgerRestore({
       database,
       ledger,
@@ -622,7 +641,10 @@ export async function runErasureLedgerRestoreFromEnvironment(
         16,
       ),
       restoreEpoch: databaseRestoreEpoch,
+      ...(expectedTarget ? { expectedTarget } : {}),
+      ...(signal ? { signal } : {}),
     });
+    signal?.throwIfAborted();
     work = { failed: false, result };
   } catch (error) {
     work = { failed: true, reason: error };
@@ -633,12 +655,17 @@ export async function runErasureLedgerRestoreFromEnvironment(
     if (!work.failed) throw error;
   }
   if (work.failed) throw work.reason;
+  signal?.throwIfAborted();
   return work.result;
 }
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
-  void runErasureLedgerRestoreFromEnvironment()
+  const cancellation = new AbortController();
+  const abort = () => cancellation.abort();
+  process.on("SIGINT", abort);
+  process.on("SIGTERM", abort);
+  void runErasureLedgerRestoreFromEnvironment(process.env, { signal: cancellation.signal })
     .then((result) => {
       process.stdout.write(
         `${JSON.stringify({ event: "erasure_restore.reconciled", level: "info", ...result })}\n`,
@@ -653,5 +680,9 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
         `${JSON.stringify({ event: "erasure_restore.failed", errorType, level: "fatal" })}\n`,
       );
       process.exitCode = 1;
+    })
+    .finally(() => {
+      process.removeListener("SIGINT", abort);
+      process.removeListener("SIGTERM", abort);
     });
 }

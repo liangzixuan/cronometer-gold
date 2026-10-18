@@ -4,7 +4,10 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-export function azureBackupFixture({ hosted = false } = {}) {
+export function azureBackupFixture({ hosted = false, containerUrl } = {}) {
+  const origin = containerUrl
+    ? new URL(containerUrl).origin
+    : "https://nourishingbackup.blob.core.windows.net";
   const container = hosted ? "nourishing-development-backup" : "backups";
   const now = Date.now();
   const credential = (permission) =>
@@ -36,7 +39,7 @@ export function azureBackupFixture({ hosted = false } = {}) {
     storage(permission) {
       return {
         kind: "azure-blob",
-        containerUrl: "https://nourishingbackup.blob.core.windows.net/" + container,
+        containerUrl: containerUrl ?? origin + "/" + container,
         prefix: hosted ? "development/backup/" : "development/",
         sasToken: credential(permission),
         requestTimeoutMs: 1000,
@@ -44,7 +47,7 @@ export function azureBackupFixture({ hosted = false } = {}) {
     },
     async send(request, headers) {
       const url = new URL(request.url);
-      assert.equal(url.origin, "https://nourishingbackup.blob.core.windows.net");
+      assert.equal(url.origin, origin);
       assert.equal(request.headers.get("x-ms-version"), "2026-04-06");
       state.requests.push({
         method: request.method,
@@ -101,7 +104,9 @@ export function azureBackupFixture({ hosted = false } = {}) {
           "</Content-Length><BlobType>BlockBlob</BlobType></Properties></Blob>";
         return respond(
           200,
-          '<?xml version="1.0" encoding="utf-8"?><EnumerationResults ServiceEndpoint="https://nourishingbackup.blob.core.windows.net/" ContainerName="' +
+          '<?xml version="1.0" encoding="utf-8"?><EnumerationResults ServiceEndpoint="' +
+            origin +
+            '/" ContainerName="' +
             container +
             '"><Prefix>' +
             name +

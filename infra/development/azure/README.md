@@ -464,3 +464,99 @@ acceptance requirements. Azure protocol permission references:
 [delegation SAS](https://learn.microsoft.com/en-us/rest/api/storageservices/create-user-delegation-sas),
 [Put Block](https://learn.microsoft.com/en-us/rest/api/storageservices/put-block),
 [Put Block List](https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list).
+
+## Prepared-host development runtime
+
+The source entrypoint `scripts/azure-development-runtime.mjs` runs one finite,
+private synthetic journey on an already qualified Linux ARM64 host. It consumes
+prepared tools, images, encrypted storage, network policy, files and a supervisor.
+Preparing that host, acquiring images and credentials, and admitting an actual
+invocation require their own resource, custody, lifetime and zero-cost evidence.
+This command does not provision or configure the host.
+
+```sh
+node scripts/azure-development-runtime.mjs run \
+  --input /absolute/private/runtime.json --input-sha256 REVIEWED_INPUT_SHA256
+```
+
+The protected mode0600 input uses canonical JSON with one trailing newline inside
+an owned mode0700 directory. Its exact fields are `schemaVersion`, `kind`, `owner`,
+`project`, `root`, `sourceRevision`, `notAfterUtc`, `holdSeconds`, `tools`, `images`,
+`files`, `database`, `mail`, `journey`, `host`, `supervisor` and `recovery`.
+`schemaVersion` is `1`; `kind` is `nutrition-development-runtime-input-v1`.
+`owner` is a new UUID and `project` is `nourishing-development-<owner>`.
+`sourceRevision` binds a clean source checkout. `root` is the prepared private
+runtime directory. Each tool has an absolute path and a reviewed SHA256.
+The running Node executable must match its input identity.
+
+The consumer modules define the remaining exact input structures:
+
+- `azure-development-runtime-prepared.mjs` holds the private directory and file
+  inventory. Files include separate mail send/review configuration and a public
+  CA. Role ownership, file bytes and metadata remain checked through held paths.
+- `azure-development-runtime-images.mjs` admits seven exact local ARM64 image
+  identities through the maintained backend and Mailpit validators.
+- `azure-development-runtime-configuration.mjs` validates the fixed
+  `runtime/compose.yaml` and internal Caddy configuration against current API and
+  worker parsers. Dependencies and application listeners stay private.
+- `azure-development-runtime-host.mjs` checks the prepared encrypted backing
+  paths, host and Docker identities, native tools, private DNS and packet policy.
+  `azure-development-runtime-supervision.mjs` checks the existing bounded native
+  supervisor. Neither module installs tools or changes the host policy.
+- `recovery` binds the protected `<root>/recovery/settings.json` and its hash.
+  It supplies current storage-recovery assembly and PostgreSQL operator inputs,
+  exact destinations, scoped credentials and recovery key references. Keep its
+  values out of source, shell arguments and ordinary logs.
+
+The original input horizon is at most four hours away. The complete controller
+requires two 30-minute reserves plus at least one minute of remaining work after
+supervisor admission. Allow time for admission itself. Its work deadline is the
+earlier of 30 minutes before supervisor fallback and 60 minutes before the
+original horizon. This leaves ordinary owned shutdown time and a further
+hard-loss reserve. `holdSeconds` is an integer from 0 to 900. A hold is limited by
+the remaining work budget. These bounds are not a continuous-hosting or billing
+authorization.
+
+The fixed path observes an absent owned project, records creation intent and
+conserves full container/network identities before starting dependencies. It runs
+migrations twice, the Azure credential canary, scoped search-key issuance and
+synthetic catalogue seeding. Current assembly qualification and protected
+encrypted backup, exact-version download and fenced restore must pass before
+runtime grants, original-database replay and API/worker readiness. The restored
+drill database remains fenced; applications use the original synthetic database.
+
+The private journey registers two owners, verifies captured mail, exercises
+password recovery, searches or creates food, logs and edits a diary entry, then
+stops and restarts API/worker services and checks the saved diary. Separate mail
+send and capture-review identities are required. The source proof uses the actual
+API and worker factories above controlled raw SQL and HTTP responses; it does not
+qualify native PostgreSQL enforcement, actual TLS/Mailpit permissions or hosted
+persistence.
+
+The create-only private journal retains mutation intent, raw observations and
+outcomes. It permits at most 1024 records, 1 MiB per record and 64 MiB in total.
+Normal finalization attempts each known owned service separately, including after
+an earlier stop refusal. API and worker stop windows are 305 and 610 seconds.
+Volumes, recovery material, canaries, backups and uncertain outcomes remain.
+Success is returned only after owned stops and all local holders close. The
+terminal journal event always records `runtimeAcceptanceRecorded: false`; any
+observed journey in that event does not turn failed cleanup into success.
+
+After controller loss, the separately selected recovery command uses the same
+protected input and original lease:
+
+```sh
+node scripts/azure-development-runtime.mjs stop \
+  --input /absolute/private/runtime.json --input-sha256 REVIEWED_INPUT_SHA256
+```
+
+Recovery refuses a still-live original controller, a changed boot/source or an
+expired original horizon. It uses only conserved durable IDs from the original
+journal prefix and rechecks ownership before stopping them. It loads no service
+environment or recovery keys. Retain incomplete evidence and unknown resources
+for scoped reconciliation; neither command authorizes deletion or lease renewal.
+
+The successful source result remains `operationalAcceptance: false` and
+`applicationTrafficBlocked: true`. Actual native host, packet/TLS policy, issuer
+grants, provider resources, custody, remaining allowance and the persistent
+Windows-to-hosted journey need their own accepted evidence before execution.

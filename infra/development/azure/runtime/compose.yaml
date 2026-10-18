@@ -1,0 +1,353 @@
+# Private development stack. Only the bounded runtime controller may start phases.
+# Prepared paths are mandatory; this definition never creates host bind paths.
+name: ${RUNTIME_PROJECT:?An owned project is required}
+
+x-service: &service
+  platform: linux/arm64
+  pull_policy: never
+  init: true
+  user: "1000:1000"
+  restart: "no"
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 256
+  labels:
+    io.nourishing.runtime.owner: ${RUNTIME_OWNER:?An owner identity is required}
+    io.nourishing.runtime.revision: ${RUNTIME_REVISION:?A source revision is required}
+  logging:
+    driver: json-file
+    options: { max-size: "2m", max-file: "2" }
+
+services:
+  postgres:
+    <<: *service
+    image: ${POSTGRES_IMAGE:?An exact admitted image is required}
+    profiles: [dependencies]
+    cpus: "0.75"
+    mem_limit: 2g
+    user: "70:70"
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/postgres.env
+    command: ["postgres", "-c", "ssl=on", "-c", "ssl_cert_file=/run/postgres/server.crt", "-c", "ssl_key_file=/run/postgres/server.key", "-c", "ssl_ca_file=/run/internal-ca/ca.crt", "-c", "ssl_min_protocol_version=TLSv1.2"]
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/postgres
+        target: /var/lib/postgresql/data
+        read_only: false
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/ca.crt
+        target: /run/internal-ca/ca.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/postgres.crt
+        target: /run/postgres/server.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/postgres.key
+        target: /run/postgres/server.key
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/config/database-bootstrap.sql
+        target: /docker-entrypoint-initdb.d/00-development.sql
+        read_only: true
+        bind: { create_host_path: false }
+    networks:
+      backend: { ipv4_address: 172.28.0.2 }
+    tmpfs:
+      - /run/postgresql:rw,noexec,nosuid,size=64m,uid=70,gid=70,mode=3775
+      - /tmp:rw,noexec,nosuid,size=64m,uid=70,gid=70,mode=1770
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  meilisearch:
+    <<: *service
+    image: ${MEILI_IMAGE:?An exact admitted image is required}
+    profiles: [dependencies]
+    cpus: "0.75"
+    mem_limit: 2560m
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/meili.env
+    environment:
+      MEILI_ENV: "production"
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/meili
+        target: /meili_data
+        read_only: false
+        bind: { create_host_path: false }
+    networks:
+      backend: { ipv4_address: 172.28.0.3 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  internal-tls:
+    <<: *service
+    image: ${CADDY_IMAGE:?An exact admitted image is required}
+    profiles: [dependencies]
+    cpus: "0.25"
+    mem_limit: 256m
+    volumes:
+      - type: bind
+        source: ${RUNTIME_SOURCE:?A reviewed source root is required}/infra/development/azure/runtime/Caddyfile.internal
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/meili.crt
+        target: /run/meili/server.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/meili.key
+        target: /run/meili/server.key
+        read_only: true
+        bind: { create_host_path: false }
+    networks:
+      backend: { aliases: [meili.internal], ipv4_address: 172.28.0.4 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,uid=1000,gid=1000,mode=1770
+      - /data:rw,noexec,nosuid,size=32m,uid=1000,gid=1000,mode=0700
+      - /config:rw,noexec,nosuid,size=16m,uid=1000,gid=1000,mode=0700
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  capture:
+    <<: *service
+    image: ${MAILPIT_IMAGE:?An exact admitted image is required}
+    profiles: [dependencies]
+    cpus: "0.25"
+    mem_limit: 384m
+    environment:
+      MP_UI_BIND_ADDR: "0.0.0.0:8025"
+      MP_SMTP_BIND_ADDR: "127.0.0.1:1025"
+      MP_UI_TLS_CERT: "/run/capture/server.crt"
+      MP_UI_TLS_KEY: "/run/capture/server.key"
+      MP_UI_AUTH_FILE: "/run/capture/review.htpasswd"
+      MP_SEND_API_AUTH_FILE: "/run/capture/send.htpasswd"
+      MP_ALLOWED_HOSTS: "mail-capture"
+      MP_DATABASE: "/data/mailpit.db"
+      MP_DISABLE_HTTP_COMPRESSION: "true"
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/capture
+        target: /data
+        read_only: false
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/capture.crt
+        target: /run/capture/server.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/capture.key
+        target: /run/capture/server.key
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/mail/review.htpasswd
+        target: /run/capture/review.htpasswd
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/mail/send.htpasswd
+        target: /run/capture/send.htpasswd
+        read_only: true
+        bind: { create_host_path: false }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+    networks:
+      capture: { aliases: [mail-capture], ipv4_address: 172.29.0.2 }
+
+  api:
+    <<: *service
+    image: ${API_IMAGE:?An exact admitted image is required}
+    profiles: [application]
+    cpus: "0.50"
+    mem_limit: 768m
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/runtime.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/database.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/api.env
+    environment:
+      NODE_EXTRA_CA_CERTS: "/run/internal-ca/ca.crt"
+      API_HOST: "0.0.0.0"
+      API_PORT: "4000"
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/ca.crt
+        target: /run/internal-ca/ca.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/export-read-spool
+        target: /var/lib/nutrition-tracker/export-read-spool
+        read_only: false
+        bind: { create_host_path: false }
+    networks:
+      backend: { ipv4_address: 172.28.0.5 }
+      capture: { ipv4_address: 172.29.0.3 }
+      azure_egress: { ipv4_address: 172.30.0.2 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+    stop_grace_period: 305s
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(async r=>{if(r.status!==200||JSON.stringify(await r.json())!==JSON.stringify({status:'ok'}))process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  worker:
+    <<: *service
+    image: ${WORKER_IMAGE:?An exact admitted image is required}
+    profiles: [application]
+    cpus: "0.60"
+    mem_limit: 1536m
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/runtime.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/database.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/worker.env
+    environment:
+      NODE_EXTRA_CA_CERTS: "/run/internal-ca/ca.crt"
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/ca.crt
+        target: /run/internal-ca/ca.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/export-spool
+        target: /var/lib/nutrition-tracker/export-spool
+        read_only: false
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/search-spool
+        target: /var/lib/nutrition-tracker/search-spool
+        read_only: false
+        bind: { create_host_path: false }
+    networks:
+      backend: { ipv4_address: 172.28.0.6 }
+      azure_egress: { ipv4_address: 172.30.0.3 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+    stop_grace_period: 610s
+    healthcheck:
+      test: ["CMD", "node", "dist/database-readiness-probe.js"]
+      interval: 15s
+      timeout: 15s
+      retries: 6
+      start_period: 30s
+
+  migrate:
+    <<: *service
+    image: ${MIGRATOR_IMAGE:?An exact admitted image is required}
+    profiles: [maintenance]
+    cpus: "0.50"
+    mem_limit: 1024m
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/runtime.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/migrate.env
+    environment:
+      NODE_EXTRA_CA_CERTS: "/run/internal-ca/ca.crt"
+    command: ["node", "dist/cli.js"]
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/ca.crt
+        target: /run/internal-ca/ca.crt
+        read_only: true
+        bind: { create_host_path: false }
+    networks:
+      backend: { ipv4_address: 172.28.0.7 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+
+  azure-canary:
+    <<: *service
+    image: ${WORKER_IMAGE:?An exact admitted image is required}
+    profiles: [maintenance]
+    cpus: "0.25"
+    mem_limit: 512m
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/runtime.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/canary.env
+    environment:
+      NODE_EXTRA_CA_CERTS: "/run/internal-ca/ca.crt"
+    command: ["node", "dist/azure-object-storage-credential-canary.js"]
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/ca.crt
+        target: /run/internal-ca/ca.crt
+        read_only: true
+        bind: { create_host_path: false }
+    networks:
+      azure_egress: { ipv4_address: 172.30.0.4 }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+
+  search-bootstrap:
+    <<: *service
+    image: ${WORKER_IMAGE:?An exact admitted image is required}
+    profiles: [maintenance]
+    cpus: "0.25"
+    mem_limit: 384m
+    env_file:
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/meili.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/scoped-meili.env
+    environment:
+      MEILI_URL: "http://127.0.0.1:7700"
+      MEILI_PORT: "7700"
+    command: ["node", "/run/source/scoped-meili-keys.mjs"]
+    volumes:
+      - type: bind
+        source: ${RUNTIME_SOURCE:?A reviewed source root is required}/scripts/scoped-meili-keys.mjs
+        target: /run/source/scoped-meili-keys.mjs
+        read_only: true
+        bind: { create_host_path: false }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000,mode=1770
+    network_mode: service:meilisearch
+
+networks:
+  backend:
+    internal: true
+    enable_ipv6: false
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
+  capture:
+    internal: true
+    enable_ipv6: false
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.29.0.0/24
+          gateway: 172.29.0.1
+  azure_egress:
+    internal: false
+    enable_ipv6: false
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.30.0.0/24
+          gateway: 172.30.0.1
