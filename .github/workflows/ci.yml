@@ -15,7 +15,7 @@ jobs:
   quality:
     name: quality
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -77,6 +77,19 @@ jobs:
         run: |
           test "$(pnpm --version)" = "11.19.0"
           pnpm install --frozen-lockfile --strict-peer-dependencies
+
+      - name: Set up the qualified Compose renderer
+        uses: docker/setup-compose-action@54042514f505b273907334ae2b9cdbb9a0213c1a # v2
+        with:
+          version: v5.5.1
+          cache-binary: false
+
+      - name: Verify the qualified Compose renderer
+        run: |
+          test "${RUNNER_ARCH}" = "X64"
+          test -z "${DOCKER_CONFIG:-}"
+          printf '%s  %s\n' 'db1889184726840f75c4f9c001048430d4f25b3be3cb084d3ddd762bc0aed576' "${HOME}/.docker/cli-plugins/docker-compose" | sha256sum --check --status
+          test "$(docker compose version --short)" = "5.5.1"
 
       - name: Check manifests, formatting, boundaries, types, and tests
         run: pnpm check
