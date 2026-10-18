@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import re
-import shutil
 import stat
 import sys
 from datetime import datetime, timezone
@@ -25,7 +24,7 @@ TF_FILES = ("versions.tf", "variables.tf", "main.tf", "outputs.tf", ".terraform.
 MAX_FILE = 512 * 1024 * 1024
 MAX_OUTPUT = 20 * 1024 * 1024
 MAX_AGGREGATE = MAX_FILE + MAX_OUTPUT + 600 * 1024 * 1024
-OUTPUTS = {"plan.tfplan": MAX_FILE, "rendered.json": MAX_OUTPUT, "version.json": 65536,
+OUTPUTS = {"plan.tfplan": MAX_FILE, "rendered.json": MAX_OUTPUT, "result.json": MAX_OUTPUT, "version.json": 65536,
            "phases.json": 32768, **{"auth-" + n + ".json": 65536 for n in
            ("version", "extensions", "account", "subscription")}}
 FIELDS = {"schema_version", "source_sha256", "identity_file", "profile_directory", "terraform",
@@ -178,10 +177,41 @@ def authenticate(path, directory, state_hash, now):
         P.validate_response(label, value, expected); result[label] = digest
     return result
 
+def plan_evidence(directory, expected_hashes):
+    retained = tree(directory)
+    require("result.json" not in retained and len(retained) < 96, "result publication entry unavailable")
+    for name, digest in expected_hashes.items():
+        require(retained.get(name, {}).get("sha256") == digest, "validated plan evidence changed")
+    return retained
+
+def verify_plan_directory(directory, state):
+    P.safe_path(directory); A.H._require_private_directory(directory, "retained plan")
+    info = directory.lstat()
+    require([info.st_dev, info.st_ino] == state.get("directory_identity"), "retained plan operation replaced")
+
+def verify_retained_plan(directory, result):
+    P.safe_path(directory); A.H._require_private_directory(directory, "retained plan")
+    retained = result.get("retained_evidence")
+    require(isinstance(retained, dict), "retained plan evidence missing")
+    required = {"work", "home", "tmp", "data", "terraform", "terraform.rc", "session.json", "version.json",
+                "rendered.json", "plan.tfplan", "phases.json", *["auth-" + name + ".json" for name in
+                ("version", "extensions", "account", "subscription")]}
+    require(required <= set(retained), "retained plan evidence incomplete")
+    published, digest = A.private_json(directory / "result.json")
+    require(published == result, "published plan result changed")
+    state, state_hash = A.private_json(directory / "session.json")
+    require(retained.get("session.json", {}).get("sha256") == state_hash, "retained plan session changed")
+    verify_plan_directory(directory, state)
+    current = tree(directory)
+    publication = current.pop("result.json", {})
+    require(publication.get("sha256") == digest and publication.get("mode") == 0o600
+            and current == retained, "retained plan evidence changed")
+    return digest
+
 def finish(path, directory, state_hash, now):
     state, _, documents, hashes = verify(path, directory, state_hash, now)
     authentication = authenticate(path, directory, state_hash, now)
-    version, _ = A.private_json(directory / "version.json")
+    version, version_hash = A.private_json(directory / "version.json")
     require(version.get("terraform_version") == "1.5.7" and version.get("platform") == "linux_amd64",
             "Terraform runtime version differs")
     document, rendered_hash = A.private_json(directory / "rendered.json")
@@ -195,24 +225,20 @@ def finish(path, directory, state_hash, now):
              "version", "init", "plan", "show"], "exact completed operator phases required")
     require(all(v.get("completed") is True and v.get("exitCode") == 0 for v in phases), "incomplete operator phase")
     require(phases[-1].get("binaryPlanSha256") == plan_hash, "binary plan differs from rendered descriptor")
-    result = {"completed": True, "scope": "Local binary development plan and empty-host policy; no apply or runtime acceptance.",
+    verify(path, directory, state_hash, now)
+    expected_hashes = {"plan.tfplan": plan_hash, "rendered.json": rendered_hash, "version.json": version_hash,
+                       "phases.json": phases_hash, "session.json": state_hash,
+                       **{"auth-" + name + ".json": digest for name, digest in authentication.items()}}
+    retained = plan_evidence(directory, expected_hashes)
+    result = {"completed": True, "scope": "Local binary development plan and retained private evidence; no apply or runtime acceptance.",
               "source_sha256": state["snapshot"]["source"], "input_sha256": state["snapshot"],
               "binary_plan_sha256": plan_hash, "binary_plan_bytes": plan_size, "rendered_sha256": rendered_hash,
               "authentication_response_sha256": authentication, "phases_sha256": phases_hash,
-              "phases": phases, **summary}
-    # Remove only this exclusive operation's verified scratch trees. Publication is last.
-    def owned_directory():
-        info = directory.lstat()
-        require(stat.S_ISDIR(info.st_mode) and [info.st_dev, info.st_ino] == state["directory_identity"]
-                and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700, "operation replaced during cleanup")
-    for name in ("work", "home", "tmp", "data", "terraform"):
-        owned_directory(); shutil.rmtree(directory / name)
-    for name in ("terraform.rc", "rendered.json", "version.json", "session.json", *["auth-" + n + ".json" for n in authentication]):
-        owned_directory(); (directory / name).unlink()
-    require({p.name for p in directory.iterdir()} == {"plan.tfplan", "phases.json"}, "scratch cleanup incomplete")
+              "phases": phases, "retained_evidence": retained, **summary}
     require(load_request(path, now)[-1] == state["snapshot"], "inputs changed before publication")
-    owned_directory(); A.publish_result(directory / "result.json", result)
-    return {"completed": True, "result_sha256": A.sha((directory / "result.json").read_bytes())}
+    verify_plan_directory(directory, state)
+    A.publish_result(directory / "result.json", result)
+    return {"completed": True, "result_sha256": verify_retained_plan(directory, result)}
 
 def main(argv=None):
     os.umask(0o077)
@@ -228,6 +254,10 @@ def main(argv=None):
             if mode == "verify": verify(path, directory, digest, now); value = {"verified": True}
             elif mode == "authenticate": value = authenticate(path, directory, digest, now)
             elif mode == "finish": value = finish(path, directory, digest, now)
+            elif mode == "verify-retained":
+                verify(path, directory, digest, now)
+                result, _ = A.private_json(directory / "result.json")
+                value = {"verified": True, "result_sha256": verify_retained_plan(directory, result)}
             else: raise A.Error("unknown pure helper stage")
         print(json.dumps(value, separators=(",", ":"))); return 0
     except Exception:

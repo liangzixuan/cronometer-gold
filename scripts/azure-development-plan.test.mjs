@@ -339,16 +339,21 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
       const helperPath = argv[2];
       const helperArgs = argv.slice(3);
       const patchProgram = `import importlib.util,json\nfrom pathlib import Path\ns=importlib.util.spec_from_file_location('pure',${JSON.stringify(helperPath)});q=importlib.util.module_from_spec(s);s.loader.exec_module(q)\np=json.loads(Path(${JSON.stringify(join(directory, "fixture-pins.json"))}).read_text());q.A.TF_SHA256=p['terraform'];q.A.PROVIDER_FILES={k:tuple(v) for k,v in p['provider'].items()};q.P.tool_digest=lambda path:(q.P.CLI_SHA256,100);q.datetime=type('FixtureClock',(),{'now':staticmethod(lambda tz:__import__('datetime').datetime.fromisoformat(p['now']))});raise SystemExit(q.main(${JSON.stringify(helperArgs)}))`;
-      if (state.failure === "cleanup" && helperArgs[0] === "finish") {
+      if (state.failure === "retention" && helperArgs[0] === "finish") {
         const rejected = patchProgram.replace(
           "raise SystemExit(q.main",
-          "q.shutil.rmtree=lambda path:(_ for _ in ()).throw(OSError('synthetic cleanup rejection'));raise SystemExit(q.main",
+          "q.plan_evidence=lambda *args:(_ for _ in ()).throw(OSError('synthetic retention rejection'));raise SystemExit(q.main",
         );
         return runTool(python, ["-I", "-B", "-c", rejected], options);
       }
       const result = await runTool(python, ["-I", "-B", "-c", patchProgram], options);
       if (state.failure === "after-publication" && helperArgs[0] === "finish")
         throw new Error("synthetic post-publication boundary rejection");
+      if (state.failure === "lost-retained-evidence" && helperArgs[0] === "finish")
+        await rename(
+          join(directory, "nourishing-dev-0123456789ab/auth-account.json"),
+          join(directory, "moved-original-auth.json"),
+        );
       return result;
     }
     state.calls.push({ file, argv, env: options.env });
@@ -452,8 +457,9 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
     "init",
     "plan",
     "show",
-    "cleanup",
+    "retention",
     "after-publication",
+    "lost-retained-evidence",
     undefined,
   ]) {
     state.failure = failure;
@@ -468,7 +474,7 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
             run,
           ),
         );
-        if (["cleanup", "after-publication"].includes(failure))
+        if (["retention", "after-publication", "lost-retained-evidence"].includes(failure))
           assert.equal(state.calls.length, 8, "failure must reach the selected final stage");
         else
           assert.equal(
@@ -476,13 +482,13 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
             failure,
             "failure must reach the selected command",
           );
-        if (failure === "after-publication")
+        if (["after-publication", "lost-retained-evidence"].includes(failure))
           assert.equal(
             JSON.parse(await readFile(join(operation, "result.json"), "utf8")).completed,
             true,
           );
         else await assert.rejects(lstat(join(operation, "result.json")), { code: "ENOENT" });
-        if (failure === "cleanup")
+        if (failure === "retention")
           assert.equal(
             await readFile(join(operation, "plan.tfplan"), "utf8"),
             "synthetic binary plan",
@@ -498,6 +504,27 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
         assert.equal(receipt.resource_count, 11);
         assert.equal(receipt.source_sha256, source);
         assert.equal(receipt.phases.length, 10);
+        const rendered = await readFile(join(result.directory, "rendered.json"));
+        assert.equal(hash(rendered), receipt.rendered_sha256);
+        assert.equal(receipt.retained_evidence["rendered.json"].sha256, hash(rendered));
+        for (const name of [
+          "auth-version.json",
+          "auth-extensions.json",
+          "auth-account.json",
+          "auth-subscription.json",
+          "version.json",
+          "session.json",
+          "terraform.rc",
+          "work/inputs.tfvars.json",
+        ]) {
+          const metadata = await lstat(join(result.directory, name));
+          assert.ok(metadata.isFile(), `retained original ${name}`);
+          assert.equal(metadata.mode & 0o777, 0o600);
+          assert.equal(
+            receipt.retained_evidence[name].sha256,
+            hash(await readFile(join(result.directory, name))),
+          );
+        }
         assert.equal(state.calls.length, 8);
         assert.equal(
           await readFile(join(result.directory, "plan.tfplan"), "utf8"),

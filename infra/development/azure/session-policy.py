@@ -81,6 +81,7 @@ def plan_inputs(path, result_path, result_hash):
     result = reference(result_path, result_hash)
     require(result.get("completed") is True and result.get("resource_count") == 11
             and result.get("source_sha256") == Q.source_digest(), "retained successful plan receipt required")
+    Q.verify_retained_plan(result_path.parent, result)
     phases, phases_hash = private(result_path.parent / "phases.json")
     require(phases_hash == result.get("phases_sha256") and phases == result.get("phases")
             and isinstance(phases, list) and len(phases) == 10, "retained plan phases changed")

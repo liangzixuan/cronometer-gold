@@ -320,18 +320,18 @@ export async function createDevelopmentPlan(
     flag: "wx",
     mode: 0o600,
   });
-  // finish removes the session binding before create-only publication; verify outer source/input separately.
-  const completed = session;
-  session = undefined;
+  // Keep the original session binding and all validated evidence through publication.
   const result = JSON.parse((await pure("finish", extra)).text);
   requireValue(result.completed === true);
-  const receipt = await privateJson(resolve(completed.directory, "result.json"));
+  const receipt = await privateJson(resolve(session.directory, "result.json"));
   requireValue(
     receipt.sha256 === result.result_sha256 &&
       receipt.value.completed === true &&
       receipt.value.source_sha256 === expectedSource,
   );
-  return { directory: completed.directory, resultSha256: receipt.sha256 };
+  const retained = JSON.parse((await pure("verify-retained", extra)).text);
+  requireValue(retained.verified === true && retained.result_sha256 === receipt.sha256);
+  return { directory: session.directory, resultSha256: receipt.sha256 };
 }
 
 async function main() {

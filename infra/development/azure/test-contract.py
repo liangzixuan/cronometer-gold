@@ -671,9 +671,12 @@ class PlanPreparation(unittest.TestCase):
         file=self.directory/'auth-account.json';file.write_text('{}')
         with self.assertRaises(Q.A.Error):Q.authenticate(*self.args)
     def test_real_auditor_and_create_only_publication_retain_plan(self):
-        self.prepare();self.complete_files();result=Q.finish(*self.args)
-        self.assertTrue(result['completed']);self.assertEqual(set(p.name for p in self.directory.iterdir()),{'result.json','plan.tfplan','phases.json'})
+        self.prepare();self.complete_files();before=Q.tree(self.directory);result=Q.finish(*self.args)
+        self.assertTrue(result['completed'])
         receipt=json.loads((self.directory/'result.json').read_text())
+        self.assertEqual(receipt['retained_evidence'],before)
+        self.assertEqual({k:v for k,v in Q.tree(self.directory).items() if k!='result.json'},before)
+        self.assertEqual(Q.verify_retained_plan(self.directory,receipt),A.sha((self.directory/'result.json').read_bytes()))
         self.assertEqual(receipt['resource_count'],11);self.assertEqual(receipt['binary_plan_sha256'],A.sha((self.directory/'plan.tfplan').read_bytes()))
         self.assertEqual((self.directory/'result.json').stat().st_mode&0o777,0o600)
         with self.assertRaises((Q.A.Error,OSError)):Q.finish(*self.args)
@@ -713,12 +716,12 @@ class PlanPreparation(unittest.TestCase):
         with mock.patch.object(Q,'MAX_AGGREGATE',2),self.assertRaises(Q.A.Error):Q.tree(self.directory)
         for i in range(97):(self.directory/('unexpected'+str(i))).touch(mode=0o600)
         with self.assertRaises(Q.A.Error):Q.tree(self.directory)
-    def test_plan_policy_failure_and_cleanup_failure_never_publish(self):
+    def test_plan_policy_failure_and_retention_failure_never_publish(self):
         self.prepare();self.complete_files()
         file=self.directory/'rendered.json';raw=file.read_bytes();file.write_text('{}')
         with self.assertRaises(Q.A.Error):Q.finish(*self.args)
         file.write_bytes(raw)
-        with mock.patch.object(Q.shutil,'rmtree',side_effect=OSError('PRIVATE_CANARY')),self.assertRaises(OSError):Q.finish(*self.args)
+        with mock.patch.object(Q,'plan_evidence',side_effect=OSError('PRIVATE_CANARY')),self.assertRaises(OSError):Q.finish(*self.args)
         self.assertFalse((self.directory/'result.json').exists());self.assertTrue((self.directory/'plan.tfplan').exists())
     def test_after_publication_failure_preserves_complete_result(self):
         self.prepare();self.complete_files();real=Q.A.publish_result
@@ -726,6 +729,25 @@ class PlanPreparation(unittest.TestCase):
         with mock.patch.object(Q.A,'publish_result',side_effect=interrupted),self.assertRaises(Q.A.PublishedResultError):Q.finish(*self.args)
         self.assertTrue(json.loads((self.directory/'result.json').read_text())['completed'])
         self.assertTrue((self.directory/'plan.tfplan').exists())
+        self.assertTrue((self.directory/'rendered.json').exists());self.assertTrue((self.directory/'auth-account.json').exists())
+        self.assertTrue((self.directory/'work/inputs.tfvars.json').exists())
+    def test_retained_proof_replacement_missing_mode_and_extra_entry_rejected(self):
+        self.prepare();self.complete_files();Q.finish(*self.args)
+        receipt=json.loads((self.directory/'result.json').read_text())
+        for name in ['rendered.json','auth-account.json','session.json','work/main.tf']:
+            path=self.directory/name;raw=path.read_bytes()
+            path.write_bytes(raw+b'\n')
+            with self.subTest(name=name),self.assertRaises(Q.A.Error):Q.verify_retained_plan(self.directory,receipt)
+            path.write_bytes(raw)
+        path=self.directory/'auth-subscription.json';held=self.root/'retained-auth';path.rename(held)
+        with self.assertRaises(Q.A.Error):Q.verify_retained_plan(self.directory,receipt)
+        held.rename(path);path.chmod(0o644)
+        with self.assertRaises(Q.A.Error):Q.verify_retained_plan(self.directory,receipt)
+        path.chmod(0o600)
+        extra=self.directory/'unrecognized.json';extra.write_text('{}');extra.chmod(0o600)
+        with self.assertRaises(Q.A.Error):Q.verify_retained_plan(self.directory,receipt)
+        extra.rename(self.root/'retained-extra')
+        Q.verify_retained_plan(self.directory,receipt)
     def test_replaced_operation_is_not_cleaned_or_published(self):
         self.prepare();self.complete_files()
         original=self.directory;renamed=self.root/'retained-operation';original.rename(renamed)
@@ -733,6 +755,19 @@ class PlanPreparation(unittest.TestCase):
         (original/'session.json').write_bytes((renamed/'session.json').read_bytes());(original/'session.json').chmod(0o600)
         with self.assertRaisesRegex(Q.A.Error,'operation or inputs changed'):Q.finish(*self.args)
         self.assertTrue((renamed/'plan.tfplan').exists());self.assertTrue((original/'session.json').exists())
+    def test_replaced_root_before_publication_retains_original_and_rejects(self):
+        import shutil
+        self.prepare();self.complete_files();capture=Q.plan_evidence
+        held=self.root/'original-before-publication'
+        def replace_root(directory,expected):
+            retained=capture(directory,expected);directory.rename(held)
+            shutil.copytree(held,directory,symlinks=True)
+            self.assertEqual(Q.tree(held),Q.tree(directory))
+            return retained
+        with mock.patch.object(Q,'plan_evidence',side_effect=replace_root):
+            with self.assertRaisesRegex(Q.A.Error,'retained plan operation replaced'):Q.finish(*self.args)
+        self.assertFalse((self.directory/'result.json').exists());self.assertFalse((held/'result.json').exists())
+        self.assertTrue((held/'rendered.json').exists());self.assertTrue((held/'auth-account.json').exists())
     def test_binary_binding_and_requested_values_are_required(self):
         self.prepare();self.complete_files()
         binary=self.directory/'plan.tfplan';original=binary.read_bytes();binary.write_bytes(b'changed private binary')
@@ -1120,6 +1155,22 @@ class SessionPolicy(unittest.TestCase):
         with mock.patch.object(S,'source_digest',return_value='0'*64),self.assertRaises(S.A.Error):S.prepare('execute',self.input,NOW)
         with self.assertRaises(S.A.Error):S.prepare('execute',self.input,NOW+timedelta(hours=1))
         self.assertFalse((self.root/self.request['operation_name']).exists())
+    def test_replaced_retained_plan_root_rejected_before_session_creation(self):
+        import shutil
+        held=self.root/'original-retained-plan';self.plan_directory.rename(held)
+        shutil.copytree(held,self.plan_directory,symlinks=True)
+        self.assertEqual(Q.tree(held),Q.tree(self.plan_directory))
+        with self.assertRaisesRegex(S.A.Error,'retained plan operation replaced'):
+            S.prepare('execute',self.input,NOW)
+        self.assertFalse((self.root/self.request['operation_name']).exists())
+        self.assertTrue((held/'rendered.json').exists());self.assertTrue((held/'auth-account.json').exists())
+    def test_retained_plan_proof_change_rejected_before_session_creation(self):
+        for name in ['auth-account.json','rendered.json','work/main.tf']:
+            path=self.plan_directory/name;raw=path.read_bytes();path.write_bytes(raw+b'\n')
+            with self.subTest(name=name),self.assertRaises(S.A.Error):S.prepare('execute',self.input,NOW)
+            self.assertFalse((self.root/self.request['operation_name']).exists())
+            path.write_bytes(raw)
+        S.plan_inputs(self.plan_input,self.plan_directory/'result.json',self.request['plan_result_sha256'])
     def test_foreign_missing_replaced_pending_and_wrong_shutdown_are_rejected(self):
         original=self.responses['live'];v={k:x['value'] for k,x in self.responses['create']['variables'].items()}
         mutations=[lambda d:d['members']['value'].append({'id':'/foreign'}),lambda d:d['members'].update(nextLink='https://other'),
