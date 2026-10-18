@@ -9,13 +9,15 @@ import test from "node:test";
 import { setTimeout as realDelay } from "node:timers/promises";
 import { parseEnv } from "node:util";
 
+import { runtimeClockFixture } from "./azure-development-runtime-clock-fixture.mjs";
+
 let active;
 const nativePerformance = globalThis.performance;
 const nativeMonotonic = nativePerformance.now.bind(nativePerformance);
 let holdOffset = 0;
-const nativeWall = Date.now.bind(Date);
-const nativeHrtime = process.hrtime.bigint.bind(process.hrtime);
 let clientOffset = 0;
+const restoreSourceClock = runtimeClockFixture({ offset: () => clientOffset });
+test.after(restoreSourceClock);
 globalThis.runtimeControllerHoldDelay = async (milliseconds, value, options) => {
   if (active?.options.clientAccess) {
     options.signal.throwIfAborted();
@@ -1128,45 +1130,6 @@ if (process.argv[2] === "--runtime-source-child")
       changedSourceReadback: mode === "readback",
     });
     active = f;
-    if (clientAccess) {
-      const performanceDescriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
-      const NativeDate = globalThis.Date;
-      const wallOrigin = nativeWall(),
-        monotonicOrigin = nativeHrtime();
-      const controlledWall = () =>
-        wallOrigin + Number((nativeHrtime() - monotonicOrigin) / 1_000_000n) + clientOffset;
-      // The native WSL wall clock can step. This source-only fixture uses one controlled
-      // clock origin for both Date construction and Date.now, without relaxing admission.
-      const existingDate = new NativeDate();
-      globalThis.Date = new Proxy(NativeDate, {
-        construct(target, args) {
-          return Reflect.construct(target, args.length ? args : [controlledWall()]);
-        },
-        get(target, key, receiver) {
-          return key === "now" ? controlledWall : Reflect.get(target, key, receiver);
-        },
-        apply() {
-          return new NativeDate(controlledWall()).toString();
-        },
-      });
-      assert(existingDate instanceof Date && new Date() instanceof NativeDate);
-      process.hrtime.bigint = () => nativeHrtime() + BigInt(clientOffset) * 1_000_000n;
-      Object.defineProperty(globalThis, "performance", {
-        configurable: true,
-        value: new Proxy(nativePerformance, {
-          get(target, key) {
-            if (key === "now") return () => nativeMonotonic() + clientOffset;
-            const value = Reflect.get(target, key, target);
-            return typeof value === "function" ? value.bind(target) : value;
-          },
-        }),
-      });
-      t.after(() => {
-        globalThis.Date = NativeDate;
-        process.hrtime.bigint = nativeHrtime;
-        Object.defineProperty(globalThis, "performance", performanceDescriptor);
-      });
-    }
     if (f.options.maximumHold) {
       const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
       const monotonicStart = nativeMonotonic();
