@@ -483,7 +483,7 @@ export async function collectGitHubEvidence(
   }
   const browserRun = requiredRuns.find((r) => r.workflow === "browserstack-web.yml");
   need(browserRun);
-  const browserJob = browserRun.jobs[0];
+  const browserJob = browserRun.jobs.find((job) => job.name === "synthetic-browser");
   need(browserJob);
   const log = Buffer.from(
     await bytes(`${prefix}/actions/jobs/${browserJob.id}/logs`, LOG_LIMIT, true, true),
@@ -949,14 +949,27 @@ export const WORKFLOW_POLICIES: Record<
         "Set up the repository-pinned image inspection tool",
         "Bind checkout and prepare pinned browser/image assets",
         "Verify exact original service image provenance",
-        "Initialize empty fixture vulnerability-ignore policy",
-        "Reject high or critical PostgreSQL fixture vulnerabilities",
-        "Reject high or critical Meilisearch fixture vulnerabilities",
         "Build this checkout without task-cache reuse",
         "Start the bounded synthetic real app",
         "One BrowserStack Local browser session",
         "Stop owned tunnel, applications and containers",
         "Print the bounded source, browser and cleanup receipt",
+      ],
+      skipped: [],
+    },
+    "postgres-fixture-vulnerabilities": {
+      required: [
+        "Check out source",
+        "Initialize empty fixture vulnerability-ignore policy",
+        "Reject high or critical PostgreSQL fixture vulnerabilities",
+      ],
+      skipped: [],
+    },
+    "meilisearch-fixture-vulnerabilities": {
+      required: [
+        "Check out source",
+        "Initialize empty fixture vulnerability-ignore policy",
+        "Reject high or critical Meilisearch fixture vulnerabilities",
       ],
       skipped: [],
     },

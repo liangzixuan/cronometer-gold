@@ -24,11 +24,22 @@ IMAGES = json.loads((ROOT / 'scripts/browserstack/project.json').read_text())['i
 SCALAR = re.compile(r'[A-Za-z0-9_./:@,${} -]+')
 
 
+def workflow_job(text, name):
+    lines = text.splitlines()
+    if lines.count('jobs:') != 1 or lines.count('  ' + name + ':') != 1:
+        raise ValueError('Expected one exact workflow job')
+    start = lines.index('  ' + name + ':')
+    end = next((i for i in range(start + 1, len(lines))
+                if re.fullmatch(r'  [A-Za-z0-9_-]+:', lines[i])), len(lines))
+    return '\n'.join(lines[start:end])
+
+
 def scan_steps(text):
     """Read only this workflow's two explicit scalar action blocks; reject ambiguity."""
     if '\t' in text:
         raise ValueError('Tabs are not supported in workflow scan blocks')
-    blocks = re.split(r'(?m)(?=^      - )', text)
+    blocks = [block for name in ('postgres-fixture-vulnerabilities', 'meilisearch-fixture-vulnerabilities')
+              for block in re.split(r'(?m)(?=^      - )', workflow_job(text, name))]
     steps = []
     for block in blocks:
         if 'aquasecurity/trivy-action' not in block:
@@ -73,6 +84,34 @@ def scan_steps(text):
     if len(steps) != 2:
         raise ValueError('Expected exactly two scan actions')
     return steps
+
+
+def independent_scans(text):
+    names = re.findall(r'(?m)^  ([A-Za-z0-9_-]+):$', text.split('jobs:\n', 1)[1])
+    expected = ['synthetic-browser', 'postgres-fixture-vulnerabilities', 'meilisearch-fixture-vulnerabilities']
+    if sorted(names) != sorted(expected):
+        raise ValueError('Expected independent browser and two scan jobs')
+    functional = workflow_job(text, 'synthetic-browser')
+    header = functional.split('    steps:\n', 1)[0]
+    guard = "    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features'"
+    if ('aquasecurity/trivy-action' in functional or
+            re.search(r'(?m)^    (?:needs|continue-on-error):', header) or
+            re.findall(r'(?m)^    if:.*$', header) != [guard]):
+        raise ValueError('Browser must run independently under its trusted source guard')
+    for name, label in zip(expected[1:], ['PostgreSQL', 'Meilisearch']):
+        job = workflow_job(text, name)
+        marker = '      - name: Reject high or critical ' + label + ' fixture vulnerabilities'
+        prefix = job.split(marker, 1)[0]
+        required = ('  ' + name + ':\n' + guard + '\n'
+                    '    runs-on: ubuntu-24.04-arm\n    timeout-minutes: 20\n    steps:\n'
+                    '      - name: Check out source\n'
+                    '        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0\n'
+                    '        with:\n          persist-credentials: false\n'
+                    '      - name: Initialize empty fixture vulnerability-ignore policy\n'
+                    '        run: install -m 600 /dev/null "${RUNNER_TEMP}/browser-fixture.trivyignore"\n')
+        if prefix != required or job.count('aquasecurity/trivy-action') != 1:
+            raise ValueError('Scan must remain strict and independent under the original guard')
+    return scan_steps(text)
 
 
 class TrivyWorkflowTests(unittest.TestCase):
@@ -157,6 +196,26 @@ sys.exit(int(os.environ.get('STUB_EXIT', '0')))
         result = subprocess.run(['/bin/bash', str(self.entrypoint)], cwd=self.checkout, env=env,
                                 capture_output=True, text=True, timeout=10)
         return result, json.loads(receipt.read_text())
+
+    def test_fixture_scans_do_not_gate_browser(self):
+        self.assertEqual(len(independent_scans(WORKFLOW.read_text())), 2)
+
+    def test_rejects_dependencies_hidden_failures_and_scan_bypasses(self):
+        original = WORKFLOW.read_text()
+        variants = [
+            original.replace('  synthetic-browser:\n', '  synthetic-browser:\n    needs: meilisearch-fixture-vulnerabilities\n', 1),
+            original.replace('  postgres-fixture-vulnerabilities:\n', '  postgres-fixture-vulnerabilities:\n    needs: synthetic-browser\n', 1),
+            original.replace('  meilisearch-fixture-vulnerabilities:\n', '  meilisearch-fixture-vulnerabilities:\n    continue-on-error: true\n', 1),
+            original.replace('      - name: Reject high or critical PostgreSQL fixture vulnerabilities\n', '      - name: Reject high or critical PostgreSQL fixture vulnerabilities\n        continue-on-error: true\n', 1),
+            original.replace('      - name: Reject high or critical Meilisearch fixture vulnerabilities\n', '      - name: Reject high or critical Meilisearch fixture vulnerabilities\n        if: false\n', 1),
+        ]
+        scan_job = workflow_job(original, 'postgres-fixture-vulnerabilities')
+        block = scan_job[scan_job.index('      - name: Reject high or critical PostgreSQL fixture vulnerabilities'):]
+        moved = original.replace(block, '', 1).replace('      - name: Build this checkout without task-cache reuse', block + '\n      - name: Build this checkout without task-cache reuse', 1)
+        variants.append(moved)
+        for changed in variants:
+            with self.subTest(changed=changed[-40:]), self.assertRaises(ValueError):
+                independent_scans(changed)
 
     def test_workflow_preserves_exact_strict_scan_policy(self):
         steps = scan_steps(WORKFLOW.read_text())

@@ -168,10 +168,10 @@ for (const [field, value] of [
     assert.throws(() => selectLatestRun([{ ...run("ci.yml"), [field]: value }], "ci.yml", SHA));
   });
 }
-test("requires all five CI, ten container and one browser jobs", () => {
+test("requires all five CI, ten container and three browser workflow jobs", () => {
   assert.equal(jobs("ci.yml").length, 5);
   assert.equal(jobs("container-supply-chain.yml").length, 10);
-  assert.equal(jobs("browserstack-web.yml").length, 1);
+  assert.equal(jobs("browserstack-web.yml").length, 3);
   assert.doesNotThrow(() => validateGitHubEvidence(evidence(), context));
   for (const workflow of Object.keys(WORKFLOW_POLICIES) as (keyof typeof WORKFLOW_POLICIES)[]) {
     const missing = jobs(workflow);
@@ -180,6 +180,43 @@ test("requires all five CI, ten container and one browser jobs", () => {
     const duplicate = jobs(workflow);
     duplicate.push(clone(first(duplicate)));
     assert.throws(() => validateJobs(duplicate, run(workflow), workflow, SHA));
+  }
+});
+test("browser release evidence still requires both complete successful fixture scans", () => {
+  assert.deepEqual(
+    Object.keys(WORKFLOW_POLICIES["browserstack-web.yml"] ?? {}).sort(),
+    [
+      "synthetic-browser",
+      "postgres-fixture-vulnerabilities",
+      "meilisearch-fixture-vulnerabilities",
+    ].sort(),
+  );
+  for (const name of ["postgres-fixture-vulnerabilities", "meilisearch-fixture-vulnerabilities"]) {
+    for (const mutation of [
+      "missing-job",
+      "failed-job",
+      "skipped-job",
+      "missing-scan",
+      "failed-scan",
+      "skipped-scan",
+    ]) {
+      const data = evidence();
+      const record = data.requiredRuns.find((r) => r.workflow === "browserstack-web.yml");
+      assert.ok(record);
+      const scanner = record.jobs.find((j) => j.name === name);
+      assert.ok(scanner);
+      if (mutation === "missing-job") record.jobs = record.jobs.filter((j) => j !== scanner);
+      if (mutation === "failed-job") scanner.conclusion = "failure";
+      if (mutation === "skipped-job") scanner.conclusion = "skipped";
+      if (mutation.endsWith("-scan")) {
+        const step = scanner.steps.find((s) => s.name.startsWith("Reject high or critical "));
+        assert.ok(step);
+        if (mutation === "missing-scan") scanner.steps = scanner.steps.filter((s) => s !== step);
+        if (mutation === "failed-scan") step.conclusion = "failure";
+        if (mutation === "skipped-scan") step.conclusion = "skipped";
+      }
+      assert.throws(() => validateGitHubEvidence(data, context), `${name}: ${mutation}`);
+    }
   }
 });
 for (const mutation of [
@@ -336,6 +373,7 @@ test("required named step policies follow the actual repository workflow definit
 function apiFixture(
   change?:
     | "rerun"
+    | "shuffled-browser-jobs"
     | "missing-page"
     | "wrong-tree"
     | "missing-cleanup"
@@ -408,6 +446,7 @@ function apiFixture(
       const name = workflows[id - 30];
       assert.ok(name);
       const result = jobs(name, id);
+      if (change === "shuffled-browser-jobs" && name === "browserstack-web.yml") result.reverse();
       if (change === "missing-cleanup" && name === "browserstack-web.yml")
         first(result).steps = first(result).steps.filter(
           (s) => s.name !== "Stop owned tunnel, applications and containers",
@@ -429,6 +468,19 @@ function apiFixture(
   };
   return { fetcher, calls, lockHash };
 }
+test("collects the exact synthetic browser log when security jobs precede it", async () => {
+  const fixture = apiFixture("shuffled-browser-jobs");
+  const result = await collectGitHubEvidence({
+    ...context,
+    token: "private-token",
+    fetch: fixture.fetcher,
+  });
+  assert.equal(result.browser.summary.accepted, true);
+  assert.deepEqual(
+    fixture.calls.filter((c) => c.url.includes("/logs")).map((c) => c.url),
+    [`https://api.github.com/repos/${REPOSITORY}/actions/jobs/100/logs`],
+  );
+});
 test("collects actual latest attempts, complete jobs, source tree/lock bytes and parsed browser evidence", async () => {
   const fixture = apiFixture();
   const result = await collectGitHubEvidence({

@@ -44,42 +44,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B scripts/browserstack/ci-run.py admit-images
-      - name: Initialize empty fixture vulnerability-ignore policy
-        run: install -m 600 /dev/null "${RUNNER_TEMP}/browser-fixture.trivyignore"
-      - name: Reject high or critical PostgreSQL fixture vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_PLATFORM: linux/arm64
-          TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
-        with:
-          version: v0.74.0
-          cache: false
-          cache-dir: ${{ runner.temp }}/browser-fixture-trivy-cache
-          scan-type: image
-          image-ref: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4
-          scanners: vuln
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          exit-code: "1"
-          timeout: 5m
-      - name: Reject high or critical Meilisearch fixture vulnerabilities
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_PLATFORM: linux/arm64
-          TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
-        with:
-          version: v0.74.0
-          cache: false
-          cache-dir: ${{ runner.temp }}/browser-fixture-trivy-cache
-          scan-type: image
-          image-ref: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe
-          scanners: vuln
-          vuln-type: os,library
-          severity: HIGH,CRITICAL
-          ignore-unfixed: false
-          exit-code: "1"
-          timeout: 5m
       - name: Build this checkout without task-cache reuse
         run: |
           pnpm exec turbo run build --filter=@nutrition-tracker/web... --filter=@nutrition-tracker/api... --filter=@nutrition-tracker/worker... --force
@@ -100,3 +64,59 @@ jobs:
       - name: Print the bounded source, browser and cleanup receipt
         if: always()
         run: python3 -B scripts/browserstack/ci-run.py summary
+  postgres-fixture-vulnerabilities:
+    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Initialize empty fixture vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/browser-fixture.trivyignore"
+      - name: Reject high or critical PostgreSQL fixture vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+          TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
+        with:
+          version: v0.74.0
+          cache: false
+          cache-dir: ${{ runner.temp }}/browser-fixture-trivy-cache
+          scan-type: image
+          image-ref: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          timeout: 5m
+  meilisearch-fixture-vulnerabilities:
+    if: github.repository == 'liangzixuan/cronometer-gold' && github.ref == 'refs/heads/codex/retention-features'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Initialize empty fixture vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/browser-fixture.trivyignore"
+      - name: Reject high or critical Meilisearch fixture vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_PLATFORM: linux/arm64
+          TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
+        with:
+          version: v0.74.0
+          cache: false
+          cache-dir: ${{ runner.temp }}/browser-fixture-trivy-cache
+          scan-type: image
+          image-ref: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: "1"
+          timeout: 5m
