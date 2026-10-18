@@ -88,7 +88,8 @@ NATIVE_SOURCES = ["infra/development/azure/" + n for n in (
     ".terraform.lock.hcl", "versions.tf", "variables.tf", "main.tf", "outputs.tf",
     "audit-plan.py", "auth-preflight.py", "collect-evidence.py")]
 NATIVE_SOURCES += ["infra/azure/tests/audit_saved_plan.py", "scripts/azure-development-evidence.mjs",
-                   "scripts/azure-development-plan.mjs", "scripts/postgres-operator-process.mjs"]
+                   "scripts/azure-development-plan.mjs", "scripts/postgres-operator-process.mjs",
+                   "scripts/azure-development-collector.mjs"]
 NATIVE_READS = [
     ("providers", "after-subscription-policy", "{base}", "2022-12-01",
      "{id:id,subscriptionId:subscriptionId,displayName:displayName,state:state,subscriptionPolicies:subscriptionPolicies}"),

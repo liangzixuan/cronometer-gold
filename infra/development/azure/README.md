@@ -467,6 +467,67 @@ acceptance requirements. Azure protocol permission references:
 [Put Block](https://learn.microsoft.com/en-us/rest/api/storageservices/put-block),
 [Put Block List](https://learn.microsoft.com/en-us/rest/api/storageservices/put-block-list).
 
+## Subscription resource and usage baseline
+
+`scripts/azure-development-baseline.mjs` is a separate finite read-only collector.
+It runs the same four fixed authentication checks, then one resource-list GET and
+one Cost Management usage-query POST for the expected subscription. The existing
+six-family collector keeps its separate ten-read sequence. Both use the shared
+bounded collector process boundary; neither accepts arbitrary commands or URLs.
+
+The new mode0600 request in an owned mode0700 directory has exactly
+`schema_version` (integer1), `source_sha256`, `identity_file`, `profile_directory`,
+`operation_name` (`nourishing-baseline-` plus12lowercase hexadecimal characters)
+and `not_after_utc`. Review the current `--source-digest` independently. Input
+paths, identity, profile configuration, source, launcher and original operation
+directory are conserved. Execution still needs its own admitted scope.
+
+```sh
+node scripts/azure-development-baseline.mjs --input /absolute/private/request.json
+node scripts/azure-development-baseline.mjs --verify-result /absolute/private/request.json \
+  --index-sha256 INDEPENDENTLY_RECORDED_INDEX_SHA256
+```
+
+The fixed resource projection preserves IDs, names, types, locations, SKU, plan,
+managedBy and continuation, omitting opaque properties and tag values. It admits
+at most200 resources in the expected subscription and rejects duplicate IDs or
+continuation. This is a subscription inventory, not account-wide ownership,
+resource health, storage-version or custody acceptance.
+
+The hash-bound owned `cost-query.json` selects Usage/MonthToDate,
+PreTaxCost/Sum, granularity None and ResourceGroup grouping. The projected table
+retains column names/types, rows, currency and continuation. Columns may be
+reordered, but the exact three-column schema must match. At most200 rows are
+admitted, without pagination or currency conversion. Signed finite costs are
+observations; explicit empty rows establish no zero bill. Empty stdout/204,
+missing data, duplicate groups, malformed values or continuation reject success.
+
+Authentication/control output is bounded to128KiB, each query to1MiB, diagnostics
+to64KiB and the retained operation to4MiB after commands. Each child has at most
+60seconds within ten minutes of work and a30second settlement reserve. The
+request horizon is at most15minutes. The pinned limiter also enforces its existing
+per-file bound. Six CLI invocations do not qualify the CLI's underlying HTTP
+attempt count, status receipt, retry or redirect behavior. No caller retry,
+page-follow or fallback is selected.
+
+The original body, session, raw projected responses, phases and scratch directories
+remain private. A create-only index binds their complete inventory and bounded
+summary without duplicating the raw query tables. The retained consumer checks
+the independent index hash, original directory, inputs, source, authentication,
+phases and raw results again before operating-envelope review. It uses the same
+finite input horizon; it does not refresh observations. Failures retain partial
+or already-published evidence and never authorize deletion or imply no output.
+
+Source tests intercept provider calls and use synthetic identities/responses. They
+do not establish actual access, billing completeness, current credit, an enforced
+spending limit or hosted readiness. Cost observations can be delayed and exclude
+credits and other billing components; retain the separate credit and complete
+resource/lifetime/copy budget requirements before allocation.
+
+Protocol references: [resource list](https://learn.microsoft.com/en-us/rest/api/resources/resources/list?view=rest-resources-2021-04-01),
+[usage query](https://learn.microsoft.com/en-us/rest/api/cost-management/query/usage?tabs=HTTP&view=rest-cost-management-2025-03-01),
+and [cost data coverage](https://learn.microsoft.com/en-us/azure/cost-management-billing/costs/understand-cost-mgt-data).
+
 ## Prepared-host development runtime
 
 The source entrypoint `scripts/azure-development-runtime.mjs` runs one finite,
