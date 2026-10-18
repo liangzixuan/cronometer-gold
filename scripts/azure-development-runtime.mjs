@@ -5,6 +5,10 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalJson } from "../packages/contracts/dist/index.js";
+import {
+  admitRuntimeClientAccess,
+  runtimeClientDeadline,
+} from "./azure-development-runtime-client.mjs";
 import { openRuntimeDocker } from "./azure-development-runtime-docker.mjs";
 import { openRuntimeJournal, readRuntimeJournal } from "./azure-development-runtime-journal.mjs";
 import { heldOperatorInput } from "./postgres-operator-input.mjs";
@@ -99,6 +103,7 @@ export async function recoverPreparedDevelopmentRuntime(args, execution = {}) {
     held = await heldOperatorInput(cli.path, cli.sha256, { privateFile: true, maximum: 2_097_152 });
     const input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(held.raw));
     assert(Buffer.from(`${canonicalJson(input)}\n`).equals(held.raw));
+    const clientAccess = admitRuntimeClientAccess(input.clientAccess);
     assert(input.schemaVersion === 1 && input.kind === "nutrition-development-runtime-input-v1");
     assert(/^[a-f0-9]{40}$/u.test(input.sourceRevision) && uuid(input.owner));
     assert(input.project === `nourishing-development-${input.owner}`);
@@ -265,6 +270,8 @@ export async function recoverPreparedDevelopmentRuntime(args, execution = {}) {
         images: input.images,
         docker: input.tools.docker,
         imageObservations,
+        clientAccess,
+        apiDeadlineNs: runtimeClientDeadline(clientAccess, admitted),
         lease,
         journal,
         conserve,

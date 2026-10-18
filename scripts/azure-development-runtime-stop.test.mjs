@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { canonicalJson } from "../packages/contracts/dist/index.js";
 import { recoverPreparedDevelopmentRuntime } from "./azure-development-runtime.mjs";
+import { runtimeClientDeadline } from "./azure-development-runtime-client.mjs";
 import {
   references,
   runtimeDockerFixture,
@@ -16,8 +17,26 @@ const owner = "11111111-1111-4111-8111-111111111111",
   bootId = "22222222-2222-4222-8222-222222222222";
 const hash = (raw) => createHash("sha256").update(raw).digest("hex");
 async function fixture(t, options = {}) {
-  const base = await runtimeDockerFixture(t, { project: `nourishing-development-${owner}` });
   const now = Date.now();
+  const monotonicStartNs = (process.hrtime.bigint() - 1_000_000_000n).toString();
+  const clientStart = Math.ceil(now / 1000) * 1000 + 60_000;
+  const clientAccess = options.publicClient
+    ? {
+        adminIpv4Cidr: "8.8.8.8/32",
+        notBeforeUtc: new Date(clientStart).toISOString(),
+        notAfterUtc: new Date(clientStart + 60_000).toISOString(),
+      }
+    : null;
+  const apiDeadlineNs = runtimeClientDeadline(clientAccess, {
+    startedAtUtc: new Date(now - 1000).toISOString(),
+    monotonicStartNs,
+    notAfterUtc: new Date(now + 3_600_000).toISOString(),
+  });
+  const base = await runtimeDockerFixture(t, {
+    project: `nourishing-development-${owner}`,
+    clientAccess,
+    apiDeadlineNs,
+  });
   const input = {
     schemaVersion: 1,
     kind: "nutrition-development-runtime-input-v1",
@@ -32,6 +51,7 @@ async function fixture(t, options = {}) {
       docker: { path: "/usr/bin/docker", sha256: "d".repeat(64) },
     },
     images: references,
+    clientAccess,
     host: { bootId },
   };
   const path = join(base.root, "runtime.json"),
@@ -42,11 +62,14 @@ async function fixture(t, options = {}) {
     base,
     inputSha256,
     unknownCreate: options.unknownCreate,
+    clientAccess,
+    apiDeadlineNs,
+    stopFailure: options.stopFailure,
     admission: {
       startedAtUtc: new Date(now - (options.expired ? 7_200_000 : 1000)).toISOString(),
-      monotonicStartNs: (
-        process.hrtime.bigint() - BigInt(options.expired ? 7_200_000_000_000 : 1_000_000_000)
-      ).toString(),
+      monotonicStartNs: options.expired
+        ? (process.hrtime.bigint() - 7_200_000_000_000n).toString()
+        : monotonicStartNs,
       controllerPid: 2_000_000_000,
       controllerStartToken: "12345",
       notAfterUtc: input.notAfterUtc,
@@ -58,6 +81,7 @@ async function fixture(t, options = {}) {
     await f.driver.create();
     await f.driver.start("api");
     await f.driver.start("worker");
+    if (clientAccess) await f.driver.start("client-edge");
   }
   const stopDirectory = join(base.root, "recovery-stop-journal");
   await mkdir(stopDirectory, { mode: 0o700 });
@@ -164,4 +188,26 @@ test("a torn original suffix still settles known IDs and cannot become complete 
   assert.equal(await readFile(path, "utf8"), '{"partial":');
   const proof = await readRuntimeJournal(f.stopDirectory, f.inputSha256);
   assert.equal(proof.records[0].event.originalJournalComplete, false);
+});
+
+test("actual parent-loss stop command preserves the public variant and independently settles every ID after an edge refusal", async (t) => {
+  for (const refusal of [false, true]) {
+    const f = await fixture(t, {
+      publicClient: true,
+      stopFailure: refusal ? "client-edge" : undefined,
+    });
+    const before = f.calls.length;
+    if (refusal) await assert.rejects(f.run(), AggregateError);
+    else {
+      const result = await f.run();
+      assert.equal(result.knownOwnedContainersSettled, 10);
+    }
+    assert.deepEqual(f.stops, ["client-edge", "api", "worker"]);
+    assert.equal(f.containers["client-edge"].State.Running, refusal);
+    assert.equal(f.containers.api.State.Running, false);
+    assert.equal(f.containers.worker.State.Running, false);
+    assert(
+      !f.calls.slice(before).some((args) => args.includes("compose") || args.includes("start")),
+    );
+  }
 });

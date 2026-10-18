@@ -17,6 +17,7 @@ export interface GracefulShutdown {
 export interface ShutdownOptions {
   timeoutMs: number;
   runtime?: ShutdownRuntime;
+  closeApplication?: () => Promise<void>;
 }
 
 export function installGracefulShutdown(
@@ -42,7 +43,7 @@ export function installGracefulShutdown(
       forceExitTimer.unref();
 
       try {
-        await app.close();
+        await (options.closeApplication ? options.closeApplication() : app.close());
         app.log.info({ event: "api.shutdown.completed", signal }, "Graceful shutdown completed");
       } catch (error) {
         runtime.exitCode = 1;

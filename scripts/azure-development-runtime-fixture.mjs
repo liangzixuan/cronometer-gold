@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runtimeClientEnvironment } from "./azure-development-runtime-client.mjs";
 import { openRuntimeDocker } from "./azure-development-runtime-docker.mjs";
 import {
   createRuntimeLease,
@@ -68,6 +69,9 @@ export async function runtimeDockerFixture(t, options = {}) {
       devNull,
       "-f",
       join(source, "infra/development/azure/runtime/compose.yaml"),
+      ...(options.clientAccess
+        ? ["-f", join(source, "infra/development/azure/runtime/compose.client.yaml")]
+        : []),
       "config",
       "--format",
       "json",
@@ -79,6 +83,9 @@ export async function runtimeDockerFixture(t, options = {}) {
       env: {
         ...process.env,
         ...references,
+        ...(options.clientAccess
+          ? runtimeClientEnvironment(options.clientAccess, options.apiDeadlineNs)
+          : {}),
         RUNTIME_ROOT: root,
         RUNTIME_SOURCE: source,
         RUNTIME_PROJECT: project,
@@ -141,6 +148,9 @@ export function runtimeDockerObservations(root, model, imageObservations) {
         Entrypoint: null,
         Env: ["PATH=/usr/bin"],
         WorkingDir: "/app",
+        ...(["client-edge", "internal-tls"].includes(name)
+          ? { ExposedPorts: { "80/tcp": {}, "443/tcp": {}, "443/udp": {}, "2019/tcp": {} } }
+          : {}),
       },
     };
     const health = service.healthcheck;
@@ -216,7 +226,8 @@ export function runtimeDockerObservations(root, model, imageObservations) {
         RestartPolicy: { Name: "no", MaximumRetryCount: 0 },
         CapDrop: ["ALL"],
         CapAdd: null,
-        PortBindings: {},
+        PortBindings:
+          name === "client-edge" ? { "8443/tcp": [{ HostIp: "0.0.0.0", HostPort: "443" }] } : {},
         PublishAllPorts: false,
         Devices: [],
         DeviceRequests: null,
@@ -253,7 +264,15 @@ export function runtimeDockerObservations(root, model, imageObservations) {
         RW: !(value.read_only ?? false),
         Propagation: "rprivate",
       })),
-      NetworkSettings: { Networks: assigned, Ports: { "4000/tcp": null } },
+      NetworkSettings: {
+        Networks: assigned,
+        Ports: {
+          ...Object.fromEntries(
+            Object.keys(image.Config.ExposedPorts ?? {}).map((port) => [port, null]),
+          ),
+          [name === "client-edge" ? "8443/tcp" : "4000/tcp"]: null,
+        },
+      },
     };
     containers[name] = row;
     contracts[name] = {
@@ -273,7 +292,7 @@ export function runtimeDockerObservations(root, model, imageObservations) {
 const driverFixtureHash = (value) => createHash("sha256").update(value).digest("hex");
 export async function runtimeDriverFixture(t, options = {}) {
   const inputSha256 = options.inputSha256 ?? "a".repeat(64);
-  const f = options.base ?? (await runtimeDockerFixture(t)),
+  const f = options.base ?? (await runtimeDockerFixture(t, options)),
     directory = join(f.root, "journal");
   await mkdir(directory, { mode: 0o700 });
   const journal = await openRuntimeJournal(directory);
@@ -366,6 +385,11 @@ export async function runtimeDriverFixture(t, options = {}) {
               networkName.slice(f.model.name.length + 1)
             ].ipv4_address;
         }
+        if (name === "client-edge")
+          row.NetworkSettings.Ports = {
+            ...row.NetworkSettings.Ports,
+            "8443/tcp": [{ HostIp: "0.0.0.0", HostPort: "443" }],
+          };
         text = `${row.Id}\n`;
       } else if (operation === "stop") {
         const row = lookup.get(rest.at(-1));
@@ -378,7 +402,12 @@ export async function runtimeDriverFixture(t, options = {}) {
           assert(state.records.at(-1).event.phase === "stop-intent");
         }
         stops.push(name);
+        if (options.stopFailure === name) throw new Error("Controlled native stop refusal");
         row.State = { ...row.State, Status: "exited", Running: false, ExitCode: 0 };
+        if (name === "client-edge")
+          row.NetworkSettings.Ports = Object.fromEntries(
+            Object.keys(row.NetworkSettings.Ports).map((port) => [port, null]),
+          );
         text = `${row.Id}\n`;
       } else {
         assert.equal(operation, "logs");
@@ -408,6 +437,8 @@ export async function runtimeDriverFixture(t, options = {}) {
   );
   const driverInput = {
     root: f.root,
+    clientAccess: options.clientAccess ?? null,
+    apiDeadlineNs: options.apiDeadlineNs,
     dockerConfig: join(f.root, "docker-config"),
     project: f.model.name,
     owner: "11111111-1111-4111-8111-111111111111",

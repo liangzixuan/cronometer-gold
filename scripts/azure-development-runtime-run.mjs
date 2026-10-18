@@ -1,4 +1,4 @@
-/** Fixed private prepared-host pilot. Native execution requires its separate finite operational scope. */
+/** Finite prepared-host pilot. Native execution requires its separate finite operational scope. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
@@ -10,6 +10,11 @@ import { fileURLToPath } from "node:url";
 import { parseEnv } from "node:util";
 import { canonicalJson } from "../packages/contracts/dist/index.js";
 import { createDatabase, normalizePostgresBackupConnection } from "../packages/db/dist/index.js";
+import {
+  admitRuntimeClientAccess,
+  admitRuntimeClientCertificate,
+  runtimeClientDeadline,
+} from "./azure-development-runtime-client.mjs";
 import { admitDevelopmentRuntimeConfiguration } from "./azure-development-runtime-configuration.mjs";
 import { applyDevelopmentRuntimeDatabaseGrants } from "./azure-development-runtime-database.mts";
 import { openRuntimeDocker } from "./azure-development-runtime-docker.mjs";
@@ -77,6 +82,7 @@ function manifest(value) {
     "sourceRevision",
     "notAfterUtc",
     "holdSeconds",
+    "clientAccess",
     "tools",
     "images",
     "files",
@@ -102,6 +108,8 @@ function manifest(value) {
       value.holdSeconds >= 0 &&
       value.holdSeconds <= 900,
   );
+  admitRuntimeClientAccess(value.clientAccess);
+  if (value.clientAccess) assert(value.holdSeconds === 0);
   keys(value.tools, [
     "node",
     "git",
@@ -376,11 +384,21 @@ export async function runPreparedDevelopmentRuntime(args, execution = {}) {
     input = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(held.raw));
     assert(Buffer.from(`${canonicalJson(input)}\n`).equals(held.raw));
     manifest(input);
+    const clientAccess = admitRuntimeClientAccess(input.clientAccess);
+    const apiDeadlineNs = runtimeClientDeadline(clientAccess, {
+      startedAtUtc,
+      monotonicStartNs,
+      notAfterUtc: input.notAfterUtc,
+    });
     lease = createRuntimeLease(input.notAfterUtc, cancellation);
     prepared = await openRuntimePreparedInputs(
-      { root: input.root, files: input.files, signal: lease.workSignal },
+      { root: input.root, files: input.files, clientAccess, signal: lease.workSignal },
       execution.prepared,
     );
+    if (clientAccess) {
+      assert(Date.now() < Date.parse(clientAccess.notAfterUtc) - 30_000);
+      admitRuntimeClientCertificate(await prepared.text("pki/client.crt"), clientAccess);
+    }
     journal = await openRuntimeJournal(join(input.root, "journal"));
     await publish({
       phase: "admitted",
@@ -424,6 +442,7 @@ export async function runPreparedDevelopmentRuntime(args, execution = {}) {
         BigInt(monotonicStartNs) +
         BigInt(Date.parse(input.notAfterUtc) - Date.parse(startedAtUtc) - 3_600_000) * 1_000_000n,
       workDeadlineNs = fallbackWorkNs < originalWorkNs ? fallbackWorkNs : originalWorkNs;
+    if (clientAccess) assert(BigInt(apiDeadlineNs) + 15_000_000_000n <= workDeadlineNs);
     const budget = Math.floor(Number((workDeadlineNs - process.hrtime.bigint()) / 1_000_000n));
     assert(budget >= 60_000);
     const workSignal = AbortSignal.any([baseLease.workSignal, AbortSignal.timeout(budget)]);
@@ -484,6 +503,8 @@ export async function runPreparedDevelopmentRuntime(args, execution = {}) {
         images: input.images,
         docker: input.tools.docker,
         imageObservations: images.imageObservations,
+        clientAccess,
+        apiDeadlineNs,
         lease,
         journal: driverJournal,
         conserve,
@@ -603,6 +624,7 @@ export async function runPreparedDevelopmentRuntime(args, execution = {}) {
           owner: input.owner,
           notAfterUtc: input.notAfterUtc,
           azureHosts,
+          clientAccess,
           signal: lease.workSignal,
           conserve,
           onObservation: observeEvent,
@@ -912,13 +934,75 @@ export async function runPreparedDevelopmentRuntime(args, execution = {}) {
     const readback = await readBackDevelopmentRuntimeJourney(journeyInput(), journey);
     assert(readback.persisted === true);
     await publish({ phase: "journey-readback", readback });
-    const holdUntil =
-      performance.now() + Math.min(input.holdSeconds * 1000, lease.remaining(900_000));
-    while (performance.now() < holdUntil) {
+    const applicationReady = async (edgeRequired = false) => {
       await phaseGuard();
-      await delay(Math.min(15_000, Math.ceil(holdUntil - performance.now())), undefined, {
+      const rows = await driver.observe([
+        "api",
+        "worker",
+        ...(edgeRequired ? ["client-edge"] : []),
+      ]);
+      for (const name of ["api", "worker"])
+        assert(rows[name].status === "running" && rows[name].healthy && !rows[name].oomKilled);
+      if (edgeRequired)
+        assert(
+          rows["client-edge"].status === "running" &&
+            rows["client-edge"].healthy &&
+            !rows["client-edge"].oomKilled,
+        );
+      const readiness = await transport(30_000).request("api", "/ready", {
         signal: lease.workSignal,
       });
+      assert(
+        readiness.status === 200 && canonicalJson(await readiness.json()) === '{"status":"ok"}',
+      );
+    };
+    if (clientAccess) {
+      const start = Date.parse(clientAccess.notBeforeUtc),
+        end = Date.parse(clientAccess.notAfterUtc) - 30_000;
+      const wallOrigin = Date.parse(startedAtUtc),
+        monoOrigin = BigInt(monotonicStartNs);
+      const clientNow = () =>
+        Math.max(
+          Date.now(),
+          wallOrigin + Number((process.hrtime.bigint() - monoOrigin) / 1_000_000n),
+        );
+      await publish({ phase: "client-window-wait", clientAccess });
+      while (clientNow() < start) {
+        // There is no public listener during this wait. Conserve held inputs and the
+        // original lease, then repeat full source/host/application checks before opening.
+        await conserve();
+        await delay(Math.min(30_000, Math.max(1, start - clientNow())), undefined, {
+          signal: lease.workSignal,
+        });
+      }
+      await applicationReady();
+      assert(clientNow() < end);
+      await publish({ phase: "client-admission-intent", clientAccess });
+      await driver.start("client-edge");
+      await healthy("client-edge");
+      assert(clientNow() < end);
+      await publish({ phase: "client-admitted", clientAccess, runtimeAcceptanceRecorded: false });
+      while (clientNow() < end) {
+        await applicationReady(true);
+        await delay(Math.min(30_000, Math.max(1, end - clientNow())), undefined, {
+          signal: lease.workSignal,
+        });
+      }
+      await driver.stop(["client-edge"]);
+      await publish({
+        phase: "client-admission-closed",
+        clientAccess,
+        runtimeAcceptanceRecorded: false,
+      });
+    } else {
+      const holdUntil =
+        performance.now() + Math.min(input.holdSeconds * 1000, lease.remaining(900_000));
+      while (performance.now() < holdUntil) {
+        await phaseGuard();
+        await delay(Math.min(15_000, Math.ceil(holdUntil - performance.now())), undefined, {
+          signal: lease.workSignal,
+        });
+      }
     }
     result = {
       kind: "nutrition-development-runtime-v1",
@@ -945,6 +1029,7 @@ export async function runPreparedDevelopmentRuntime(args, execution = {}) {
     let nativeStopFailed = false;
     if (driver && created)
       for (const name of [
+        ...(input.clientAccess ? ["client-edge"] : []),
         "api",
         "worker",
         "migrate",

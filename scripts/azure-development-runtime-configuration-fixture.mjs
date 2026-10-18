@@ -6,6 +6,7 @@ import { devNull } from "node:os";
 import { join, resolve } from "node:path";
 import { rootCertificates } from "node:tls";
 import { fileURLToPath } from "node:url";
+import { runtimeClientEnvironment } from "./azure-development-runtime-client.mjs";
 import { renderDevelopmentRuntimeDatabaseBootstrap } from "./azure-development-runtime-database.mts";
 import { references, runtimeDockerFixture } from "./azure-development-runtime-fixture.mjs";
 import { azureBackupFixture } from "./postgres-backup-azure-fixture.mjs";
@@ -178,6 +179,9 @@ export async function fixture(t, options = {}) {
       devNull,
       "-f",
       join(source, "infra/development/azure/runtime/compose.yaml"),
+      ...(options.clientAccess
+        ? ["-f", join(source, "infra/development/azure/runtime/compose.client.yaml")]
+        : []),
       "config",
       "--format",
       "json",
@@ -189,6 +193,9 @@ export async function fixture(t, options = {}) {
       env: {
         ...process.env,
         ...references,
+        ...(options.clientAccess
+          ? runtimeClientEnvironment(options.clientAccess, options.apiDeadlineNs)
+          : {}),
         RUNTIME_ROOT: root,
         RUNTIME_SOURCE: source,
         RUNTIME_PROJECT: f.model.name,

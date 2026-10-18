@@ -1,0 +1,46 @@
+{
+    admin off
+    persist_config off
+    auto_https off
+    grace_period 1s
+    servers {
+        protocols h1
+        strict_sni_host on
+        max_header_size 16KB
+        timeouts {
+            read_header 5s
+            read_body 5s
+            write 5s
+            idle 5s
+        }
+    }
+}
+
+https://dev-api.nourishing.app:8443 {
+    tls /run/client/server.crt /run/client/server.key
+    @client {
+        remote_ip {$RUNTIME_CLIENT_IP}
+        expression `int({time.now.unix}) >= {$RUNTIME_CLIENT_START} && int({time.now.unix}) < {$RUNTIME_CLIENT_END}`
+        method GET HEAD POST PATCH DELETE OPTIONS
+        not header Upgrade *
+    }
+    handle @client {
+        request_body {
+            max_size 1MB
+        }
+        reverse_proxy 172.28.0.5:4000 {
+            stream_timeout 5s
+            transport http {
+                versions 1.1
+                dial_timeout 5s
+                response_header_timeout 5s
+                read_timeout 5s
+                write_timeout 5s
+                keepalive off
+            }
+        }
+    }
+    handle {
+        respond 403
+    }
+}

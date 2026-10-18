@@ -42,7 +42,7 @@ const emptyAtAdmission = new Set([
   "recovery-stop-journal",
   "tmpfs",
 ]);
-const files = Object.fromEntries([
+const privateFiles = Object.fromEntries([
   ...[
     "runtime",
     "postgres",
@@ -73,6 +73,7 @@ const files = Object.fromEntries([
 const textInputs = new Set([
   "config/maintenance.env",
   "pki/ca.crt",
+  "pki/client.crt",
   "config/database-bootstrap.sql",
 ]);
 const dirIdentity = (row) => [row.dev, row.ino, row.mode, row.uid, row.gid].join(":");
@@ -92,6 +93,13 @@ const fileIdentity = (row) =>
 /** Reference names and role ownership come from source, never caller-provided path or chmod rules. */
 export async function openRuntimePreparedInputs(input, execution = {}) {
   const root = input.root,
+    files = input.clientAccess
+      ? {
+          ...privateFiles,
+          "pki/client.crt": { owner: controller, mode: 0o444, maximum: 65_536 },
+          "pki/client.key": { owner: 1000, mode: 0o400, maximum: 65_536 },
+        }
+      : privateFiles,
     references = structuredClone(input.files),
     signal = input.signal;
   assert(typeof root === "string" && isAbsolute(root) && resolve(root) === root && root !== "/");

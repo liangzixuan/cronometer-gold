@@ -24,7 +24,7 @@ const ipNumber = (text) => {
   assert(isIP(text) === 4);
   return text.split(".").reduce((n, part) => n * 256 + Number(part), 0);
 };
-const publicIp = (value) => {
+export const publicIp = (value) => {
   if (typeof value !== "string" || isIP(value) !== 4) return false;
   const n = ipNumber(value);
   return ![
@@ -65,7 +65,7 @@ function rules(raw, chain) {
   }
   return rows;
 }
-function expectedRules(qualification) {
+function expectedRules(qualification, clientAccess) {
   const destinations = [...new Set(Object.values(qualification.azureEndpoints).flat())].sort(),
     forward = "NOURISHING-DEVELOPMENT-EGRESS",
     host = "NOURISHING-DEVELOPMENT-HOST";
@@ -94,7 +94,34 @@ function expectedRules(qualification) {
     host,
     forwardJump: ["-A", "FORWARD", "-s", "172.30.0.0/24", "-j", forward],
     outputJump: ["-A", "OUTPUT", "-j", host],
-    forwardRules: [...allow443(forward), reject(forward)],
+    forwardRules: [
+      ...(clientAccess
+        ? [
+            [
+              "-A",
+              forward,
+              "-s",
+              "172.30.0.5/32",
+              "-d",
+              clientAccess.adminIpv4Cidr,
+              "-p",
+              "tcp",
+              "-m",
+              "tcp",
+              "--sport",
+              "8443",
+              "-m",
+              "conntrack",
+              "--ctstate",
+              "ESTABLISHED",
+              "-j",
+              "ACCEPT",
+            ],
+          ]
+        : []),
+      ...allow443(forward),
+      reject(forward),
+    ],
     hostRules: [
       ["-A", host, "-o", "lo", "-j", "ACCEPT"],
       ["-A", host, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
@@ -358,7 +385,7 @@ export async function openPreparedDevelopmentHost(input, execution = {}) {
     }
     keys(q.encryptedVolume, ["source", "mountPoint", "majorMinor", "filesystemUuid", "luksUuid"]);
     exact(q.encryptedVolume, specification.encryptedVolume);
-    const expected = expectedRules(q);
+    const expected = expectedRules(q, specification.clientAccess);
     const observe = async ({ createdNetworks = {}, createdContainers = {} } = {}) => {
       createdNetworks = structuredClone(createdNetworks);
       createdContainers = structuredClone(createdContainers);
@@ -454,9 +481,10 @@ export async function openPreparedDevelopmentHost(input, execution = {}) {
       // Their backing directories must resolve inside the same encrypted Docker root.
       const containerNames = Object.keys(createdContainers);
       assert(
-        containerNames.length <= 9 &&
+        containerNames.length <= (specification.clientAccess ? 10 : 9) &&
           containerNames.every((name) =>
             [
+              ...(specification.clientAccess ? ["client-edge"] : []),
               "api",
               "worker",
               "postgres",

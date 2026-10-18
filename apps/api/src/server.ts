@@ -10,6 +10,7 @@ import {
   loadConfig,
 } from "./config.js";
 import { safeErrorName } from "./logging.js";
+import { enforceHostedRuntimeDeadline, hostedRuntimeDeadline } from "./runtime-deadline.js";
 import { createApiSearchRuntime } from "./search-runtime.js";
 import { type GracefulShutdown, installGracefulShutdown } from "./shutdown.js";
 
@@ -21,6 +22,7 @@ export interface RunningServer {
 export interface ApiApplicationRuntime {
   readonly app: FastifyInstance;
   readonly config: AppConfig;
+  assertActive(): void;
   close(): Promise<void>;
 }
 
@@ -56,6 +58,7 @@ export async function createApiApplicationRuntime(
   environment: NodeJS.ProcessEnv = process.env,
   options: ApiApplicationRuntimeOptions = {},
 ): Promise<ApiApplicationRuntime> {
+  const deadline = hostedRuntimeDeadline(environment);
   const config = loadConfig(environment);
   const dependencyConfig = loadApiDependencyConfig(environment);
   const dependencies = await createApiSearchRuntime(environment, dependencyConfig, {
@@ -71,7 +74,20 @@ export async function createApiApplicationRuntime(
     return dependencyClosePromise;
   };
   let app: FastifyInstance | undefined;
+  let disposeDeadline = () => {};
+  let closePromise: Promise<void> | undefined;
+  const closeApplication = (): Promise<void> => {
+    closePromise ??= (async () => {
+      try {
+        if (app) await app.close();
+      } finally {
+        disposeDeadline();
+      }
+    })();
+    return closePromise;
+  };
   try {
+    deadline?.();
     app = buildApp({
       activityService: dependencies.activityService,
       authService: dependencies.authService,
@@ -90,13 +106,15 @@ export async function createApiApplicationRuntime(
       ...(dependencies.retentionService ? { retentionService: dependencies.retentionService } : {}),
       readinessCheck: dependencies.readinessCheck,
     });
+    if (deadline) disposeDeadline = enforceHostedRuntimeDeadline(app, deadline, closeApplication);
     app.addHook("onClose", closeDependencies);
     await app.ready();
+    deadline?.();
   } catch (error) {
     const cleanupErrors: unknown[] = [];
     if (app) {
       try {
-        await app.close();
+        await closeApplication();
       } catch (cleanupError) {
         cleanupErrors.push(cleanupError);
       }
@@ -117,15 +135,14 @@ export async function createApiApplicationRuntime(
     throw error;
   }
 
-  let closePromise: Promise<void> | undefined;
   const application = app;
   return {
     app: application,
     config,
-    close() {
-      closePromise ??= application.close();
-      return closePromise;
+    assertActive() {
+      deadline?.();
     },
+    close: closeApplication,
   };
 }
 
@@ -136,10 +153,13 @@ export async function startServer(
   const { app, config } = runtime;
   const shutdown = installGracefulShutdown(app, {
     timeoutMs: config.shutdownGraceMs,
+    closeApplication: runtime.close,
   });
 
   try {
+    runtime.assertActive();
     await app.listen({ host: config.apiHost, port: config.apiPort });
+    runtime.assertActive();
     app.log.info(
       {
         event: "api.started",

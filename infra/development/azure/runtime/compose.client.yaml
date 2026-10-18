@@ -1,0 +1,64 @@
+# Fixed public variant, merged once before owned creation. No listener starts at create time.
+services:
+  api:
+    environment:
+      NOURISHING_RUNTIME_NOT_AFTER_UTC: ${RUNTIME_API_END:?An original API horizon is required}
+      NOURISHING_RUNTIME_DEADLINE_NS: ${RUNTIME_API_DEADLINE_NS:?An original monotonic deadline is required}
+  client-edge:
+    platform: linux/arm64
+    pull_policy: never
+    init: true
+    user: "1000:1000"
+    restart: "no"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    cpus: "0.25"
+    mem_limit: 128m
+    labels:
+      io.nourishing.runtime.owner: ${RUNTIME_OWNER:?An owner identity is required}
+      io.nourishing.runtime.revision: ${RUNTIME_REVISION:?A source revision is required}
+    logging:
+      driver: json-file
+      options: { max-size: "2m", max-file: "2" }
+    image: ${CADDY_IMAGE:?An exact admitted image is required}
+    profiles: [client]
+    command: [run, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+    environment:
+      RUNTIME_CLIENT_IP: ${RUNTIME_CLIENT_IP:?One administrator IPv4 /32 is required}
+      RUNTIME_CLIENT_START: ${RUNTIME_CLIENT_START:?An original client start is required}
+      RUNTIME_CLIENT_END: ${RUNTIME_CLIENT_END:?An original client end is required}
+    healthcheck:
+      test: [CMD, caddy, validate, --config, /etc/caddy/Caddyfile, --adapter, caddyfile]
+      interval: 5s
+      timeout: 5s
+      retries: 1
+    ports:
+      - target: 8443
+        published: "443"
+        host_ip: 0.0.0.0
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: ${RUNTIME_SOURCE:?A reviewed source root is required}/infra/development/azure/runtime/Caddyfile.client
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/client.crt
+        target: /run/client/server.crt
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/pki/client.key
+        target: /run/client/server.key
+        read_only: true
+        bind: { create_host_path: false }
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m,uid=1000,gid=1000,mode=1770
+      - /config:rw,noexec,nosuid,size=1m,uid=1000,gid=1000,mode=0700
+      - /data:rw,noexec,nosuid,size=1m,uid=1000,gid=1000,mode=0700
+    networks:
+      backend: { ipv4_address: 172.28.0.9 }
+      azure_egress: { ipv4_address: 172.30.0.5 }

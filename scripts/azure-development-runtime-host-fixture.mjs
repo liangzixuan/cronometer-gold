@@ -123,7 +123,7 @@ export async function fixture(t, options = {}) {
     firewall: {
       FORWARD: `-P FORWARD DROP\n-A FORWARD -s 172.30.0.0/24 -j ${chain}\n-A FORWARD -j DOCKER-USER\n`,
       OUTPUT: `-P OUTPUT ACCEPT\n-A OUTPUT -j ${host}\n`,
-      [chain]: `-N ${chain}\n${allow(chain)}\n${reject(chain)}\n`,
+      [chain]: `-N ${chain}\n${options.clientAccess ? `-A ${chain} -s 172.30.0.5/32 -d ${options.clientAccess.adminIpv4Cidr} -p tcp -m tcp --sport 8443 -m conntrack --ctstate ESTABLISHED -j ACCEPT\n` : ""}${allow(chain)}\n${reject(chain)}\n`,
       [host]: [
         `-N ${host}`,
         `-A ${host} -o lo -j ACCEPT`,
@@ -146,6 +146,7 @@ export async function fixture(t, options = {}) {
   };
   const input = {
     root,
+    clientAccess: options.clientAccess ?? null,
     dockerRoot: state.docker.DockerRootDir,
     dockerId: state.docker.ID,
     qualification: { path, sha256: hash(raw) },

@@ -468,7 +468,7 @@ acceptance requirements. Azure protocol permission references:
 ## Prepared-host development runtime
 
 The source entrypoint `scripts/azure-development-runtime.mjs` runs one finite,
-private synthetic journey on an already qualified Linux ARM64 host. It consumes
+synthetic journey with an explicit private or finite client variant on an already qualified Linux ARM64 host. It consumes
 prepared tools, images, encrypted storage, network policy, files and a supervisor.
 Preparing that host, acquiring images and credentials, and admitting an actual
 invocation require their own resource, custody, lifetime and zero-cost evidence.
@@ -481,7 +481,7 @@ node scripts/azure-development-runtime.mjs run \
 
 The protected mode0600 input uses canonical JSON with one trailing newline inside
 an owned mode0700 directory. Its exact fields are `schemaVersion`, `kind`, `owner`,
-`project`, `root`, `sourceRevision`, `notAfterUtc`, `holdSeconds`, `tools`, `images`,
+`project`, `root`, `sourceRevision`, `notAfterUtc`, `holdSeconds`, `clientAccess`, `tools`, `images`,
 `files`, `database`, `mail`, `journey`, `host`, `supervisor` and `recovery`.
 `schemaVersion` is `1`; `kind` is `nutrition-development-runtime-input-v1`.
 `owner` is a new UUID and `project` is `nourishing-development-<owner>`.
@@ -532,6 +532,40 @@ send and capture-review identities are required. The source proof uses the actua
 API and worker factories above controlled raw SQL and HTTP responses; it does not
 qualify native PostgreSQL enforcement, actual TLS/Mailpit permissions or hosted
 persistence.
+
+`clientAccess` must be `null` for the private variant. The public variant is an
+object with exactly `adminIpv4Cidr`, `notBeforeUtc` and `notAfterUtc`. It selects one
+public IPv4 /32 and a canonical UTC window from 60 to 900 seconds, aligned to whole
+seconds. The window starts after controller admission and ends within the original
+work deadline. Set `holdSeconds` to `0` for this variant.
+
+The same creation record includes a tenth owned service, `client-edge`, using the
+admitted Caddy image. Only IPv4 TCP443 maps to its TCP8443 listener. The fixed host
+is `dev-api.nourishing.app`. The held inputs also include `pki/client.crt` (controller
+owner, mode0444) and `pki/client.key` (UID/GID1000, mode0400). The public leaf must
+match the hostname without a wildcard, be valid now and cover the full window.
+These parser checks do not establish chain trust, key pairing or credential custody.
+Caddy configuration validation is a health check, not a live HTTPS probe.
+
+The edge starts after encrypted recovery, replay readiness, the private two-owner
+journey, API/worker restart and exact diary readback. The controller checks current
+API/worker and edge readiness during the window. Each wait between checks is at
+most 30 seconds; guarded operations use their own bounded time. Before admission,
+the controller waits with held-input and original-lease checks, then repeats full
+source, host and application readiness checks before opening the edge. Cancellation, changed inputs or lost readiness enters owned shutdown.
+Request admission ends 30 seconds before the client deadline. The API retains a
+matching UTC and host-monotonic transport deadline, 15 seconds before that deadline,
+across restart. It closes the listener and accepted sockets even while ordinary or
+signal cleanup is pending. One cached close promise retains any cleanup failure.
+Already-issued database work can still settle after transport closure.
+
+Normal and parent-loss cleanup attempt the edge before all other known owned IDs.
+A refused edge stop remains a failure and does not skip later owned stops. The host
+policy admits only established TCP replies from edge address172.30.0.5:8443 to the
+selected administrator, in addition to the existing bounded Azure egress rules.
+Neither this consumer nor the source tests change a firewall or create trust.
+Actual Caddy adaptation, certificate/key pairing, HTTPS, packet policy and the
+Windows-to-hosted journey remain separate operational acceptance.
 
 The create-only private journal retains mutation intent, raw observations and
 outcomes. It permits at most 1024 records, 1 MiB per record and 64 MiB in total.

@@ -5,6 +5,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { canonicalJson } from "../packages/contracts/dist/index.js";
 import {
+  admitRuntimeClientAccess,
+  runtimeClientEnvironment,
+} from "./azure-development-runtime-client.mjs";
+import {
   observeRuntimeContainer,
   observeRuntimeNetwork,
   requireSameRuntimeContainer,
@@ -24,6 +28,7 @@ const SERVICES = [
   "worker",
 ];
 const STOP_ORDER = [
+  "client-edge",
   "api",
   "worker",
   "migrate",
@@ -43,10 +48,12 @@ const parse = (text) => {
   return value;
 };
 
-/** Native Docker boundary for the prepared-host controller. Admission and actual maintenance belong
- * to the caller; this object has no public-edge, pull, build, removal or arbitrary command operation. */
+/** Native Docker boundary for the fixed private and finite client variants. The caller admits
+ * readiness and lifetime. There is no pull, build, removal or arbitrary command operation. */
 export async function openRuntimeDocker(input, execute = runTool) {
   const { lease, journal, conserve } = input;
+  const clientAccess = admitRuntimeClientAccess(input.clientAccess);
+  const services = [...SERVICES, ...(clientAccess ? ["client-edge"] : [])].sort();
   const recovery = input.recovery === undefined ? undefined : structuredClone(input.recovery);
   const config = structuredClone({
     project: input.project,
@@ -57,6 +64,7 @@ export async function openRuntimeDocker(input, execute = runTool) {
     images: input.images,
     docker: input.docker,
     imageObservations: input.imageObservations,
+    apiDeadlineNs: input.apiDeadlineNs,
   });
   assert(
     lease && journal && typeof journal.conserve === "function" && typeof conserve === "function",
@@ -103,6 +111,9 @@ export async function openRuntimeDocker(input, execute = runTool) {
     "/dev/null",
     "-f",
     resolve(SOURCE, "infra/development/azure/runtime/compose.yaml"),
+    ...(clientAccess
+      ? ["-f", resolve(SOURCE, "infra/development/azure/runtime/compose.client.yaml")]
+      : []),
   ];
   const env = {
     PATH: "/usr/bin:/bin",
@@ -113,6 +124,7 @@ export async function openRuntimeDocker(input, execute = runTool) {
     RUNTIME_REVISION: config.revision,
     RUNTIME_SOURCE: SOURCE,
     RUNTIME_ROOT: config.root,
+    ...(clientAccess ? runtimeClientEnvironment(clientAccess, config.apiDeadlineNs) : {}),
   };
   let model,
     networks = {},
@@ -269,7 +281,7 @@ export async function openRuntimeDocker(input, execute = runTool) {
     exact(Object.keys(recovery).sort(), ["createdRecord", "model"]);
     model = recovery.model;
   }
-  exact(Object.keys(model.services).sort(), SERVICES);
+  exact(Object.keys(model.services).sort(), services);
   assert(
     model.name === config.project &&
       Object.keys(model.networks).sort().join(",") === "azure_egress,backend,capture",
@@ -290,10 +302,63 @@ export async function openRuntimeDocker(input, execute = runTool) {
         service.pull_policy === "never" &&
         service.restart === "no" &&
         service.read_only === true &&
-        !service.ports &&
+        (name === "client-edge" ? clientAccess !== null : !service.ports) &&
         !service.build &&
         (service.privileged ?? false) === false,
     );
+    if (name === "client-edge") {
+      exact(service.ports, [
+        { mode: "ingress", host_ip: "0.0.0.0", target: 8443, published: "443", protocol: "tcp" },
+      ]);
+      exact(
+        service.environment,
+        Object.fromEntries(
+          Object.entries(env).filter(([key]) =>
+            ["RUNTIME_CLIENT_IP", "RUNTIME_CLIENT_START", "RUNTIME_CLIENT_END"].includes(key),
+          ),
+        ),
+      );
+      exact(service.networks, {
+        backend: { ipv4_address: "172.28.0.9" },
+        azure_egress: { ipv4_address: "172.30.0.5" },
+      });
+      assert(service.image === config.images.CADDY_IMAGE);
+      exact(service.command, ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]);
+      assert(service.user === "1000:1000" && service.init === true);
+      exact(service.volumes, [
+        {
+          type: "bind",
+          source: resolve(SOURCE, "infra/development/azure/runtime/Caddyfile.client"),
+          target: "/etc/caddy/Caddyfile",
+          read_only: true,
+          bind: { create_host_path: false },
+        },
+        ...[
+          ["crt", "crt"],
+          ["key", "key"],
+        ].map(([extension, target]) => ({
+          type: "bind",
+          source: `${config.root}/pki/client.${extension}`,
+          target: `/run/client/server.${target}`,
+          read_only: true,
+          bind: { create_host_path: false },
+        })),
+      ]);
+      exact(service.healthcheck, {
+        test: [
+          "CMD",
+          "caddy",
+          "validate",
+          "--config",
+          "/etc/caddy/Caddyfile",
+          "--adapter",
+          "caddyfile",
+        ],
+        interval: "5s",
+        timeout: "5s",
+        retries: 1,
+      });
+    }
     if (name === "search-bootstrap") {
       assert(service.network_mode === "service:meilisearch");
       exact(service.depends_on, {
@@ -307,21 +372,27 @@ export async function openRuntimeDocker(input, execute = runTool) {
     [...new Set(Object.values(model.services).map((service) => service.image))].sort(),
     Object.values(config.images).sort(),
   );
+  if (clientAccess) {
+    assert(model.services.api.environment.NOURISHING_RUNTIME_NOT_AFTER_UTC === env.RUNTIME_API_END);
+    assert(model.services.api.environment.NOURISHING_RUNTIME_DEADLINE_NS === config.apiDeadlineNs);
+  } else
+    for (const key of ["NOURISHING_RUNTIME_NOT_AFTER_UTC", "NOURISHING_RUNTIME_DEADLINE_NS"])
+      assert(model.services.api.environment[key] === undefined);
   if (recovery !== undefined) {
     const claim = recovery.createdRecord;
     assert(claim.phase === "created" && claim.project === config.project);
     exact(Object.keys(claim).sort(), ["containers", "contracts", "networks", "phase", "project"]);
-    exact(Object.keys(claim.containers).sort(), SERVICES);
-    exact(Object.keys(claim.contracts).sort(), SERVICES);
+    exact(Object.keys(claim.containers).sort(), services);
+    exact(Object.keys(claim.contracts).sort(), services);
     exact(Object.keys(claim.networks).sort(), Object.keys(model.networks).sort());
     const relatedIds = Object.fromEntries(
-      SERVICES.map((name) => [name, claim.containers[name].id]),
+      services.map((name) => [name, claim.containers[name].id]),
     );
     assert(
       Object.values(relatedIds).every(id) &&
-        new Set(Object.values(relatedIds)).size === SERVICES.length,
+        new Set(Object.values(relatedIds)).size === services.length,
     );
-    for (const name of SERVICES) {
+    for (const name of services) {
       const row = claim.containers[name],
         contract = claim.contracts[name],
         service = model.services[name];
@@ -405,7 +476,7 @@ export async function openRuntimeDocker(input, execute = runTool) {
         )
           .trim()
           .split("\n");
-        assert(ids.length === SERVICES.length && new Set(ids).size === ids.length && ids.every(id));
+        assert(ids.length === services.length && new Set(ids).size === ids.length && ids.every(id));
         networks = await readNetworks();
         const rows = parse(
           await command("created-container-observations", [
@@ -415,13 +486,13 @@ export async function openRuntimeDocker(input, execute = runTool) {
             ...ids,
           ]),
         );
-        assert(Array.isArray(rows) && rows.length === SERVICES.length);
+        assert(Array.isArray(rows) && rows.length === services.length);
         const relatedIds = Object.fromEntries(
           rows.map((row) => [row.Config?.Labels?.["com.docker.compose.service"], row.Id]),
         );
-        exact(Object.keys(relatedIds).sort(), SERVICES);
+        exact(Object.keys(relatedIds).sort(), services);
         const accepted = {};
-        for (const name of SERVICES) {
+        for (const name of services) {
           const matches = rows.filter((row) => row.Id === relatedIds[name]);
           assert(matches.length === 1);
           const service = model.services[name],
@@ -519,7 +590,7 @@ export async function openRuntimeDocker(input, execute = runTool) {
         }
       });
     },
-    async stop(names = STOP_ORDER) {
+    async stop(names = STOP_ORDER.filter((name) => services.includes(name))) {
       return exclusive(async () => {
         assert(created);
         assert(
@@ -528,36 +599,46 @@ export async function openRuntimeDocker(input, execute = runTool) {
             names.every((name) => Object.hasOwn(recorded, name)),
         );
         const requested = new Set(names),
-          stopped = [];
+          stopped = [],
+          failures = [];
         for (const name of STOP_ORDER.filter((value) => requested.has(value))) {
-          const current = (await inspect([name], true))[name];
-          if (current.status === "created" || current.status === "exited") {
-            stopped.push(current);
-            continue;
+          try {
+            const current = (await inspect([name], true))[name];
+            if (current.status === "created" || current.status === "exited") {
+              stopped.push(current);
+              continue;
+            }
+            assert(current.status === "running");
+            const seconds = name === "worker" ? 610 : name === "api" ? 305 : 30;
+            await publish(
+              {
+                phase: "stop-intent",
+                service: name,
+                id: current.id,
+                identity: current.identity,
+                seconds,
+              },
+              true,
+            );
+            const text = await command(
+              "stop-container",
+              [...prefix, "container", "stop", "--timeout", String(seconds), current.id],
+              { cleanup: true, milliseconds: (seconds + 15) * 1000 },
+            );
+            assert(text.trim() === current.id);
+            const after = (await inspect([name], true))[name];
+            assert(after.status === "exited");
+            await publish({ phase: "stopped", container: after }, true);
+            stopped.push(after);
+          } catch (error) {
+            failures.push(error);
           }
-          assert(current.status === "running");
-          const seconds = name === "worker" ? 610 : name === "api" ? 305 : 30;
-          await publish(
-            {
-              phase: "stop-intent",
-              service: name,
-              id: current.id,
-              identity: current.identity,
-              seconds,
-            },
-            true,
-          );
-          const text = await command(
-            "stop-container",
-            [...prefix, "container", "stop", "--timeout", String(seconds), current.id],
-            { cleanup: true, milliseconds: (seconds + 15) * 1000 },
-          );
-          assert(text.trim() === current.id);
-          const after = (await inspect([name], true))[name];
-          assert(after.status === "exited");
-          await publish({ phase: "stopped", container: after }, true);
-          stopped.push(after);
         }
+        if (failures.length)
+          throw new AggregateError(
+            failures,
+            "Owned service stop incomplete; every remaining known ID was attempted",
+          );
         assert(
           !evidenceIncomplete,
           "Owned stop observations may be complete but journal publication failed",

@@ -113,7 +113,13 @@ export function observeRuntimeContainer(observation, contract) {
   assert(host.Privileged === false && host.ReadonlyRootfs === true && host.Init === true);
   assert(host.RestartPolicy?.Name === "no" && (host.RestartPolicy.MaximumRetryCount ?? 0) === 0);
   exact(host.CapDrop, ["ALL"]);
-  assert(empty(host.CapAdd) && empty(host.PortBindings) && host.PublishAllPorts === false);
+  assert(empty(host.CapAdd) && host.PublishAllPorts === false);
+  if (serviceName === "client-edge") {
+    exact(service.ports, [
+      { mode: "ingress", host_ip: "0.0.0.0", target: 8443, published: "443", protocol: "tcp" },
+    ]);
+    exact(host.PortBindings, { "8443/tcp": [{ HostIp: "0.0.0.0", HostPort: "443" }] });
+  } else assert(empty(host.PortBindings));
   assert(
     empty(host.Devices) &&
       empty(host.DeviceRequests) &&
@@ -189,7 +195,23 @@ export function observeRuntimeContainer(observation, contract) {
     exact(Object.keys(row.NetworkSettings.Networks).sort(), Object.keys(expectedNetworks).sort());
     assert(Object.hasOwn(expectedNetworks, host.NetworkMode));
   }
-  for (const binding of Object.values(row.NetworkSettings.Ports ?? {})) assert(binding === null);
+  if (serviceName === "client-edge") {
+    const exposed = Object.keys(image.Config.ExposedPorts ?? {});
+    assert(
+      exposed.length <= 32 &&
+        exposed.every((port) => /^(?:[1-9][0-9]{0,4})\/(?:tcp|udp)$/u.test(port)),
+    );
+    const permitted = new Set([...exposed, "8443/tcp"]);
+    for (const [port, binding] of Object.entries(row.NetworkSettings.Ports ?? {})) {
+      assert(permitted.has(port));
+      if (port === "8443/tcp" && row.State.Status === "running")
+        exact(binding, [{ HostIp: "0.0.0.0", HostPort: "443" }]);
+      else assert(binding === null);
+    }
+    if (row.State.Status === "running")
+      exact(row.NetworkSettings.Ports?.["8443/tcp"], [{ HostIp: "0.0.0.0", HostPort: "443" }]);
+  } else
+    for (const binding of Object.values(row.NetworkSettings.Ports ?? {})) assert(binding === null);
   // Entire Config/HostConfig and every initial mount/network identity are pinned, including fields
   // not used by this version of the controller. Dynamic process/health/address state is observed separately.
   const identity = hash({

@@ -74,7 +74,14 @@ export async function fixture(t, options = {}) {
       overrides.set(inode(row), { uid: owner, gid: owner });
     }
   }
-  for (const [name, meta] of Object.entries(policy)) {
+  const selectedPolicy = options.clientAccess
+    ? {
+        ...policy,
+        "pki/client.crt": { uid, gid, mode: 0o444 },
+        "pki/client.key": { uid: 1000n, gid: 1000n, mode: 0o400 },
+      }
+    : policy;
+  for (const [name, meta] of Object.entries(selectedPolicy)) {
     // These are plain synthetic labels, never actual TLS keys, passwords or mail verifiers.
     const raw = Buffer.from(options.values?.[name] ?? `synthetic-public-source-fixture:${name}\n`),
       path = join(root, name);
@@ -112,7 +119,7 @@ export async function fixture(t, options = {}) {
     },
   };
   const controller = new AbortController(),
-    input = { root, files, signal: controller.signal };
+    input = { root, files, clientAccess: options.clientAccess ?? null, signal: controller.signal };
   const open = () => openRuntimePreparedInputs(input, io);
   const override = async (name, value) => {
     const row = await fs.lstat(join(root, name), { bigint: true });

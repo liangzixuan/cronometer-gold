@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { canonicalJson } from "../packages/contracts/dist/index.js";
 import { runtimeApiWire } from "./azure-development-runtime-api-fixture.mjs";
 import { runtimeAssemblyFixture } from "./azure-development-runtime-assembly-fixture.mjs";
+import { runtimeClientEnvironment } from "./azure-development-runtime-client.mjs";
+import { clientCertificateFixture } from "./azure-development-runtime-client-fixture.mjs";
 import { fixture as configurationFixture } from "./azure-development-runtime-configuration-fixture.mjs";
 import {
   owner,
@@ -47,10 +49,14 @@ export async function runtimeRunFixture(t, options = {}) {
     project: `nourishing-development-${owner}`,
     root: options.root,
     parent: options.validAssembly ? homedir() : undefined,
+    clientAccess: options.clientAccess,
+    apiDeadlineNs: options.apiDeadlineNs,
   });
   const assembly = options.validAssembly ? await runtimeAssemblyFixture(base.root) : null;
   const config = await configurationFixture(t, {
     base,
+    clientAccess: options.clientAccess,
+    apiDeadlineNs: options.apiDeadlineNs,
     ledgerContainerUrl: assembly?.destinations.erasure.container_url,
   });
   const { root } = base,
@@ -71,7 +77,9 @@ export async function runtimeRunFixture(t, options = {}) {
   values["config/maintenance.env"] = envText(config.ownerEnvironment);
   values["config/database-bootstrap.sql"] = config.input.databaseBootstrap;
   values["pki/ca.crt"] = config.input.caCertificate;
-  const prepared = await preparedFixture(t, { root, values });
+  if (options.clientAccess)
+    values["pki/client.crt"] = clientCertificateFixture(options.clientCertificateOptions);
+  const prepared = await preparedFixture(t, { root, values, clientAccess: options.clientAccess });
   const images = imageFixture();
   const imageObservations = Object.fromEntries(
     images.rows.flatMap((row) => row.RepoDigests.map((ref) => [ref, row])),
@@ -81,6 +89,7 @@ export async function runtimeRunFixture(t, options = {}) {
     root,
     owner,
     notAfterUtc,
+    clientAccess: options.clientAccess,
     mountPoint: options.validAssembly ? homedir() : undefined,
     azureHosts: [
       ...new Set(
@@ -221,6 +230,7 @@ export async function runtimeRunFixture(t, options = {}) {
     sourceRevision: "a".repeat(40),
     notAfterUtc,
     holdSeconds: options.holdSeconds ?? 0,
+    clientAccess: options.clientAccess ?? null,
     tools,
     images: images.input.images,
     files: prepared.files,
@@ -319,7 +329,27 @@ export async function runtimeRunFixture(t, options = {}) {
     if (tool.path === tools.docker.path && !args.includes("info")) {
       assert.equal(args[1], "unix:///var/run/docker.sock");
       if (args.includes("compose")) {
-        if (args.includes("config")) return output(JSON.stringify(config.model));
+        if (args.includes("config")) {
+          if (input.clientAccess) {
+            const env = runtimeClientEnvironment(
+              input.clientAccess,
+              configuration.env.RUNTIME_API_DEADLINE_NS,
+            );
+            const fields = {
+              NOURISHING_RUNTIME_NOT_AFTER_UTC: env.RUNTIME_API_END,
+              NOURISHING_RUNTIME_DEADLINE_NS: env.RUNTIME_API_DEADLINE_NS,
+            };
+            Object.assign(config.model.services.api.environment, fields);
+            const raw = observed.containers.api.Config.Env.filter(
+              (item) => !Object.keys(fields).includes(item.split("=", 1)[0]),
+            );
+            observed.containers.api.Config.Env = [
+              ...raw,
+              ...Object.entries(fields).map(([key, value]) => `${key}=${value}`),
+            ];
+          }
+          return output(JSON.stringify(config.model));
+        }
         assert(
           args.includes("create") &&
             args.includes("--no-build") &&
@@ -380,7 +410,42 @@ export async function runtimeRunFixture(t, options = {}) {
               networkName.slice(config.model.name.length + 1)
             ].ipv4_address;
         }
-        if (name === "api" && options.realApi) await state.api.start();
+        if (name === "client-edge" && options.clientReadinessFailure)
+          observed.containers.worker.State.Health.Status = "unhealthy";
+        if (name === "client-edge")
+          row.NetworkSettings.Ports = { "8443/tcp": [{ HostIp: "0.0.0.0", HostPort: "443" }] };
+        if (name === "api" && options.realApi) {
+          state.apiDeadlineBindings ??= [];
+          state.apiDeadlineBindings.push([
+            config.model.services.api.environment.NOURISHING_RUNTIME_NOT_AFTER_UTC,
+            config.model.services.api.environment.NOURISHING_RUNTIME_DEADLINE_NS,
+          ]);
+          if (input.clientAccess) {
+            const utc = config.model.services.api.environment.NOURISHING_RUNTIME_NOT_AFTER_UTC;
+            const ns = config.model.services.api.environment.NOURISHING_RUNTIME_DEADLINE_NS;
+            const wall = Date.parse(utc) - Date.now();
+            const mono = Number((BigInt(ns) - process.hrtime.bigint()) / 1_000_000n);
+            const original = (await state.journal()).records[0].event;
+            assert(
+              Math.abs(wall - mono) <= 1000,
+              JSON.stringify({
+                stage: "api-start-clock-binding",
+                original,
+                originalApiDeadlineNs: (
+                  await import("./azure-development-runtime-client.mjs")
+                ).runtimeClientDeadline(input.clientAccess, original),
+                nativeConstructorUtc: new Date().toISOString(),
+                wall,
+                mono,
+                ns,
+                utc,
+                currentUtc: new Date(Date.now()).toISOString(),
+                clientDelays: state.clientDelays ?? [],
+              }),
+            );
+          }
+          await state.api.start();
+        }
         if (name === "worker" && options.realWorker) {
           await state.worker.start();
           await state.worker.poll(configuration.signal);
@@ -408,6 +473,7 @@ export async function runtimeRunFixture(t, options = {}) {
         if (name === "api" && options.realApi) await state.api.close();
         if (name === "worker" && options.realWorker) await state.worker.close();
         row.State = { ...row.State, Status: "exited", Running: false, ExitCode: 0 };
+        if (name === "client-edge") row.NetworkSettings.Ports = { "8443/tcp": null };
         return output(row.Id + "\n");
       }
       assert.equal(operation, "logs");

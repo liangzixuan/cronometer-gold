@@ -13,7 +13,23 @@ let active;
 const nativePerformance = globalThis.performance;
 const nativeMonotonic = nativePerformance.now.bind(nativePerformance);
 let holdOffset = 0;
+const nativeWall = Date.now.bind(Date);
+const nativeHrtime = process.hrtime.bigint.bind(process.hrtime);
+let clientOffset = 0;
 globalThis.runtimeControllerHoldDelay = async (milliseconds, value, options) => {
+  if (active?.options.clientAccess) {
+    options.signal.throwIfAborted();
+    assert(Number.isInteger(milliseconds) && milliseconds > 0 && milliseconds <= 30_000);
+    const journal = await active.journal();
+    assert(
+      journal.complete && journal.records.some((row) => row.event.phase === "journey-readback"),
+    );
+    active.clientDelays ??= [];
+    active.clientDelays.push(milliseconds);
+    clientOffset += milliseconds;
+    await realDelay(0, undefined, options);
+    return value;
+  }
   if (!active?.options.maximumHold) return realDelay(milliseconds, value, options);
   options.signal.throwIfAborted();
   assert(Number.isInteger(milliseconds) && milliseconds > 0 && milliseconds <= 15_000);
@@ -865,7 +881,7 @@ async function sourceReadinessChild(t, mode) {
     signal = AbortSignal.any([
       controller.signal,
       AbortSignal.timeout(
-        mode === "connected-journey-hold"
+        mode === "connected-journey-hold" || mode.startsWith("connected-client")
           ? 1_200_000
           : mode.startsWith("connected-journey")
             ? 600_000
@@ -927,7 +943,14 @@ async function sourceReadinessChild(t, mode) {
   const output = await readFile(outputPath, "utf8");
   if (failure) process.stdout.write(output);
   assert(!failure, JSON.stringify({ error: failure?.message, output, diagnostic }));
-  if (["connected-journey-hold", "connected-journey-stop-refused"].includes(mode))
+  if (
+    [
+      "connected-journey-hold",
+      "connected-journey-stop-refused",
+      "connected-client",
+      "connected-client-readiness",
+    ].includes(mode)
+  )
     process.stdout.write(output);
 }
 
@@ -1031,12 +1054,21 @@ test("a final owned API stop refusal retains the persisted journey and cannot re
   await sourceReadinessChild(t, "connected-journey-stop-refused");
 });
 
+test("public edge opens after the actual persisted restart journey and closes at the original finite window", async (t) => {
+  await sourceReadinessChild(t, "connected-client");
+});
+test("lost worker readiness closes the admitted public edge before every remaining owned service", async (t) => {
+  await sourceReadinessChild(t, "connected-client-readiness");
+});
+
 if (process.argv[2] === "--runtime-source-child")
   test("original-source readiness child", async (t) => {
     const mode = process.argv[3];
     assert(
       [
         "connected",
+        "connected-client",
+        "connected-client-readiness",
         "connected-journey",
         "connected-journey-hold",
         "connected-journey-stop-refused",
@@ -1065,11 +1097,27 @@ if (process.argv[2] === "--runtime-source-child")
       await new Promise((resolve) => child.once("close", resolve));
       return;
     }
+    const clientStart = Math.ceil(Date.now() / 1000) * 1000 + 600_000;
+    const clientAccess = mode.startsWith("connected-client")
+      ? {
+          adminIpv4Cidr: "8.8.8.8/32",
+          notBeforeUtc: new Date(clientStart).toISOString(),
+          notAfterUtc: new Date(clientStart + 900_000).toISOString(),
+        }
+      : null;
     const f = await runtimeRunFixture(t, {
+      clientAccess,
+      apiDeadlineNs: clientAccess
+        ? (process.hrtime.bigint() + 1_485_000_000_000n).toString()
+        : undefined,
+      clientReadinessFailure: mode === "connected-client-readiness",
       root: process.argv[4],
       seedUntilAssembly: true,
-      realApi: mode.startsWith("api-journey") || mode.startsWith("connected-journey"),
-      realWorker: mode.startsWith("connected-journey"),
+      realApi:
+        mode.startsWith("api-journey") ||
+        mode.startsWith("connected-journey") ||
+        mode.startsWith("connected-client"),
+      realWorker: mode.startsWith("connected-journey") || mode.startsWith("connected-client"),
       maximumHold: mode === "connected-journey-hold",
       holdSeconds: mode === "connected-journey-hold" ? 900 : 0,
       stopAfterReadback: mode === "connected-journey-stop-refused" ? "api" : undefined,
@@ -1080,6 +1128,45 @@ if (process.argv[2] === "--runtime-source-child")
       changedSourceReadback: mode === "readback",
     });
     active = f;
+    if (clientAccess) {
+      const performanceDescriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
+      const NativeDate = globalThis.Date;
+      const wallOrigin = nativeWall(),
+        monotonicOrigin = nativeHrtime();
+      const controlledWall = () =>
+        wallOrigin + Number((nativeHrtime() - monotonicOrigin) / 1_000_000n) + clientOffset;
+      // The native WSL wall clock can step. This source-only fixture uses one controlled
+      // clock origin for both Date construction and Date.now, without relaxing admission.
+      const existingDate = new NativeDate();
+      globalThis.Date = new Proxy(NativeDate, {
+        construct(target, args) {
+          return Reflect.construct(target, args.length ? args : [controlledWall()]);
+        },
+        get(target, key, receiver) {
+          return key === "now" ? controlledWall : Reflect.get(target, key, receiver);
+        },
+        apply() {
+          return new NativeDate(controlledWall()).toString();
+        },
+      });
+      assert(existingDate instanceof Date && new Date() instanceof NativeDate);
+      process.hrtime.bigint = () => nativeHrtime() + BigInt(clientOffset) * 1_000_000n;
+      Object.defineProperty(globalThis, "performance", {
+        configurable: true,
+        value: new Proxy(nativePerformance, {
+          get(target, key) {
+            if (key === "now") return () => nativeMonotonic() + clientOffset;
+            const value = Reflect.get(target, key, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        }),
+      });
+      t.after(() => {
+        globalThis.Date = NativeDate;
+        process.hrtime.bigint = nativeHrtime;
+        Object.defineProperty(globalThis, "performance", performanceDescriptor);
+      });
+    }
     if (f.options.maximumHold) {
       const descriptor = Object.getOwnPropertyDescriptor(globalThis, "performance");
       const monotonicStart = nativeMonotonic();
@@ -1119,12 +1206,83 @@ if (process.argv[2] === "--runtime-source-child")
       );
       const grantsAt = journal.records.findIndex((r) => r.event.phase === "database-grants-intent");
       assert(restoredAt >= 0 && grantsAt > restoredAt);
-      assert(f.starts.includes("api") && f.starts.includes("worker"));
+      assert(
+        f.starts.includes("api") && f.starts.includes("worker"),
+        JSON.stringify({
+          starts: f.starts,
+          failure:
+            failure?.errors?.map((e) => ({ message: e.message, stack: e.stack })) ?? failure?.stack,
+        }),
+      );
       assert(f.sql.persisted());
-      if (!f.options.stopAfterReadback) assert(f.pools.every((pool) => pool.closed));
+      if (!f.options.stopAfterReadback)
+        assert(
+          f.pools.every((pool) => pool.closed),
+          JSON.stringify({
+            starts: f.starts,
+            stops: f.stops,
+            failure:
+              failure?.errors?.map((e) => ({ message: e.message, stack: e.stack })) ??
+              failure?.stack,
+          }),
+        );
       assert(f.prepared.opened.every((fd) => fd.closed));
       assert.equal(journal.records.at(-1).event.nativeStopSucceeded, !f.options.stopAfterReadback);
       f.operator.verify();
+      if (mode.startsWith("connected-client")) {
+        assert.equal(f.api.applications.length, 2);
+        assert.equal(f.worker.applications.length, 2);
+        assert.deepEqual(f.apiDeadlineBindings[0], f.apiDeadlineBindings[1]);
+        const readbackAt = journal.records.findIndex(
+          (row) => row.event.phase === "journey-readback",
+        );
+        const admittedAt = journal.records.findIndex(
+          (row) => row.event.phase === "client-admitted",
+        );
+        assert(readbackAt >= 0 && admittedAt > readbackAt);
+        const firstEdgeStop = f.stops.indexOf("client-edge");
+        assert(
+          firstEdgeStop >= 0 &&
+            f.stops.slice(firstEdgeStop + 1).includes("api") &&
+            f.stops.slice(firstEdgeStop + 1).includes("worker"),
+        );
+        assert(Object.values(f.observed.containers).every((row) => !row.State.Running));
+        assert.equal(journal.records.at(-1).event.nativeStopSucceeded, true);
+        if (f.options.clientReadinessFailure) {
+          assert(failure instanceof AggregateError && completed === undefined);
+          assert(!journal.records.some((row) => row.event.phase === "client-admission-closed"));
+        } else {
+          if (failure)
+            process.stdout.write(
+              JSON.stringify({
+                publicClientFailure: true,
+                errors: failure.errors?.map((error) => ({
+                  message: error.message,
+                  stack: error.stack,
+                })),
+                journalRecords: journal.records.length,
+                nativeStopSucceeded: journal.records.at(-1).event.nativeStopSucceeded,
+                clientOffset,
+                lastPhases: journal.records.slice(-12).map((row) => row.event.phase),
+              }) + "\n",
+            );
+          assert.ifError(failure);
+          assert(completed.persisted && completed.operationalAcceptance === false);
+          assert(journal.records.some((row) => row.event.phase === "client-admission-closed"));
+          assert(f.clientDelays.length > 0);
+        }
+        process.stdout.write(
+          JSON.stringify({
+            publicClient: true,
+            readinessFailure: f.options.clientReadinessFailure,
+            controlledAdvanceMs: clientOffset,
+            journalRecords: journal.records.length,
+            sameApiDeadlineAcrossRestart: true,
+            nativeStopSucceeded: true,
+            operationalAcceptance: false,
+          }) + "\n",
+        );
+      }
       if (mode.startsWith("connected-journey")) {
         const stopped = journal.records.at(-1).event;
         if (f.options.stopAfterReadback) {
