@@ -203,36 +203,79 @@ export async function createDevelopmentPlan(
     args,
     { directory, env, outputPath, limit = 65536, milliseconds = 60_000, record = true } = {},
   ) => {
-    signal.throwIfAborted();
-    await conserve();
-    const remaining = Math.min(
-      deadline - performance.now(),
-      horizon - Date.now() - RESERVE_MS,
-      milliseconds,
-    );
-    requireValue(remaining >= 1);
     const startedAt = new Date().toISOString();
-    const result = await execute(tool, args, {
-      signal: AbortSignal.any([signal, AbortSignal.timeout(Math.floor(remaining))]),
-      env: env ?? baseEnvironment,
-      directory: directory ?? dirname(inputPath),
-      limit,
-      outputPath,
-    });
-    await conserve();
-    if (record)
-      phases.push({
-        phase,
-        completed: true,
-        exitCode: 0,
-        startedAt,
-        endedAt: new Date().toISOString(),
-        executableSha256: tool.sha256,
-        argumentsSha256: sha(JSON.stringify(args)),
-        stdoutSha256: result.sha256,
-        stdoutBytes: result.bytes,
+    const diagnostics = [];
+    let diagnosticBytes = 0;
+    try {
+      signal.throwIfAborted();
+      await conserve();
+      const remaining = Math.min(
+        deadline - performance.now(),
+        horizon - Date.now() - RESERVE_MS,
+        milliseconds,
+      );
+      requireValue(remaining >= 1);
+      const result = await execute(tool, args, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(Math.floor(remaining))]),
+        env: env ?? baseEnvironment,
+        directory: directory ?? dirname(inputPath),
+        limit,
+        outputPath,
+        onStderr: (chunk) => {
+          const retained = Buffer.from(chunk.subarray(0, Math.max(0, 65536 - diagnosticBytes)));
+          diagnosticBytes += retained.length;
+          if (retained.length) diagnostics.push(retained);
+        },
       });
-    return result;
+      await conserve();
+      if (record)
+        phases.push({
+          phase,
+          completed: true,
+          exitCode: 0,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          executableSha256: tool.sha256,
+          argumentsSha256: sha(JSON.stringify(args)),
+          stdoutSha256: result.sha256,
+          stdoutBytes: result.bytes,
+        });
+      return result;
+    } catch (error) {
+      // Outside the immutable operation inventory; never overwrite an earlier failure.
+      // Native exit/cleanup status is not exposed by the process boundary on rejection.
+      const diagnostic = Buffer.concat(diagnostics);
+      const failure = {
+        schema_version: 1,
+        completed: false,
+        source_sha256: expectedSource,
+        request_sha256: input.sha256,
+        phase,
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        native_exit_status: "unknown",
+        completed_phases: phases,
+        stderr: {
+          retained_bytes: diagnostic.length,
+          sha256: sha(diagnostic),
+          base64: diagnostic.toString("base64"),
+          scope: "Bounded callback bytes only; missing or partial output remains possible",
+        },
+      };
+      try {
+        await trustedPath(dirname(inputPath), { directory: true, privateLeaf: true });
+        await writeFile(`${inputPath}.failure.json`, `${JSON.stringify(failure)}\n`, {
+          flag: "wx",
+          mode: 0o600,
+        });
+      } catch (retentionError) {
+        throw new AggregateError(
+          [error, retentionError],
+          "Development plan failure evidence could not be retained",
+        );
+      }
+      throw error;
+    }
   };
   const pure = (mode, extra = [], record = false) =>
     command(mode, PYTHON, ["-I", "-B", resolve(REPO, HELPER), mode, inputPath, ...extra], {

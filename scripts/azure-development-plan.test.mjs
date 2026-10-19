@@ -357,8 +357,17 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
       return result;
     }
     state.calls.push({ file, argv, env: options.env });
-    if (state.failure === argv[0])
-      throw new Error("synthetic command failure between owned phases");
+    if (
+      state.failure === argv[0] ||
+      (["diagnostic-overflow", "receipt-collision"].includes(state.failure) && argv[0] === "init")
+    ) {
+      options.onStderr?.(
+        state.failure === "diagnostic-overflow"
+          ? Buffer.alloc(70000, 120)
+          : Buffer.from("synthetic command diagnostic\nPRIVATE_DIAGNOSTIC_CANARY"),
+      );
+      throw new Error("PRIVATE_ERROR_MESSAGE_CANARY");
+    }
     assert.ok(!JSON.stringify(options.env).includes("PRIVATE_CANARY"));
     assert.equal(options.env.AZURE_EXTENSION_USE_DYNAMIC_INSTALL, "no");
     let value;
@@ -452,6 +461,11 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
   };
   // The normal default boundary cannot run fixture pins; it must reject before any Azure call.
   await assert.rejects(createDevelopmentPlan(join(directory, "request.json"), { environment: {} }));
+  assert.equal(
+    JSON.parse(await readFile(join(directory, "request.json.failure.json"), "utf8")).phase,
+    "prepare",
+  );
+  await rm(join(directory, "request.json.failure.json"));
   for (const failure of [
     "account",
     "init",
@@ -460,6 +474,8 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
     "retention",
     "after-publication",
     "lost-retained-evidence",
+    "diagnostic-overflow",
+    "receipt-collision",
     undefined,
   ]) {
     state.failure = failure;
@@ -467,6 +483,12 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
     const operation = join(directory, "nourishing-dev-0123456789ab");
     try {
       if (failure) {
+        if (failure === "receipt-collision")
+          await writeFile(
+            join(directory, "request.json.failure.json"),
+            "ORIGINAL_PRIVATE_FAILURE",
+            { flag: "wx", mode: 0o600 },
+          );
         await assert.rejects(
           createDevelopmentPlan(
             join(directory, "request.json"),
@@ -474,12 +496,45 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
             run,
           ),
         );
+        const failurePath = join(directory, "request.json.failure.json");
+        if (failure === "receipt-collision") {
+          assert.equal(await readFile(failurePath, "utf8"), "ORIGINAL_PRIVATE_FAILURE");
+          assert.equal(state.calls.at(-1)?.argv[0], "init");
+          await assert.rejects(lstat(join(operation, "result.json")), { code: "ENOENT" });
+          continue;
+        }
+        const failed = JSON.parse(await readFile(failurePath, "utf8"));
+        assert.equal((await lstat(failurePath)).mode & 0o777, 0o600);
+        assert.equal(failed.schema_version, 1);
+        assert.equal(failed.source_sha256, source);
+        assert.equal(failed.request_sha256, hash(await readFile(join(directory, "request.json"))));
+        assert.equal(failed.completed, false);
+        assert.equal(failed.native_exit_status, "unknown");
+        assert.ok(!JSON.stringify(failed).includes("PRIVATE_ERROR_MESSAGE_CANARY"));
+        const diagnostic = Buffer.from(failed.stderr.base64, "base64");
+        assert.equal(diagnostic.length, failed.stderr.retained_bytes);
+        assert.equal(hash(diagnostic), failed.stderr.sha256);
+        assert.ok(diagnostic.length <= 65536);
+        if (failure === "diagnostic-overflow") {
+          assert.equal(failed.phase, "init");
+          assert.equal(diagnostic.length, 65536);
+          assert.deepEqual(diagnostic, Buffer.alloc(65536, 120));
+        }
+        if (["account", "init", "plan", "show"].includes(failure)) {
+          assert.equal(failed.phase, failure === "account" ? "auth-account" : failure);
+          assert.equal(
+            diagnostic.toString(),
+            "synthetic command diagnostic\nPRIVATE_DIAGNOSTIC_CANARY",
+          );
+          assert.ok(failed.completed_phases.every((phase) => phase.completed));
+          assert.ok(!failed.completed_phases.some((phase) => phase.phase === failed.phase));
+        }
         if (["retention", "after-publication", "lost-retained-evidence"].includes(failure))
           assert.equal(state.calls.length, 8, "failure must reach the selected final stage");
         else
           assert.equal(
             state.calls.at(-1)?.argv[0],
-            failure,
+            failure === "diagnostic-overflow" ? "init" : failure,
             "failure must reach the selected command",
           );
         if (["after-publication", "lost-retained-evidence"].includes(failure))
@@ -534,6 +589,7 @@ test("complete operator with actual pure stages and intercepted Azure/Terraform 
       }
     } finally {
       await rm(operation, { recursive: true, force: true });
+      await rm(join(directory, "request.json.failure.json"), { force: true });
     }
   }
 });
