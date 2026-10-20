@@ -35,6 +35,7 @@ variable "live_preflight" {
   type = object({
     checked_at_utc     = string
     subscription_id    = string
+    location           = string
     spending_limit     = string
     billing_limit      = string
     credit_currency    = string

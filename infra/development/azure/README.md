@@ -1,6 +1,6 @@
 # Azure development empty host
 
-This separate Terraform root describes one disposable, synthetic-only host in Central US. It creates exactly eleven resources: a resource group, VNet, subnet, NSG, association, static IPv4 address, NIC, Arm64 VM, data disk, disk attachment and UTC shutdown schedule. It installs no application or host software.
+This separate Terraform root describes one disposable, synthetic-only host in Canada Central. It creates exactly eleven resources: a resource group, VNet, subnet, NSG, association, static IPv4 address, NIC, Arm64 VM, data disk, disk attachment and UTC shutdown schedule. It installs no application or host software.
 
 The pinned Standard_B4ps_v2 has four CPUs and 16 GiB RAM. Its reported TrustedLaunchDisabled capability requires secure boot and vTPM to remain disabled. Ubuntu is pinned to `Canonical:ubuntu-24_04-lts:server-arm64:24.04.202609040`; there is no region, size or image fallback. Password login and VM extensions are disabled. Both disks are 64-GiB StandardSSD_LRS. This root has no preservation locks or automatic start.
 
@@ -84,12 +84,17 @@ Tests cover the pure input/auditor/publication stages and a full injected sequen
 
 ## Native six-family evidence collection
 
-`scripts/azure-development-evidence.mjs` collects the ten fixed read responses used by
+`scripts/azure-development-evidence.mjs` collects the twelve fixed read responses used by
 the existing development plan policy. It uses native Azure CLI 2.90.0 through the
 pinned limiter and owned process supervisor. The four authentication reads must
 pass before collection. Billing-profile discovery is a fixed subscription GET;
-credit reads use only its validated identifier. The command neither registers a
-provider nor follows a missing-capacity, pagination or alternate-endpoint fallback.
+credit reads use only its validated identifier. Two fixed GETs read the selected
+subscription's `sys.regionrestriction` assignment and built-in definition
+`b86dabb9-b578-4d7b-b842-3b45e95769a1`, using API version `2026-06-01`.
+Both receipts stay in the existing `providers` family. Four authentication phases
+and twelve read phases must complete within the original operation bounds. The
+command neither registers a provider nor follows a missing-capacity, pagination
+or alternate-endpoint fallback.
 
 ```sh
 node scripts/azure-development-evidence.mjs --source-digest
@@ -110,9 +115,21 @@ no shutdown and allocates nothing.
 The command creates a new private operation directory and retains raw projected
 responses, phase records, source/input bindings and six family files. The complete
 `index.json` is published create-only after all original allowance, freshness,
-identity, protection, quota, SKU and image rules pass. Its `evidence_sha256` binds
-the six files for the plan request's existing `evidence_paths`. Files alone do not
-prove command success. Failed operations retain bounded private partial material;
+identity, protection, region-policy, quota, SKU and image rules pass. The supported
+system assignment must apply to the exact subscription with default enforcement,
+no exclusions, overrides or selectors, and an allowed-location list that includes
+`canadacentral`. Its matching built-in definition must retain the reviewed
+version `1.0.0` Indexed deny rule and Array parameter. Missing, stale, changed,
+ambiguous or denying policy evidence prevents all family and index publication.
+This check covers that system policy; it does not evaluate every applicable policy
+or reserve physical capacity. Native SKU and image region comparisons accept ASCII
+case variation such as `CanadaCentral`, while preserving raw response bytes.
+Whitespace aliases and multiple SKU locations are rejected. The derived
+`live_preflight.location` must match the Terraform host profile and saved plan.
+Separate storage acquisition and custody roots retain their own explicit profiles.
+
+The index's `evidence_sha256` binds the six files for the plan request's existing
+`evidence_paths`. Files alone do not prove command success. Failed operations retain bounded private partial material;
 an error after index publication leaves its durability or caller verification
 unconfirmed. Inspect and preserve that evidence before another operation.
 
@@ -123,6 +140,10 @@ and hashes. Stderr text is never returned or published. The auditor accepts this
 explicit format separately from the historical Windows records; it does not
 relabel old evidence. These are unsigned local observations, not provider
 attestations or permission to apply a plan.
+
+The fixed policy GETs follow the official [assignment](https://learn.microsoft.com/en-us/rest/api/policy-authorization/policy-assignments/get?view=rest-policy-authorization-2026-06-01)
+and [built-in definition](https://learn.microsoft.com/en-us/rest/api/policy-authorization/policy-definitions/get-built-in?view=rest-policy-authorization-2026-06-01)
+REST contracts.
 
 Each native command is bounded to sixty seconds within the shared ten-minute work
 budget. Response size is 128 KiB, stderr 64 KiB. An allowlisted operation inventory

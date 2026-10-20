@@ -133,7 +133,7 @@ def finish(path, directory, state_hash, now):
     auth = [{"label": "auth-" + label, "arguments": args + ["--only-show-errors", "--output", "json"]}
             for label, args in P.commands(expected)]
     reads = [{**entry, "label": "read-" + entry["label"]} for entry in descriptors]
-    require(isinstance(phases, list) and len(phases) == 14, "four authentication and ten read phases required")
+    require(isinstance(phases, list) and len(phases) == len(auth) + len(reads), "complete authentication and read phases required")
     previous = A.receipt_utc(state["createdAt"], "operation start")
     values = {}
     for phase, command in zip(phases, auth + reads):

@@ -1,5 +1,5 @@
 locals {
-  location        = "centralus"
+  location        = "canadacentral"
   vm_size         = "Standard_B4ps_v2"
   admin_username  = "azureuser"
   image_publisher = "Canonical"
@@ -32,12 +32,12 @@ resource "azurerm_resource_group" "development" {
     }
     precondition {
       condition = (
-        var.live_preflight.subscription_id == var.subscription_id &&
+        var.live_preflight.subscription_id == var.subscription_id && var.live_preflight.location == local.location &&
         var.live_preflight.spending_limit == "On" && var.live_preflight.billing_limit == "On" &&
         var.live_preflight.credit_currency == "USD" && var.live_preflight.remaining_credit >= 20 &&
         var.live_preflight.regional_remaining >= 4 && var.live_preflight.family_remaining >= 4
       )
-      error_message = "Keep both spending protections On, at least USD20 credit and four available regional/family cores. The auditor checks the original account/SKU/image/provider responses."
+      error_message = "Keep both spending protections On, at least USD20 credit and four available regional/family cores. The auditor checks the selected region policy and original account/SKU/image/provider responses."
     }
     precondition {
       condition = try(

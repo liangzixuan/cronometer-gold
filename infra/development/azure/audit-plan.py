@@ -35,9 +35,16 @@ PROVIDER_FILES = {
     "LICENSE.txt": ("4e2bb185ebd706f76329206869ccb348b92b6236100cfb07775fe31530dab0d5", 0o644),
 }
 LOCK_SHA256 = "bff61c4c32ccce099d94c3bf38de033a7ef4a00f47e9384833fa8a221b6fa9f5"
-LOCATION = "centralus"
+LOCATION = "canadacentral"
 SKU = "Standard_B4ps_v2"
 IMAGE = "Canonical:ubuntu-24_04-lts:server-arm64:24.04.202609040"
+REGION_ASSIGNMENT_PATH = "/providers/Microsoft.Authorization/policyAssignments/sys.regionrestriction"
+REGION_DEFINITION_ID = "/providers/Microsoft.Authorization/policyDefinitions/b86dabb9-b578-4d7b-b842-3b45e95769a1"
+REGION_RULE = {"if": {"allOf": [
+    {"field": "location", "notIn": "[parameters('listOfAllowedLocations')]"},
+    {"field": "location", "notEquals": "global"},
+    {"field": "type", "notEquals": "Microsoft.AzureActiveDirectory/b2cDirectories"}
+]}, "then": {"effect": "deny"}}
 PROVIDER = "registry.terraform.io/hashicorp/azurerm"
 MAX_JSON = 20 * 1024 * 1024
 TAGS = {"availability": "single-server-non-ha", "data-classification": "synthetic-only",
@@ -95,6 +102,10 @@ NATIVE_READS = [
      "{id:id,subscriptionId:subscriptionId,displayName:displayName,state:state,subscriptionPolicies:subscriptionPolicies}"),
     ("providers", "after-billing-property", "{base}/providers/Microsoft.Billing/billingProperty/default", "2024-04-01",
      "{billingAccountId:properties.billingAccountId,billingProfileId:properties.billingProfileId,billingProfileSpendingLimit:properties.billingProfileSpendingLimit,billingProfileStatus:properties.billingProfileStatus,subscriptionBillingStatus:properties.subscriptionBillingStatus,subscriptionBillingType:properties.subscriptionBillingType}"),
+    ("providers", "system-region-assignment", "{base}" + REGION_ASSIGNMENT_PATH, "2026-06-01",
+     "{id:id,assignmentType:properties.assignmentType,scope:properties.scope,enforcementMode:properties.enforcementMode,policyDefinitionId:properties.policyDefinitionId,definitionVersion:properties.definitionVersion,parameters:properties.parameters,notScopes:properties.notScopes,overrides:properties.overrides,resourceSelectors:properties.resourceSelectors}"),
+    ("providers", "system-region-definition", REGION_DEFINITION_ID, "2026-06-01",
+     "{id:id,policyType:properties.policyType,mode:properties.mode,version:properties.version,versions:properties.versions,parameterType:properties.parameters.listOfAllowedLocations.type,policyRule:properties.policyRule}"),
     ("credit", "credit-balance-summary", "{profile}/providers/Microsoft.Consumption/credits/balanceSummary", "2026-06-01",
      "{balanceSummary:properties.balanceSummary,billingCurrency:properties.billingCurrency,creditCurrency:properties.creditCurrency,isEstimatedBalance:properties.isEstimatedBalance,pendingEligibleCharges:properties.pendingEligibleCharges,pendingCreditAdjustments:properties.pendingCreditAdjustments,expiredCredit:properties.expiredCredit}"),
     ("credit", "credit-lots", "{profile}/providers/Microsoft.Consumption/lots", "2026-06-01",
@@ -102,11 +113,11 @@ NATIVE_READS = [
     ("compute", "after-compute-registration-once", "{base}/providers/Microsoft.Compute", "2021-04-01", "{namespace:namespace,registrationState:registrationState}"),
     ("providers", "after-Microsoft.Network-once", "{base}/providers/Microsoft.Network", "2021-04-01", "{namespace:namespace,registrationState:registrationState}"),
     ("providers", "after-Microsoft.DevTestLab-once", "{base}/providers/Microsoft.DevTestLab", "2021-04-01", "{namespace:namespace,registrationState:registrationState}"),
-    ("quota", "centralus-positive-and-arm-family-quotas", "{base}/providers/Microsoft.Compute/locations/centralus/usages", "2025-04-01",
+    ("quota", "canadacentral-positive-and-arm-family-quotas", "{base}/providers/Microsoft.Compute/locations/canadacentral/usages", "2025-04-01",
      "{totalEntries:length(value),hasNext:nextLink!=null,nextLink:nextLink,matches:value[?limit > `0` || contains(name.value, `psv`) || contains(name.value, `PSv`) || contains(name.value, `psV`)].{name:name.value,currentValue:currentValue,limit:limit,unit:unit}}"),
-    ("sku", "centralus-Standard_B4ps_v2-exact", "{base}/providers/Microsoft.Compute/skus", "2021-07-01&%24filter=location%20eq%20%27centralus%27",
+    ("sku", "canadacentral-Standard_B4ps_v2-exact", "{base}/providers/Microsoft.Compute/skus", "2021-07-01&%24filter=location%20eq%20%27canadacentral%27",
      "{matches:value[?resourceType==`virtualMachines` && name==`Standard_B4ps_v2`].{name:name,family:family,locations:locations,restrictions:restrictions,capabilities:capabilities[?name==`vCPUs` || name==`vCPUsAvailable` || name==`MemoryGB` || name==`CpuArchitectureType` || name==`HyperVGenerations` || name==`TrustedLaunchDisabled` || name==`PremiumIO` || name==`EncryptionAtHostSupported` || name==`AcceleratedNetworkingEnabled`]},hasNext:nextLink!=null,nextLink:nextLink}"),
-    ("image", "selected-exact-CentralUS-Canonical-Arm64-image", None, None,
+    ("image", "selected-exact-CanadaCentral-Canonical-Arm64-image", None, None,
      "{id:id,name:name,location:location,architecture:architecture,hyperVGeneration:hyperVGeneration,features:features,plan:plan,imageDeprecationStatus:imageDeprecationStatus,osDiskImage:osDiskImage,automaticOSUpgradeProperties:automaticOSUpgradeProperties,disallowed:disallowed}"),
 ]
 
@@ -191,7 +202,7 @@ def record(doc, label, now):
     item = unique(entries, "label", "receipt records").get(label)
     require(item is not None, "required original read receipt missing: " + label)
     require(type(item.get("exitCode")) is int and item["exitCode"] == 0 and item.get("timedOut", False) is False
-            and (item.get("completed") is True or (label == "selected-exact-CentralUS-Canonical-Arm64-image" and item.get("timedOut") is False and "error" in item)) and not item.get("knownErrors")
+            and item.get("completed") is True and not item.get("knownErrors")
             and not item.get("knownErrorCodes") and not item.get("error")
             and not item.get("mutations"), "read receipt did not complete cleanly: " + label)
     start, end = receipt_utc(item.get("startedAt"), "read start"), receipt_utc(item.get("endedAt"), "read end")
@@ -221,7 +232,34 @@ def rest(item, subscription, path):
     url = urlsplit(arg("--url"))
     require(url.scheme == "https" and url.netloc == "management.azure.com" and not url.fragment
             and url.path.lower() == path.lower() and "api-version" in parse_qs(url.query), "read ARM endpoint mismatch")
+    if item["label"] in ("system-region-assignment", "system-region-definition"):
+        require(arg("--url") == "https://management.azure.com" + path + "?api-version=2026-06-01",
+                "region policy GET endpoint or API version differs")
     return item["selected"]
+
+def canonical_location(value):
+    # ARM catalog responses vary ASCII case. Spaces, display names and aliases are not region IDs.
+    require(isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9]*", value), "canonical region identifier required")
+    return value.lower()
+
+def system_region_policy(assignment, definition, base):
+    H._exact_keys(assignment, {"id", "assignmentType", "scope", "enforcementMode", "policyDefinitionId",
+                              "definitionVersion", "parameters", "notScopes", "overrides", "resourceSelectors"}, "system region assignment")
+    require(assignment["id"] == base + REGION_ASSIGNMENT_PATH and assignment["scope"] == base
+            and assignment["assignmentType"] == "System" and assignment["enforcementMode"] == "Default"
+            and assignment["policyDefinitionId"] == REGION_DEFINITION_ID and assignment["definitionVersion"] == "1.*.*",
+            "system region assignment differs")
+    require(all(assignment[key] is None or assignment[key] == [] for key in ("notScopes", "overrides", "resourceSelectors")),
+            "region policy exclusions, overrides or selectors not admitted")
+    parameters = H._exact_keys(assignment["parameters"], {"listOfAllowedLocations"}, "region policy parameters")
+    allowed = H._exact_keys(parameters["listOfAllowedLocations"], {"value"}, "allowed locations")["value"]
+    require(isinstance(allowed, list) and allowed, "nonempty allowed region list required")
+    regions = [canonical_location(value) for value in allowed]
+    require(len(set(regions)) == len(regions) and LOCATION in regions, "selected region denied or ambiguous")
+    H._exact_keys(definition, {"id", "policyType", "mode", "version", "versions", "parameterType", "policyRule"}, "system region definition")
+    require(definition == {"id": REGION_DEFINITION_ID, "policyType": "BuiltIn", "mode": "Indexed",
+                           "version": "1.0.0", "versions": ["1.0.0"], "parameterType": "Array", "policyRule": REGION_RULE},
+            "unsupported system region definition")
 
 def evidence_values(documents, hashes, subscription, deadline, now):
     require(set(documents) == EVIDENCE_KINDS and set(hashes) == EVIDENCE_KINDS, "six original evidence families are required")
@@ -241,6 +279,9 @@ def evidence_values(documents, hashes, subscription, deadline, now):
             and billing.get("subscriptionBillingStatus") == "Active" and billing.get("subscriptionBillingType") == "Free", "billing protection or eligibility changed")
     profile = billing.get("billingProfileId")
     require(isinstance(profile, str) and re.fullmatch(r"/providers/Microsoft.Billing/billingAccounts/[^/]+/billingProfiles/[^/]+", profile), "missing billing profile")
+    system_region_policy(
+        read("providers", "system-region-assignment", base + REGION_ASSIGNMENT_PATH),
+        read("providers", "system-region-definition", REGION_DEFINITION_ID), base)
     balance = read("credit", "credit-balance-summary", profile + "/providers/Microsoft.Consumption/credits/balanceSummary")
     require(balance.get("isEstimatedBalance") is False and balance.get("creditCurrency") == "USD"
             and balance.get("billingCurrency") == "USD", "exact USD balance required")
@@ -265,7 +306,7 @@ def evidence_values(documents, hashes, subscription, deadline, now):
                                    ("providers", "after-Microsoft.DevTestLab-once", "Microsoft.DevTestLab")]:
         selected = read(kind, label, base + "/providers/" + namespace)
         require(selected == {"namespace": namespace, "registrationState": "Registered"}, "required provider not registered")
-    quota = read("quota", "centralus-positive-and-arm-family-quotas", base + "/providers/Microsoft.Compute/locations/centralus/usages")
+    quota = read("quota", "canadacentral-positive-and-arm-family-quotas", base + "/providers/Microsoft.Compute/locations/canadacentral/usages")
     require(quota.get("hasNext") is False and quota.get("nextLink") is None, "quota read incomplete")
     quotas = unique(quota.get("matches"), "name", "quota")
     capacity = []
@@ -274,16 +315,19 @@ def evidence_values(documents, hashes, subscription, deadline, now):
         require(q.get("unit") == "Count", "missing exact regional or family quota")
         available = number(q.get("limit"), "quota limit") - number(q.get("currentValue"), "quota use")
         require(available >= 4, "four available cores required"); capacity.append(available)
-    sku = read("sku", "centralus-Standard_B4ps_v2-exact", base + "/providers/Microsoft.Compute/skus")
+    sku = read("sku", "canadacentral-Standard_B4ps_v2-exact", base + "/providers/Microsoft.Compute/skus")
     require(sku.get("hasNext") is False and sku.get("nextLink") is None and len(sku.get("matches", [])) == 1, "exact SKU read incomplete")
     item = sku["matches"][0]
+    locations = item.get("locations")
+    require(isinstance(locations, list) and len(locations) == 1
+            and canonical_location(locations[0]) == LOCATION, "exact selected SKU region required")
     require(item.get("name") == SKU and item.get("family") == "standardBpsv2Family"
-            and item.get("locations") == [LOCATION] and item.get("restrictions") == [], "SKU unavailable or restricted")
+            and item.get("restrictions") == [], "SKU unavailable or restricted")
     caps = {k: v.get("value") for k, v in unique(item.get("capabilities"), "name", "SKU capabilities").items()}
     for key, value in {"vCPUs": "4", "vCPUsAvailable": "4", "MemoryGB": "16", "CpuArchitectureType": "Arm64", "TrustedLaunchDisabled": "True"}.items():
         require(caps.get(key) == value, "SKU capability mismatch")
     require("V2" in caps.get("HyperVGenerations", "").split(","), "Gen2 hardware required")
-    image = record(documents["image"], "selected-exact-CentralUS-Canonical-Arm64-image", now)
+    image = record(documents["image"], "selected-exact-CanadaCentral-Canonical-Arm64-image", now)
     used.append(receipt_utc(image["startedAt"], "image read start"))
     args = image.get("arguments", [])
     if image.get("format") == NATIVE_FORMAT:
@@ -292,11 +336,11 @@ def evidence_values(documents, hashes, subscription, deadline, now):
         require(args[:3] == ["vm", "image", "show"] and args[3:7] == ["--location", LOCATION, "--urn", IMAGE]
                 and len(args) == 9 and args[7] == "--query", "image read command mismatch")
     image = image["selected"]
-    require(image.get("name") == IMAGE.split(":")[-1] and image.get("location") == LOCATION
+    require(image.get("name") == IMAGE.split(":")[-1] and canonical_location(image.get("location")) == LOCATION
             and image.get("architecture") == "Arm64" and image.get("hyperVGeneration") == "V2"
             and image.get("plan") is None and image.get("imageDeprecationStatus", {}).get("imageState") == "Active"
             and image.get("osDiskImage", {}).get("operatingSystem") == "Linux", "exact active Linux image required")
-    return {"checked_at_utc": min(used).isoformat().replace("+00:00", "Z"), "subscription_id": subscription,
+    return {"checked_at_utc": min(used).isoformat().replace("+00:00", "Z"), "subscription_id": subscription, "location": LOCATION,
             "spending_limit": "On", "billing_limit": "On", "credit_currency": "USD", "remaining_credit": remaining,
             "credit_expires_utc": lot["expirationDate"], "regional_remaining": capacity[0], "family_remaining": capacity[1],
             "source_sha256": hashes}

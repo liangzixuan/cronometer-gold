@@ -69,14 +69,16 @@ test("actual pure stages plus synthetic native reads preserve sequencing, diagno
     "auth-subscription",
     "read-after-subscription-policy",
     "read-after-billing-property",
+    "read-system-region-assignment",
+    "read-system-region-definition",
     "read-credit-balance-summary",
     "read-credit-lots",
     "read-after-compute-registration-once",
     "read-after-Microsoft.Network-once",
     "read-after-Microsoft.DevTestLab-once",
-    "read-centralus-positive-and-arm-family-quotas",
-    "read-centralus-Standard_B4ps_v2-exact",
-    "read-selected-exact-CentralUS-Canonical-Arm64-image",
+    "read-canadacentral-positive-and-arm-family-quotas",
+    "read-canadacentral-Standard_B4ps_v2-exact",
+    "read-selected-exact-CanadaCentral-Canonical-Arm64-image",
   ];
   const state = { calls: [], failure: undefined };
   const run = async (tool, args, options) => {
@@ -155,7 +157,7 @@ test("actual pure stages plus synthetic native reads preserve sequencing, diagno
         if (failure === "authentication") assert.equal(state.calls.length, 4);
         else if (failure.startsWith("read-"))
           assert.equal(state.calls.at(-1), "read-credit-balance-summary");
-        else assert.equal(state.calls.length, 14);
+        else assert.equal(state.calls.length, 16);
         if (failure === "after-publication")
           assert.equal(
             JSON.parse(await readFile(join(operation, "index.json"), "utf8")).completed,
@@ -174,7 +176,20 @@ test("actual pure stages plus synthetic native reads preserve sequencing, diagno
         assert.equal(index.completed, true);
         assert.equal(index.source_sha256, source);
         assert.equal(Object.keys(index.evidence_sha256).length, 6);
-        assert.equal(state.calls.length, 14);
+        assert.equal(index.facts.location, "canadacentral");
+        const providers = JSON.parse(await readFile(join(operation, "providers.json"), "utf8"));
+        assert.deepEqual(
+          providers.commands.map(({ label }) => label),
+          [
+            "after-subscription-policy",
+            "after-billing-property",
+            "system-region-assignment",
+            "system-region-definition",
+            "after-Microsoft.Network-once",
+            "after-Microsoft.DevTestLab-once",
+          ],
+        );
+        assert.equal(state.calls.length, 16);
         assert.ok(!indexRaw.includes("PRIVATE_CANARY"));
         const family = JSON.parse(await readFile(join(operation, "credit.json"), "utf8"));
         assert.equal(family.commands[0].stderrBytes, 14);

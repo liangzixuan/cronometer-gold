@@ -33,11 +33,34 @@ PREFIX = "nourishing-dev-0123456789ab"
 PROFILE = "/providers/Microsoft.Billing/billingAccounts/synthetic/billingProfiles/synthetic"
 HASHES = {k: "ab" * 32 for k in ("credit", "providers", "compute", "quota", "sku", "image")}
 
-def response(label, path, selected):
+def response(label, path, selected, api_version="2026-01-01"):
     return {"label": label, "startedAt": "2026-10-01T07:00:00Z", "endedAt": "2026-10-01T07:00:01Z",
             "completed": True, "timedOut": False, "exitCode": 0,
             "stdoutSha256": "cd"*32, "stderrSha256": "ef"*32,
-            "arguments": ["-IBm", "azure.cli", "rest", "--method", "get", "--url", "https://management.azure.com"+path+"?api-version=2026-01-01", "--subscription", SUB, "--query", "synthetic selected projection", "--only-show-errors", "--output", "json"], "selected": selected}
+            "arguments": ["-IBm", "azure.cli", "rest", "--method", "get", "--url", "https://management.azure.com"+path+"?api-version="+api_version, "--subscription", SUB, "--query", "synthetic selected projection", "--only-show-errors", "--output", "json"], "selected": selected}
+
+def with_region_policy(documents, allowed):
+    # Independent public fixture, not derived from the auditor's policy constants.
+    assignment = "/subscriptions/" + SUB + "/providers/Microsoft.Authorization/policyAssignments/sys.regionrestriction"
+    definition = "/providers/Microsoft.Authorization/policyDefinitions/b86dabb9-b578-4d7b-b842-3b45e95769a1"
+    records = documents["providers"]["commands"]
+    labels = {"system-region-assignment", "system-region-definition"}
+    records[:] = [item for item in records if item["label"] not in labels]
+    records.extend([
+        response("system-region-assignment", assignment, {
+            "id": assignment, "assignmentType": "System", "scope": "/subscriptions/" + SUB,
+            "enforcementMode": "Default", "policyDefinitionId": definition, "definitionVersion": "1.*.*",
+            "parameters": {"listOfAllowedLocations": {"value": allowed}},
+            "notScopes": None, "overrides": None, "resourceSelectors": None}, api_version="2026-06-01"),
+        response("system-region-definition", definition, {
+            "id": definition, "policyType": "BuiltIn", "mode": "Indexed", "version": "1.0.0",
+            "versions": ["1.0.0"], "parameterType": "Array",
+            "policyRule": {"if": {"allOf": [
+                {"field": "location", "notIn": "[parameters('listOfAllowedLocations')]"},
+                {"field": "location", "notEquals": "global"},
+                {"field": "type", "notEquals": "Microsoft.AzureActiveDirectory/b2cDirectories"}
+            ]}, "then": {"effect": "deny"}}}, api_version="2026-06-01")])
+    return documents
 
 def evidence():
     base = "/subscriptions/"+SUB
@@ -50,23 +73,23 @@ def evidence():
     money={"currency":"USD","value":100}; zero={"currency":"USD","value":0}
     put("credit","credit-balance-summary",PROFILE+"/providers/Microsoft.Consumption/credits/balanceSummary", {"isEstimatedBalance":False,"creditCurrency":"USD","billingCurrency":"USD","balanceSummary":{"currentBalance":money},"pendingEligibleCharges":zero,"pendingCreditAdjustments":zero})
     put("credit","credit-lots",PROFILE+"/providers/Microsoft.Consumption/lots", {"hasNext":False,"credits":[{"source":"Azure for students credit","isEstimatedBalance":False,"startDate":"2026-09-28T00:00:00Z","expirationDate":"2027-09-28T00:00:00Z","closedBalance":money}]})
-    put("quota","centralus-positive-and-arm-family-quotas",base+"/providers/Microsoft.Compute/locations/centralus/usages", {"hasNext":False,"nextLink":None,"matches":[{"name":name,"unit":"Count","limit":limit,"currentValue":0} for name,limit in [("cores",6),("standardBpsv2Family",10)]]})
-    put("sku","centralus-Standard_B4ps_v2-exact",base+"/providers/Microsoft.Compute/skus", {"hasNext":False,"nextLink":None,"matches":[{"name":"Standard_B4ps_v2","family":"standardBpsv2Family","locations":["centralus"],"restrictions":[],"capabilities":[{"name":k,"value":v} for k,v in {"vCPUs":"4","vCPUsAvailable":"4","MemoryGB":"16","CpuArchitectureType":"Arm64","HyperVGenerations":"V1,V2","TrustedLaunchDisabled":"True"}.items()]}]})
-    image=response("selected-exact-CentralUS-Canonical-Arm64-image","unused",{"name":"24.04.202609040","location":"centralus","architecture":"Arm64","hyperVGeneration":"V2","plan":None,"imageDeprecationStatus":{"imageState":"Active"},"osDiskImage":{"operatingSystem":"Linux"}})
-    image["arguments"]=["vm","image","show","--location","centralus","--urn","Canonical:ubuntu-24_04-lts:server-arm64:24.04.202609040","--query","synthetic selected projection"]
+    put("quota","canadacentral-positive-and-arm-family-quotas",base+"/providers/Microsoft.Compute/locations/canadacentral/usages", {"hasNext":False,"nextLink":None,"matches":[{"name":name,"unit":"Count","limit":limit,"currentValue":0} for name,limit in [("cores",6),("standardBpsv2Family",10)]]})
+    put("sku","canadacentral-Standard_B4ps_v2-exact",base+"/providers/Microsoft.Compute/skus", {"hasNext":False,"nextLink":None,"matches":[{"name":"Standard_B4ps_v2","family":"standardBpsv2Family","locations":["CanadaCentral"],"restrictions":[],"capabilities":[{"name":k,"value":v} for k,v in {"vCPUs":"4","vCPUsAvailable":"4","MemoryGB":"16","CpuArchitectureType":"Arm64","HyperVGenerations":"V1,V2","TrustedLaunchDisabled":"True"}.items()]}]})
+    image=response("selected-exact-CanadaCentral-Canonical-Arm64-image","unused",{"name":"24.04.202609040","location":"CanadaCentral","architecture":"Arm64","hyperVGeneration":"V2","plan":None,"imageDeprecationStatus":{"imageState":"Active"},"osDiskImage":{"operatingSystem":"Linux"}})
+    image["arguments"]=["vm","image","show","--location","canadacentral","--urn","Canonical:ubuntu-24_04-lts:server-arm64:24.04.202609040","--query","synthetic selected projection"]
     d["image"]["commands"].append(image)
     d["credit"]["records"]=d["credit"].pop("commands")
-    return d
+    return with_region_policy(d, ["canadacentral", "mexicocentral"])
 
 def plan():
     # Transform the older independently hand-written provider fixture, not the new policy's expected_values.
-    raw=json.dumps(B.valid_plan()).replace(".beta", ".development").replace('"beta"','"development"').replace("nutrition-beta",PREFIX).replace("eastus2","centralus").replace("10.42.","10.43.")
+    raw=json.dumps(B.valid_plan()).replace(".beta", ".development").replace('"beta"','"development"').replace("nutrition-beta",PREFIX).replace("eastus2","canadacentral").replace("10.42.","10.43.")
     p=json.loads(raw)
     discard=("azurerm_management_lock", "azurerm_consumption_budget")
     p["resource_changes"]=[x for x in p["resource_changes"] if not x["address"].startswith(discard)]
     p["configuration"]["root_module"]["resources"]=[x for x in p["configuration"]["root_module"]["resources"] if not x["address"].startswith(discard)]
     v={"subscription_id":SUB,"name_prefix":PREFIX,"admin_ipv4_cidr":"8.8.8.8/32","ssh_public_key":B.SSH_KEY,"shutdown_deadline_utc":"2026-10-01T10:00:00Z",
-       "live_preflight":{"checked_at_utc":"2026-10-01T07:00:00Z","subscription_id":SUB,"spending_limit":"On","billing_limit":"On","credit_currency":"USD","remaining_credit":100,"credit_expires_utc":"2027-09-28T00:00:00Z","regional_remaining":6,"family_remaining":10,"source_sha256":HASHES}}
+       "live_preflight":{"checked_at_utc":"2026-10-01T07:00:00Z","subscription_id":SUB,"location":"canadacentral","spending_limit":"On","billing_limit":"On","credit_currency":"USD","remaining_credit":100,"credit_expires_utc":"2027-09-28T00:00:00Z","regional_remaining":6,"family_remaining":10,"source_sha256":HASHES}}
     p["variables"]={k:{"value":v} for k,v in v.items()};p["timestamp"]="2026-10-01T08:00:00Z"
     p["checks"]=[B._check("azurerm_resource_group.development","unknown")]
     vm=after(p,"azurerm_linux_virtual_machine.development")
@@ -91,6 +114,92 @@ def setpath(obj,path,value):
     for key in path[:-1]: obj=obj[key]
     obj[path[-1]]=value
 
+
+class RegionPolicy(unittest.TestCase):
+    def accepts(self, documents): return A.audit_plan(plan(), documents, HASHES, NOW)
+    def test_allowed_region_and_exact_plan_location(self):
+        documents = evidence()
+        self.assertEqual(self.accepts(documents)["resource_count"], 11)
+        facts = A.evidence_values(documents, HASHES, SUB, NOW + timedelta(hours=2), NOW)
+        self.assertEqual(facts["location"], "canadacentral")
+        self.assertEqual(selected(documents, "sku", "canadacentral-Standard_B4ps_v2-exact")["matches"][0]["locations"], ["CanadaCentral"])
+        for wrong in ("centralus", "CanadaCentral", None):
+            p = plan(); p["variables"]["live_preflight"]["value"]["location"] = wrong
+            with self.subTest(fact=wrong), self.assertRaises(A.Error): A.audit_plan(p, documents, HASHES, NOW)
+        p = plan(); after(p, "azurerm_linux_virtual_machine.development")["location"] = "centralus"
+        with self.assertRaises(A.Error): A.audit_plan(p, documents, HASHES, NOW)
+    def test_missing_policy_receipts_fail(self):
+        for label in ("system-region-assignment", "system-region-definition"):
+            documents = evidence(); records = documents["providers"]["commands"]
+            records[:] = [item for item in records if item["label"] != label]
+            with self.subTest(label=label), self.assertRaises(A.Error): self.accepts(documents)
+    def test_assignment_scope_enforcement_and_bypass_changes_fail(self):
+        changes = [("id", "/foreign"), ("scope", "/subscriptions/other"), ("assignmentType", "Custom"),
+                   ("enforcementMode", "DoNotEnforce"), ("policyDefinitionId", "/foreign"), ("definitionVersion", "2.*.*"),
+                   ("notScopes", ["/subscriptions/" + SUB]), ("overrides", [{"kind": "policyEffect", "value": "disabled"}]),
+                   ("resourceSelectors", [{"name": "partial"}]), ("notScopes", {}), ("parameters", {})]
+        for key, value in changes:
+            documents = evidence(); selected(documents, "providers", "system-region-assignment")[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(A.Error): self.accepts(documents)
+        for key in selected(evidence(), "providers", "system-region-assignment"):
+            documents = evidence(); del selected(documents, "providers", "system-region-assignment")[key]
+            with self.subTest(missing=key), self.assertRaises(A.Error): self.accepts(documents)
+    def test_unsupported_definition_or_rule_fail(self):
+        changes = [("id", "/foreign"), ("policyType", "Custom"), ("mode", "All"), ("version", "1.0.1"),
+                   ("versions", ["1.0.0", "1.0.1"]), ("parameterType", "String"), ("policyRule", {"then": {"effect": "audit"}})]
+        for key, value in changes:
+            documents = evidence(); selected(documents, "providers", "system-region-definition")[key] = value
+            with self.subTest(key=key), self.assertRaises(A.Error): self.accepts(documents)
+        documents = evidence(); rule = selected(documents, "providers", "system-region-definition")["policyRule"]
+        rule["if"]["allOf"][1]["notEquals"] = "canadacentral"
+        with self.assertRaises(A.Error): self.accepts(documents)
+    def test_denied_or_ambiguous_allowed_lists_fail(self):
+        for values in ([], ["centralus"], ["canadacentral", "CanadaCentral"], [" CanadaCentral"], ["Canada Central"],
+                       ["canadacentral", None], "canadacentral", ["canadaçentral"], ["canadacentral\n"]):
+            documents = with_region_policy(evidence(), values)
+            with self.subTest(values=values), self.assertRaises(A.Error): self.accepts(documents)
+        documents = with_region_policy(evidence(), ["CanadaCentral"])
+        self.accepts(documents)
+        assignment = selected(documents, "providers", "system-region-assignment")
+        for key in ("notScopes", "overrides", "resourceSelectors"): assignment[key] = []
+        self.accepts(documents)
+    def test_fixed_native_region_gets_and_terraform_profile(self):
+        base = '/subscriptions/' + SUB
+        for label, path in [
+            ('system-region-assignment', base + '/providers/Microsoft.Authorization/policyAssignments/sys.regionrestriction'),
+            ('system-region-definition', '/providers/Microsoft.Authorization/policyDefinitions/b86dabb9-b578-4d7b-b842-3b45e95769a1')]:
+            args = A.native_arguments(label, SUB)
+            self.assertEqual(args[:5], ['rest', '--method', 'get', '--url', 'https://management.azure.com' + path + '?api-version=2026-06-01'])
+            self.assertEqual(args[5:7], ['--subscription', SUB])
+        main = (HERE/'main.tf').read_text(); variables = (HERE/'variables.tf').read_text()
+        self.assertRegex(main, r'location\s*= "canadacentral"')
+        self.assertIn('var.live_preflight.location == local.location', main)
+        self.assertRegex(variables, r'location\s*= string')
+    def test_exact_policy_api_version_and_unambiguous_query_required(self):
+        for label in ('system-region-assignment', 'system-region-definition'):
+            for query in ('api-version=2026-01-01', 'api-version=2027-06-01',
+                          'api-version=2026-06-01&api-version=2026-06-01',
+                          'api-version=2026-06-01&api-version=2026-01-01',
+                          'api-version=2026-06-01&%24expand=EffectiveDefinitionVersion'):
+                documents = evidence(); item = next(v for v in documents['providers']['commands'] if v['label'] == label)
+                args = item['arguments']; index = args.index('--url') + 1
+                args[index] = args[index].split('?')[0] + '?' + query
+                with self.subTest(label=label, query=query), self.assertRaises(A.Error): self.accepts(documents)
+    def test_policy_freshness_and_endpoint_are_required(self):
+        for label in ("system-region-assignment", "system-region-definition"):
+            for key, value in (("startedAt", "2026-09-30T00:00:00Z"), ("completed", False), ("arguments", ["az", "fake"])):
+                documents = evidence(); item = next(v for v in documents["providers"]["commands"] if v["label"] == label); item[key] = value
+                with self.subTest(label=label, key=key), self.assertRaises(A.Error): self.accepts(documents)
+    def test_catalog_region_comparison_is_ascii_case_only(self):
+        for locations in (["centralus"], ["Canada Central"], [" canadacentral"], [], ["canadacentral", "centralus"], ["canadacentral", "CanadaCentral"], [None]):
+            documents = evidence(); selected(documents, "sku", "canadacentral-Standard_B4ps_v2-exact")["matches"][0]["locations"] = locations
+            with self.subTest(sku=locations), self.assertRaises(A.Error): self.accepts(documents)
+        for value in ("centralus", "Canada Central", "canadacentral ", "canadaçentral", None):
+            documents = evidence(); selected(documents, "image", "selected-exact-CanadaCentral-Canonical-Arm64-image")["location"] = value
+            with self.subTest(image=value), self.assertRaises(A.Error): self.accepts(documents)
+    def test_denied_region_rejected_before_plan_acceptance(self):
+        documents = with_region_policy(evidence(), [])
+        with self.assertRaises(A.Error): A.audit_plan(plan(), documents, HASHES, NOW)
 
 class PlanRepresentation(unittest.TestCase):
     def represented(self):
@@ -216,7 +325,7 @@ class Contract(unittest.TestCase):
             p=plan();setpath(after(p,address),path,value)
             with self.subTest(address=address,path=path):self.rejects(p)
     def test_evidence_field_failures(self):
-        cases=[("providers","after-subscription-policy",("subscriptionPolicies","spendingLimit"),"Off"),("providers","after-billing-property",("billingProfileSpendingLimit",),"Off"),("providers","after-Microsoft.Network-once",("registrationState",),"NotRegistered"),("credit","credit-balance-summary",("balanceSummary","currentBalance","value"),19),("credit","credit-balance-summary",("isEstimatedBalance",),True),("credit","credit-balance-summary",("pendingEligibleCharges","value"),1),("credit","credit-lots",("hasNext",),True),("credit","credit-lots",("credits",0,"expirationDate"),"2026-10-02T00:00:00Z"),("quota","centralus-positive-and-arm-family-quotas",("matches",0,"limit"),3),("quota","centralus-positive-and-arm-family-quotas",("hasNext",),True),("sku","centralus-Standard_B4ps_v2-exact",("matches",0,"restrictions"),["blocked"]),("image","selected-exact-CentralUS-Canonical-Arm64-image",("architecture",),"x64"),("image","selected-exact-CentralUS-Canonical-Arm64-image",("plan",),{"name":"paid"})]
+        cases=[("providers","after-subscription-policy",("subscriptionPolicies","spendingLimit"),"Off"),("providers","after-billing-property",("billingProfileSpendingLimit",),"Off"),("providers","after-Microsoft.Network-once",("registrationState",),"NotRegistered"),("credit","credit-balance-summary",("balanceSummary","currentBalance","value"),19),("credit","credit-balance-summary",("isEstimatedBalance",),True),("credit","credit-balance-summary",("pendingEligibleCharges","value"),1),("credit","credit-lots",("hasNext",),True),("credit","credit-lots",("credits",0,"expirationDate"),"2026-10-02T00:00:00Z"),("quota","canadacentral-positive-and-arm-family-quotas",("matches",0,"limit"),3),("quota","canadacentral-positive-and-arm-family-quotas",("hasNext",),True),("sku","canadacentral-Standard_B4ps_v2-exact",("matches",0,"restrictions"),["blocked"]),("image","selected-exact-CanadaCentral-Canonical-Arm64-image",("architecture",),"x64"),("image","selected-exact-CanadaCentral-Canonical-Arm64-image",("plan",),{"name":"paid"})]
         for kind,label,path,value in cases:
             d=evidence();setpath(selected(d,kind,label),path,value)
             with self.subTest(kind=kind,path=path):self.rejects(d=d)
@@ -285,8 +394,10 @@ class Contract(unittest.TestCase):
     def test_saved_windows_utc_offset(self):
         d=evidence();item=d["image"]["commands"][0]
         for key in ("startedAt","endedAt"):item[key]=item[key].replace("Z","+00:00")
-        item.pop("completed");item["error"]=None
         A.audit_plan(plan(),d,HASHES,NOW)
+        item.pop("completed");item["error"]=None
+        self.rejects(d=d)
+        item["completed"]=True
         item["startedAt"]=item["startedAt"].replace("+00:00","+01:00")
         self.rejects(d=d)
     def test_incomplete_nonimage_receipt_rejected(self):
@@ -848,12 +959,14 @@ class NativeEvidencePolicy(unittest.TestCase):
     def test_each_family_value_gate_survives_raw_receipt_rebinding(self):
         changes=[('providers','after-subscription-policy',('subscriptionPolicies','spendingLimit'),'Off'),
                  ('providers','after-billing-property',('billingProfileStatus',),'Inactive'),
+                 ('providers','system-region-assignment',('parameters','listOfAllowedLocations','value'),['centralus']),
+                 ('providers','system-region-definition',('policyRule','then','effect'),'audit'),
                  ('compute','after-compute-registration-once',('registrationState',),'NotRegistered'),
                  ('credit','credit-balance-summary',('balanceSummary','currentBalance','value'),19),
                  ('credit','credit-lots',('hasNext',),True),
-                 ('quota','centralus-positive-and-arm-family-quotas',('hasNext',),True),
-                 ('sku','centralus-Standard_B4ps_v2-exact',('nextLink',),'https://foreign.invalid'),
-                 ('image','selected-exact-CentralUS-Canonical-Arm64-image',('architecture',),'x64')]
+                 ('quota','canadacentral-positive-and-arm-family-quotas',('hasNext',),True),
+                 ('sku','canadacentral-Standard_B4ps_v2-exact',('nextLink',),'https://foreign.invalid'),
+                 ('image','selected-exact-CanadaCentral-Canonical-Arm64-image',('architecture',),'x64')]
         for kind,label,path,value in changes:
             bad=native_fixture();item=next(x for x in bad[kind]['commands'] if x['label']==label)
             setpath(item['selected'],path,value);item['stdout']=json.dumps(item['selected']);item['stdoutBytes']=len(item['stdout'].encode());item['stdoutSha256']=A.sha(item['stdout'].encode())
@@ -896,13 +1009,32 @@ class EvidencePreparation(unittest.TestCase):
         description=self.prepare();self.complete_files();result=E.finish(*self.args)
         self.assertTrue(result['completed']);index,_=E.A.private_json(self.directory/'index.json')
         self.assertEqual(set(index['evidence_sha256']),A.EVIDENCE_KINDS)
+        self.assertEqual(index['facts']['location'], 'canadacentral')
+        documents = {kind: E.A.private_json(self.directory/(kind+'.json'))[0] for kind in A.EVIDENCE_KINDS}
+        p = plan(); p['variables']['live_preflight']['value'] = index['facts']
+        self.assertEqual(A.audit_plan(p, documents, index['evidence_sha256'], NOW)['resource_count'], 11)
+        p['variables']['live_preflight']['value']['source_sha256'] = {**index['evidence_sha256'], 'providers': '0'*64}
+        with self.assertRaises(A.Error): A.audit_plan(p, documents, index['evidence_sha256'], NOW)
         for kind,digest in index['evidence_sha256'].items():self.assertEqual(E.A.private_json(self.directory/(kind+'.json'))[1],digest)
         self.assertTrue((self.directory/'session.json').exists());self.assertEqual(description['azure']['path'],'/usr/bin/az')
         with self.assertRaises(FileExistsError):E.finish(*self.args)
+    def test_policy_denial_never_publishes_families_or_index(self):
+        self.prepare(); self.complete_files()
+        self.assertEqual(len(json.loads((self.directory/'phases.json').read_text())), 16)
+        file = self.directory/'read-system-region-assignment.json'
+        value = json.loads(file.read_text()); value['parameters']['listOfAllowedLocations']['value'] = ['centralus']
+        file.write_text(json.dumps(value) + '\n'); raw = file.read_bytes()
+        phases_file = self.directory/'phases.json'; phases = json.loads(phases_file.read_text())
+        phase = next(v for v in phases if v['label'] == 'read-system-region-assignment')
+        phase.update(stdoutBytes=len(raw), stdoutSha256=A.sha(raw)); phases_file.write_text(json.dumps(phases) + '\n')
+        with self.assertRaisesRegex(E.A.Error, 'selected region denied'): E.finish(*self.args)
+        for name in [*A.EVIDENCE_KINDS, 'index']:
+            self.assertFalse((self.directory/(name+'.json')).exists())
+        self.assertTrue(file.exists())
     def test_authentication_precedes_all_collection_and_billing_precedes_credit(self):
         self.prepare()
         with self.assertRaises(E.A.Error):E.requests(*self.args)
-        self.complete_files();self.assertEqual(len(E.requests(*self.args)),2);self.assertEqual(len(E.requests(*self.args,remaining=True)),8)
+        self.complete_files();self.assertEqual(len(E.requests(*self.args)),2);self.assertEqual(len(E.requests(*self.args,remaining=True)),10)
         path=self.directory/'auth-account.json';raw=path.read_bytes();path.write_text('{}')
         with self.assertRaises(E.A.Error):E.requests(*self.args)
         path.write_bytes(raw);path=self.directory/'read-after-billing-property.json';value=json.loads(path.read_text());value['billingProfileId']=PROFILE+'?foreign=1';path.write_text(json.dumps(value))
@@ -1014,7 +1146,7 @@ def session_responses(document):
         props={'provisioningState':'Succeeded'}
         field='vmId' if key=='vm' else 'uniqueId' if key in ('os','data') else 'uniqueIdentifier' if key=='schedule' else 'resourceGuid'
         if key not in ('group','subnet'):props[field]='11111111-aaaa-bbbb-cccc-'+str(index).zfill(12)
-        live[key]={'id':resource_id,'location':'centralus','properties':props}
+        live[key]={'id':resource_id,'location':'canadacentral','properties':props}
     by['azurerm_linux_virtual_machine.development']['virtual_machine_id']=live['vm']['properties']['vmId']
     by['azurerm_virtual_network.development']['guid']=live['vnet']['properties']['resourceGuid']
     live['members']={'value':[{'id':v} for k,v in owned.items() if k not in ('group','subnet')]}
