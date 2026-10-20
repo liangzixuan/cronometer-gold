@@ -272,12 +272,12 @@ provenance, or immutable-tag gates.
 `e2eee6a7fce366321294c9c2a79f3146891dcbdf`. CI checks that annotated tag
 object `8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926` resolves to that commit and
 verifies its SSH signature against the repository-pinned Ed25519 signer. The
-source archive is checksum-pinned. Go 1.26.6 is pinned by image index digest,
+source archive is checksum-pinned. Go 1.26.9 is pinned by image index digest,
 and the scratch runtime receives only the static Caddy binary, the exact Alpine
-`ca-certificates-bundle` 20260909-r0 payload, the exact `tzdata` 2026d-r0
+`ca-certificates-bundle` 20260909-r0 payload, the exact `tzdata` 2026e-r0
 payload, and minimal user/directory files. The build explicitly advances the
-four vulnerable release dependencies to `golang.org/x/crypto` v0.55.0,
-`golang.org/x/net` v0.58.0, `golang.org/x/text` v0.41.0, and
+four vulnerable release dependencies to `golang.org/x/crypto` v0.57.0,
+`golang.org/x/net` v0.60.0, `golang.org/x/text` v0.42.0, and
 `google.golang.org/grpc` v1.83.2; final image labels disclose that patched
 graph, and the build asserts all four binary module versions. Caddy runs as
 `1000:1000`. The OCI controlled-beta runtime must
@@ -475,3 +475,12 @@ Producer qualification and offline contracts do not establish a database CI or
 BrowserStack journey result for these replacement fixtures. Those results remain
 pending an actual automatic run; capture, session privacy and release gates
 remain unchanged.
+
+The installed Azure journey keeps Meilisearch v1.53.1 and its signed upstream
+digest, with exact Alpine 3.22 `curl` and `libcurl` 8.14.1-r4 packages.
+The build and publishing identity check require both installed versions; image
+admission requires their disclosed package label. Caddy uses the eligible Go
+1.26.9 builder and x/net v0.60.0 with its required crypto v0.57.0 and text
+v0.42.0 selections. These inputs address the retained October20 publication
+failures. The normal exact-digest scan and publication results still establish
+admission; no scan or release gate is waived.

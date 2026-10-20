@@ -20,7 +20,7 @@ configs["CADDY_IMAGE"] = {
     "Labels": {"io.cronometer.runtime.component": "caddy", "io.cronometer.runtime.contract": "uid-gid-1000-net-bind-service",
         "io.cronometer.upstream.source": "https://github.com/caddyserver/caddy", "io.cronometer.upstream.source.revision": "e2eee6a7fce366321294c9c2a79f3146891dcbdf",
         "io.cronometer.upstream.source.tag-object": "8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926", "io.cronometer.upstream.version": "v2.11.4",
-        "io.cronometer.upstream.vulnerability-patches": "golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.58.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=v1.83.2"}}
+        "io.cronometer.upstream.vulnerability-patches": "golang.org/x/crypto=v0.57.0,golang.org/x/net=v0.60.0,golang.org/x/text=v0.42.0,google.golang.org/grpc=v1.83.2"}}
 configs["POSTGRES_IMAGE"] = {
     "User": "70:70", "Entrypoint": ["docker-entrypoint.sh"], "Cmd": ["postgres"], "StopSignal": "SIGINT", "Volumes": {"/var/lib/postgresql/data": {}}, "ExposedPorts": {"5432/tcp": {}},
     "Env": ["GOSU_VERSION=", "PGDATA=/var/lib/postgresql/data", "PG_VERSION=17.11"], "Healthcheck": {"Test": ["CMD-SHELL", "pg_isready"]},
@@ -33,11 +33,12 @@ configs["MEILI_IMAGE"] = {
     "User": "1000:1000", "Entrypoint": ["tini", "--"], "Cmd": ["/bin/sh", "-c", "/bin/meilisearch"], "WorkingDir": "/meili_data", "ExposedPorts": {"7700/tcp": {}},
     "Env": ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "MEILI_HTTP_ADDR=0.0.0.0:7700", "MEILI_SERVER_PROVIDER=docker"],
     "Healthcheck": {"Test": ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:7700/health >/dev/null || exit 1"], "Interval": 10000000000, "Timeout": 5000000000, "StartPeriod": 20000000000, "Retries": 6},
-    "Labels": {"io.cronometer.runtime.component": "meilisearch", "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.9-r0-uid-gid-1000",
+    "Labels": {"io.cronometer.runtime.component": "meilisearch", "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.9-r0-curl-8.14.1-r4-uid-gid-1000",
         "io.cronometer.upstream.image": "docker.io/getmeili/meilisearch:v1.53.1", "io.cronometer.upstream.image.digest": "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
         "io.cronometer.upstream.image.arm64.digest": "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee", "io.cronometer.upstream.source": "https://github.com/meilisearch/meilisearch",
         "io.cronometer.upstream.source.revision": "577f7af28942b71782eab1e59f44ad8296ce0a92", "io.cronometer.upstream.version": "v1.53.1",
-        "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0", "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456"}}
+        "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0", "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+        "io.cronometer.runtime.curl-packages": "curl=8.14.1-r4,libcurl=8.14.1-r4"}}
 for name, config in configs.items():
     component = maintained["REPOSITORY_IMAGES"][name][1]
     config["Labels"].update({"org.opencontainers.image.revision": revision, "org.opencontainers.image.source": "https://github.com/liangzixuan/cronometer-gold",

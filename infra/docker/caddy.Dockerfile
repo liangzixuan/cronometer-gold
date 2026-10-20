@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# Go 1.26.6 is pinned by its multi-platform index. The reviewed linux/arm64
-# child is sha256:1b2cb58c3df8b93b8bcb5739778692c35e491087599139deb2c8c03567cbb03e.
-ARG GO_IMAGE=docker.io/library/golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
+# Go 1.26.9 is pinned by its multi-platform index. The reviewed linux/arm64
+# child is sha256:dccc7a8faa4dbaabed38c2ebb7a7bd24c342f2b0ee0fc1a0d2bd41b0243513ad.
+ARG GO_IMAGE=docker.io/library/golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
 
 FROM ${GO_IMAGE} AS build
 
@@ -39,9 +39,9 @@ RUN --mount=type=cache,id=nutrition-caddy-go-mod-v1,target=/go/pkg/mod,sharing=l
       /tmp/tzdata.apk; \
     tar -xzf /tmp/caddy.tar.gz --strip-components=1; \
     go mod edit \
-      -require=golang.org/x/crypto@v0.55.0 \
-      -require=golang.org/x/net@v0.58.0 \
-      -require=golang.org/x/text@v0.41.0 \
+      -require=golang.org/x/crypto@v0.57.0 \
+      -require=golang.org/x/net@v0.60.0 \
+      -require=golang.org/x/text@v0.42.0 \
       -require=google.golang.org/grpc@v1.83.2; \
     go mod download; \
     go mod tidy; \
@@ -53,9 +53,9 @@ RUN --mount=type=cache,id=nutrition-caddy-go-mod-v1,target=/go/pkg/mod,sharing=l
       -o /out/caddy \
       ./cmd/caddy; \
     /out/caddy version | grep -Fx 'v2.11.4'; \
-    go version -m /out/caddy | grep -E 'golang.org/x/crypto[[:space:]]+v0.55.0'; \
-    go version -m /out/caddy | grep -E 'golang.org/x/net[[:space:]]+v0.58.0'; \
-    go version -m /out/caddy | grep -E 'golang.org/x/text[[:space:]]+v0.41.0'; \
+    go version -m /out/caddy | grep -E 'golang.org/x/crypto[[:space:]]+v0.57.0'; \
+    go version -m /out/caddy | grep -E 'golang.org/x/net[[:space:]]+v0.60.0'; \
+    go version -m /out/caddy | grep -E 'golang.org/x/text[[:space:]]+v0.42.0'; \
     go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+v1.83.2'; \
     /out/caddy list-modules --packages | grep -Fx 'tls.issuance.acme'; \
     /out/caddy list-modules --packages | grep -Fx 'tls.issuance.internal'
@@ -87,7 +87,7 @@ LABEL io.cronometer.runtime.component="caddy" \
       io.cronometer.upstream.source.revision="e2eee6a7fce366321294c9c2a79f3146891dcbdf" \
       io.cronometer.upstream.source.tag-object="8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926" \
       io.cronometer.upstream.version="v2.11.4" \
-      io.cronometer.upstream.vulnerability-patches="golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.58.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=v1.83.2"
+      io.cronometer.upstream.vulnerability-patches="golang.org/x/crypto=v0.57.0,golang.org/x/net=v0.60.0,golang.org/x/text=v0.42.0,google.golang.org/grpc=v1.83.2"
 
 ENV HOME=/home/caddy \
     PATH=/usr/bin \

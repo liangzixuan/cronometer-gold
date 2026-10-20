@@ -1313,7 +1313,7 @@ assert (
 )
 assert (
     '"io.cronometer.runtime.contract": '
-    '"v1.53.1-openssl-3.5.9-r0-uid-gid-1000"'
+    '"v1.53.1-openssl-3.5.9-r0-curl-8.14.1-r4-uid-gid-1000"'
     in image_admission
 )
 assert (
@@ -1602,7 +1602,7 @@ meili_config = {
     ],
     "Labels": {
         "io.cronometer.runtime.component": "meilisearch",
-        "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.9-r0-uid-gid-1000",
+        "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.9-r0-curl-8.14.1-r4-uid-gid-1000",
         "io.cronometer.upstream.image": "docker.io/getmeili/meilisearch:v1.53.1",
         "io.cronometer.upstream.image.digest": (
             "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431"
@@ -1619,6 +1619,7 @@ meili_config = {
             "libcrypto3=3.5.9-r0,libssl3=3.5.9-r0"
         ),
         "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+        "io.cronometer.runtime.curl-packages": "curl=8.14.1-r4,libcurl=8.14.1-r4",
     },
 }
 require_runtime_contract("POSTGRES_IMAGE", copy.deepcopy(postgres_config))

@@ -31,8 +31,8 @@ const containerSupplyChainDocs = readFileSync(
 );
 
 const CADDY_GRPC_PATCH_VERSION = "v1.83.2";
-const CADDY_X_NET_PATCH_VERSION = "v0.58.0";
-const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.55.0,golang.org/x/net=${CADDY_X_NET_PATCH_VERSION},golang.org/x/text=v0.41.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
+const CADDY_X_NET_PATCH_VERSION = "v0.60.0";
+const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.57.0,golang.org/x/net=${CADDY_X_NET_PATCH_VERSION},golang.org/x/text=v0.42.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
 const CADDY_GRPC_REQUIRE_LINE = `      -require=google.golang.org/grpc@${CADDY_GRPC_PATCH_VERSION}; \\`;
 const CADDY_GRPC_BINARY_ASSERTION_LINE = `    go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+${CADDY_GRPC_PATCH_VERSION}'; \\`;
 const CADDY_X_NET_REQUIRE_LINE = `      -require=golang.org/x/net@${CADDY_X_NET_PATCH_VERSION} \\`;
@@ -40,7 +40,7 @@ const CADDY_X_NET_BINARY_ASSERTION_LINE = `    go version -m /out/caddy | grep -
 const CADDY_RUNTIME_LABEL_LINE = `      io.cronometer.upstream.vulnerability-patches="${CADDY_VULNERABILITY_PATCH_GRAPH}"`;
 const CADDY_WORKFLOW_LABEL_LINE = `                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "${CADDY_VULNERABILITY_PATCH_GRAPH}" and`;
 const CADDY_ADMISSION_LABEL_LINE = `            "io.cronometer.upstream.vulnerability-patches": "${CADDY_VULNERABILITY_PATCH_GRAPH}",`;
-const CADDY_X_NET_DOCUMENTATION_LINE = `\`golang.org/x/net\` ${CADDY_X_NET_PATCH_VERSION}, \`golang.org/x/text\` v0.41.0, and`;
+const CADDY_X_NET_DOCUMENTATION_LINE = `\`golang.org/x/net\` ${CADDY_X_NET_PATCH_VERSION}, \`golang.org/x/text\` v0.42.0, and`;
 const CADDY_DOCUMENTATION_LINE = `\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_VERSION}; final image labels disclose that patched`;
 const POSTGRES_LIBUUID_VERSION = "2.42.3-r1";
 const POSTGRES_LIBUUID_TRIGGER =
