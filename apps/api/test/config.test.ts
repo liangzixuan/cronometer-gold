@@ -193,7 +193,10 @@ describe("loadApiDependencyConfig", () => {
         SEARCH_DB_MAX_CONCURRENCY: "2",
         SEARCH_DB_MAX_QUEUE: "3",
       }),
-    ).toMatchObject({ searchDatabaseMaxConcurrency: 2, searchDatabaseMaxQueue: 3 });
+    ).toMatchObject({
+      searchDatabaseMaxConcurrency: 2,
+      searchDatabaseMaxQueue: 3,
+    });
 
     expect(() =>
       loadApiDependencyConfig({
@@ -402,7 +405,9 @@ describe("loadApiDependencyConfig", () => {
     expect(() => loadApiDependencyConfig(production)).toThrowError(
       expect.objectContaining({
         issues: expect.arrayContaining([
-          expect.objectContaining({ field: "EXPORT_ARTIFACT_READ_SPOOL_PROTECTION" }),
+          expect.objectContaining({
+            field: "EXPORT_ARTIFACT_READ_SPOOL_PROTECTION",
+          }),
         ]),
       }),
     );
@@ -443,6 +448,40 @@ describe("hosted development HTTPS capture configuration", () => {
     });
   });
 
+  it("selects the Appwrite staging origin for both captured auth flows", () => {
+    const publicOrigin = "https://staging.nourishing.app";
+    const config = loadApiDependencyConfig({
+      ...environment,
+      DATABASE_RESTORE_EPOCH: "staging-restore-epoch-0123456789abcdef",
+      DATABASE_SSL_MODE: "verify-full",
+      EMAIL_VERIFICATION_PUBLIC_ORIGIN: publicOrigin,
+      PASSWORD_RECOVERY_PUBLIC_ORIGIN: publicOrigin,
+    });
+    expect(config.requireDatabaseRestoreAttestation).toBe(true);
+    expect(config.emailVerification).toMatchObject({
+      transport: "https-capture",
+      publicOrigin,
+      passwordRecoveryPublicOrigin: publicOrigin,
+    });
+  });
+
+  it.each([
+    { DATABASE_RESTORE_EPOCH: undefined, DATABASE_SSL_MODE: "verify-full" },
+    {
+      DATABASE_RESTORE_EPOCH: "staging-restore-epoch-0123456789abcdef",
+      DATABASE_SSL_MODE: "disable",
+    },
+  ])("requires restore admission and verified database TLS for staging %#", (database) => {
+    expect(() =>
+      loadApiDependencyConfig({
+        ...environment,
+        ...database,
+        EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://staging.nourishing.app",
+        PASSWORD_RECOVERY_PUBLIC_ORIGIN: "https://staging.nourishing.app",
+      }),
+    ).toThrow(ConfigValidationError);
+  });
+
   it.each([
     "NOURISHING_API_PROFILE",
     "NODE_ENV",
@@ -471,7 +510,9 @@ describe("hosted development HTTPS capture configuration", () => {
     { EMAIL_CAPTURE_URL: "http://mail-capture:8025/api/v1/send" },
     { EMAIL_CAPTURE_URL: "https://mail-capture:8025/api/v1/send/" },
     { EMAIL_CAPTURE_URL: "https://other.invalid:8025/api/v1/send" },
-    { EMAIL_CAPTURE_URL: "https://mail-capture:8025/api/v1/send?secret=hidden" },
+    {
+      EMAIL_CAPTURE_URL: "https://mail-capture:8025/api/v1/send?secret=hidden",
+    },
     { EMAIL_CAPTURE_CA: "" },
     { EMAIL_CAPTURE_CA: "private-ca-value-must-not-leak" },
     { EMAIL_CAPTURE_USERNAME: "send:read" },
@@ -479,11 +520,18 @@ describe("hosted development HTTPS capture configuration", () => {
     { EMAIL_CAPTURE_PASSWORD: "" },
     { EMAIL_CAPTURE_PASSWORD: "short" },
     { EMAIL_CAPTURE_PASSWORD: "x".repeat(257) },
-    { EMAIL_CAPTURE_FROM: "no-reply@example.invalid\r\nBcc: other@example.invalid" },
+    {
+      EMAIL_CAPTURE_FROM: "no-reply@example.invalid\r\nBcc: other@example.invalid",
+    },
     { EMAIL_CAPTURE_TIMEOUT_MS: "99" },
     { EMAIL_CAPTURE_TIMEOUT_MS: "10001" },
     { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://localhost:3443/" },
     { PASSWORD_RECOVERY_PUBLIC_ORIGIN: "https://other.invalid" },
+    { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://staging.nourishing.app" },
+    {
+      EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://nourishing.app",
+      PASSWORD_RECOVERY_PUBLIC_ORIGIN: "https://nourishing.app",
+    },
     { SMTP_HOST: "127.0.0.1" },
     { SMTP_PORT: "1025" },
     { SMTP_FROM: "no-reply@example.invalid" },
@@ -497,7 +545,10 @@ describe("hosted development HTTPS capture configuration", () => {
   it("reports only configuration field names, excluding private inputs", () => {
     const privateValue = "private-ca-value-must-not-leak";
     try {
-      loadApiDependencyConfig({ ...environment, EMAIL_CAPTURE_CA: privateValue });
+      loadApiDependencyConfig({
+        ...environment,
+        EMAIL_CAPTURE_CA: privateValue,
+      });
       throw new Error("expected rejection");
     } catch (error) {
       expect(error).toBeInstanceOf(ConfigValidationError);

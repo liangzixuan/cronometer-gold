@@ -126,6 +126,24 @@ another approval solely for a red security check. Prioritize functionality, host
 integration and the daily workflow. Separate deployment, spending, credential,
 destructive-action and native-release permissions remain in force.
 
+### Governing hosted-delivery outcome
+
+The immediate outcome is one working Appwrite URL connected to the Azure backend.
+Verify sign-in, food search or creation, logging and diary persistence after
+browser reload and API/worker restart, with the user's PC disconnected. Complete
+the missing host installation, service lifecycle, public authenticated HTTPS
+access and Appwrite Site configuration as one delivery path. The finite
+development controller is a qualification tool: its automatic shutdown and
+single-administrator client window do not provide this hosted service lifecycle.
+
+Defer unrelated features and additional generic controllers, evidence frameworks
+or diagnostics unless a concrete failure on this path requires the change. Batch
+related source changes and use the focused validation loop before full integration
+checks. Before the next necessary operational request, prepare the complete
+resource lifecycle, existing-credit/free-allowance budget, duration, custody,
+recovery/cleanup and actual journey acceptance. Existing deployment, data, access
+and zero-out-of-pocket controls remain; consumed approvals grant no new scope.
+
 ### Execution queue
 
 Use [current readiness](../quality/current-readiness.md) for dated source,
@@ -135,7 +153,7 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| High-priority October workstream | Windows frontend + hosted isolated development backend | A qualified, budget-bounded development backend and supported Windows Next/Expo profile complete the daily journeys with Ubuntu and Docker stopped. Prove environment isolation, authenticated HTTPS behavior and operation independent of the PC; follow the phased workstream below. |
+| Governing delivery | First usable hosted Nourishing on Appwrite and Azure | One working Appwrite URL completes sign-in, food logging and persisted diary retrieval after reload/backend restart, independent of the PC. Finish installation, service lifetime, access, Site configuration and the approved deployment together; prove the actual journey. |
 | Product acceptance target | Reproducible daily walkthrough and focused simplification | Real populated Dashboard/Diary/Add Food/Report flow, shared lifecycle checks, independent feature loading, reviewed Bootstrap Studio design handoff and repeatable setup. Preserve real persistence and existing integrity boundaries. |
 | Bounded approved maintenance | Expo compatibility refresh | Respect the approved release-age boundary, frozen install and applicable checks. This does not reopen catalogue qualification. |
 | Authorized operational work | Doppler secrets migration | Prioritize the hosted-development consumer profile below, then scoped CI/staging consumers, with names-only inventory, restricted access, verified injection/sync and tested rollback. Preserve the existing local development configuration; production cutover retains its release requirements. See the migration sequence below. |

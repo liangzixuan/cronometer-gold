@@ -26,6 +26,7 @@ const ca =
 const options: HostedMailpitEmailDeliveryOptions = {
   profile: HOSTED_DEVELOPMENT_PROFILE,
   nodeEnv: "development" as const,
+  publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
   captureUrl: "https://mail-capture:8025/api/v1/send",
   ca,
   username: "capture-send",
@@ -171,66 +172,69 @@ describe("hosted-development HTTPS Mailpit delivery", () => {
     }
   });
 
-  it("captures actual auth-generated verification and recovery fragments", async () => {
-    const delivery = new HostedMailpitEmailDelivery(options);
-    const repository: AuthRepository = {
-      confirmEmailVerificationToken: vi.fn(async () => undefined),
-      confirmPasswordRecoveryToken: vi.fn(async () => undefined),
-      createReauthenticationProof: vi.fn(async () => undefined),
-      register: vi.fn(async () => account),
-      findPasswordCredential: vi.fn(async () => null),
-      createSession: vi.fn(async () => undefined),
-      findActiveSession: vi.fn(async () => account),
-      findPendingErasureRecoverySession: vi.fn(async () => null),
-      issueEmailVerificationToken: vi.fn(async (input) => {
-        await input.deliver();
-        return "issued" as const;
-      }),
-      issuePasswordRecoveryToken: vi.fn(async (input) => {
-        await input.deliver();
-        return "issued" as const;
-      }),
-      revokeSession: vi.fn(async () => true),
-    };
-    const service = new SecureAuthService({
-      repository,
-      emailVerificationDelivery: delivery,
-      passwordRecoveryDelivery: delivery,
-      emailVerificationPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
-      passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
-      clock: () => new Date("2030-01-01T00:00:00Z"),
-    });
-    const syntheticAccount = {
-      ...account,
-      user: { ...account.user, email: verification.recipient, emailVerified: false },
-    };
-    await expect(service.requestEmailVerification(syntheticAccount)).resolves.toEqual({
-      data: { status: "accepted" },
-    });
-    await expect(service.requestPasswordRecovery(verification.recipient)).resolves.toEqual({
-      data: { status: "accepted" },
-    });
-    const issued = [
-      vi.mocked(repository.issueEmailVerificationToken).mock.calls[0]?.[0],
-      vi.mocked(repository.issuePasswordRecoveryToken).mock.calls[0]?.[0],
-    ];
-    for (const [index, path] of ["/verify-email", "/reset-password"].entries()) {
-      const payload = JSON.parse(exchanges[index]?.payload?.toString("utf8") ?? "");
-      const link = payload.Text.split("\r\n").find((line: string) =>
-        line.startsWith(HOSTED_DEVELOPMENT_WEB_ORIGIN),
-      );
-      const url = new URL(link);
-      expect(url.origin).toBe(HOSTED_DEVELOPMENT_WEB_ORIGIN);
-      expect(url.pathname).toBe(path);
-      expect(url.search).toBe("");
-      expect(url.hash).toMatch(/^#token=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u);
-      const generatedToken = url.hash.slice(7);
-      expect(issued[index]?.tokenHash).toBe(
-        createHash("sha256").update(generatedToken).digest("hex"),
-      );
-      expect(JSON.stringify(issued[index])).not.toContain(generatedToken);
-    }
-  });
+  it.each([HOSTED_DEVELOPMENT_WEB_ORIGIN, "https://staging.nourishing.app"] as const)(
+    "captures actual auth-generated verification and recovery fragments for %s",
+    async (publicOrigin) => {
+      const delivery = new HostedMailpitEmailDelivery({ ...options, publicOrigin });
+      const repository: AuthRepository = {
+        confirmEmailVerificationToken: vi.fn(async () => undefined),
+        confirmPasswordRecoveryToken: vi.fn(async () => undefined),
+        createReauthenticationProof: vi.fn(async () => undefined),
+        register: vi.fn(async () => account),
+        findPasswordCredential: vi.fn(async () => null),
+        createSession: vi.fn(async () => undefined),
+        findActiveSession: vi.fn(async () => account),
+        findPendingErasureRecoverySession: vi.fn(async () => null),
+        issueEmailVerificationToken: vi.fn(async (input) => {
+          await input.deliver();
+          return "issued" as const;
+        }),
+        issuePasswordRecoveryToken: vi.fn(async (input) => {
+          await input.deliver();
+          return "issued" as const;
+        }),
+        revokeSession: vi.fn(async () => true),
+      };
+      const service = new SecureAuthService({
+        repository,
+        emailVerificationDelivery: delivery,
+        passwordRecoveryDelivery: delivery,
+        emailVerificationPublicOrigin: publicOrigin,
+        passwordRecoveryPublicOrigin: publicOrigin,
+        clock: () => new Date("2030-01-01T00:00:00Z"),
+      });
+      const syntheticAccount = {
+        ...account,
+        user: { ...account.user, email: verification.recipient, emailVerified: false },
+      };
+      await expect(service.requestEmailVerification(syntheticAccount)).resolves.toEqual({
+        data: { status: "accepted" },
+      });
+      await expect(service.requestPasswordRecovery(verification.recipient)).resolves.toEqual({
+        data: { status: "accepted" },
+      });
+      const issued = [
+        vi.mocked(repository.issueEmailVerificationToken).mock.calls[0]?.[0],
+        vi.mocked(repository.issuePasswordRecoveryToken).mock.calls[0]?.[0],
+      ];
+      for (const [index, path] of ["/verify-email", "/reset-password"].entries()) {
+        const payload = JSON.parse(exchanges[index]?.payload?.toString("utf8") ?? "");
+        const link = payload.Text.split("\r\n").find((line: string) =>
+          line.startsWith(publicOrigin),
+        );
+        const url = new URL(link);
+        expect(url.origin).toBe(publicOrigin);
+        expect(url.pathname).toBe(path);
+        expect(url.search).toBe("");
+        expect(url.hash).toMatch(/^#token=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u);
+        const generatedToken = url.hash.slice(7);
+        expect(issued[index]?.tokenHash).toBe(
+          createHash("sha256").update(generatedToken).digest("hex"),
+        );
+        expect(JSON.stringify(issued[index])).not.toContain(generatedToken);
+      }
+    },
+  );
 
   it.each([
     ' \n { "ID" : "AbCdEf0123456789GhIjKl" } \r\n ',
@@ -326,6 +330,20 @@ describe("hosted-development HTTPS Mailpit delivery", () => {
     expect(mocks.request).not.toHaveBeenCalled();
   });
 
+  it("rejects a link for another allowed site before any capture request", async () => {
+    const delivery = new HostedMailpitEmailDelivery({
+      ...options,
+      publicOrigin: "https://staging.nourishing.app",
+    });
+    await expect(delivery.sendVerificationEmail(verification)).rejects.toBeInstanceOf(
+      EmailDeliveryConfigurationError,
+    );
+    await expect(delivery.sendPasswordRecoveryEmail(recovery)).rejects.toBeInstanceOf(
+      EmailDeliveryConfigurationError,
+    );
+    expect(mocks.request).not.toHaveBeenCalled();
+  });
+
   it("rejects an invalid recovery path before any request", async () => {
     await expect(
       new HostedMailpitEmailDelivery(options).sendPasswordRecoveryEmail({
@@ -339,6 +357,8 @@ describe("hosted-development HTTPS Mailpit delivery", () => {
   it.each([
     { nodeEnv: "production" as const },
     { nodeEnv: "test" as const },
+    { publicOrigin: "https://nourishing.app" as typeof options.publicOrigin },
+    { publicOrigin: "https://staging.nourishing.app/" as typeof options.publicOrigin },
     { captureUrl: "https://other.invalid/api/v1/send" },
     { ca: "private-invalid-ca" },
     { username: "ui:read" },

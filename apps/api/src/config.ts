@@ -304,12 +304,18 @@ export function loadApiDependencyConfig(
       "EXPORT_ARTIFACT_WRITE_SESSION_TOKEN",
     ] as const) {
       if (environment[field] !== undefined)
-        issues.push({ field, message: "Mixed storage credentials are not permitted" });
+        issues.push({
+          field,
+          message: "Mixed storage credentials are not permitted",
+        });
     }
   } else {
     for (const field of azureFields)
       if (environment[field] !== undefined)
-        issues.push({ field, message: "Azure storage must be explicitly selected" });
+        issues.push({
+          field,
+          message: "Azure storage must be explicitly selected",
+        });
   }
   if (environment.EXPORT_ARTIFACT_AZURE_DELETE_OBSERVER_SAS !== undefined)
     issues.push({
@@ -351,17 +357,24 @@ export function loadApiDependencyConfig(
       "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
     ]) {
       if (!Object.hasOwn(environment, field) || environment[field] === undefined) {
-        issues.push({ field, message: "HTTPS capture requires explicit owned configuration" });
+        issues.push({
+          field,
+          message: "HTTPS capture requires explicit owned configuration",
+        });
       }
     }
     for (const field of ["SMTP_HOST", "SMTP_PORT", "SMTP_FROM", "SMTP_TIMEOUT_MS"]) {
       if (environment[field] !== undefined) {
-        issues.push({ field, message: "Mixed SMTP and HTTPS capture configuration is forbidden" });
+        issues.push({
+          field,
+          message: "Mixed SMTP and HTTPS capture configuration is forbidden",
+        });
       }
     }
     const options = {
       profile: result.data.NOURISHING_API_PROFILE,
       nodeEnv: result.data.NODE_ENV,
+      publicOrigin: result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN,
       captureUrl: result.data.EMAIL_CAPTURE_URL,
       ca: result.data.EMAIL_CAPTURE_CA,
       username: result.data.EMAIL_CAPTURE_USERNAME,
@@ -375,8 +388,7 @@ export function loadApiDependencyConfig(
       }
       validateHostedMailpitEmailDeliveryOptions(options as HostedMailpitEmailDeliveryOptions);
       if (
-        result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN !== HOSTED_DEVELOPMENT_WEB_ORIGIN ||
-        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN !== HOSTED_DEVELOPMENT_WEB_ORIGIN
+        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN !== result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN
       ) {
         throw new Error("Exact hosted origins are required");
       }
@@ -384,11 +396,13 @@ export function loadApiDependencyConfig(
         ...(options as HostedMailpitEmailDeliveryOptions),
         nodeEnv: "development",
         transport: "https-capture",
-        publicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
-        passwordRecoveryPublicOrigin: HOSTED_DEVELOPMENT_WEB_ORIGIN,
+        passwordRecoveryPublicOrigin: (options as HostedMailpitEmailDeliveryOptions).publicOrigin,
       };
     } catch {
-      issues.push({ field: "EMAIL_CAPTURE", message: "Invalid hosted development HTTPS capture" });
+      issues.push({
+        field: "EMAIL_CAPTURE",
+        message: "Invalid hosted development HTTPS capture",
+      });
     }
   } else {
     const emailEnvironmentFields = [
@@ -413,16 +427,28 @@ export function loadApiDependencyConfig(
       emailEnvironmentFields.some((field) => environment[field] !== undefined);
     if (emailEnvironmentConfigured) {
       if (result.data.NODE_ENV === "production") {
-        issues.push({ field: "SMTP_HOST", message: "Production email provider is not approved" });
+        issues.push({
+          field: "SMTP_HOST",
+          message: "Production email provider is not approved",
+        });
       } else {
         if (result.data.SMTP_HOST !== "127.0.0.1") {
-          issues.push({ field: "SMTP_HOST", message: "Exact loopback Mailpit host is required" });
+          issues.push({
+            field: "SMTP_HOST",
+            message: "Exact loopback Mailpit host is required",
+          });
         }
         if (result.data.SMTP_PORT !== 1025) {
-          issues.push({ field: "SMTP_PORT", message: "Exact loopback Mailpit port is required" });
+          issues.push({
+            field: "SMTP_PORT",
+            message: "Exact loopback Mailpit port is required",
+          });
         }
         if (!result.data.SMTP_FROM || !safeMailFrom(result.data.SMTP_FROM)) {
-          issues.push({ field: "SMTP_FROM", message: "A safe local sender is required" });
+          issues.push({
+            field: "SMTP_FROM",
+            message: "A safe local sender is required",
+          });
         }
         const defaultOrigin = profile === undefined ? "http://127.0.0.1:3000" : "";
         const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? defaultOrigin;
@@ -468,23 +494,40 @@ export function loadApiDependencyConfig(
     }
   }
   if (cursorSecret === undefined) {
-    issues.push({ field: "SEARCH_CURSOR_SECRET", message: "Required in production" });
+    issues.push({
+      field: "SEARCH_CURSOR_SECRET",
+      message: "Required in production",
+    });
   }
-  if (result.data.NODE_ENV === "production") {
+  const requireDatabaseRestoreAttestation =
+    result.data.NODE_ENV === "production" ||
+    emailVerification?.publicOrigin === "https://staging.nourishing.app";
+  if (requireDatabaseRestoreAttestation) {
     if (!result.data.DATABASE_RESTORE_EPOCH) {
-      issues.push({ field: "DATABASE_RESTORE_EPOCH", message: "Required in production" });
+      issues.push({
+        field: "DATABASE_RESTORE_EPOCH",
+        message: "Required for hosted database admission",
+      });
     }
     if (result.data.DATABASE_SSL_MODE !== "verify-full") {
       issues.push({
         field: "DATABASE_SSL_MODE",
-        message: "verify-full is required in production",
+        message: "verify-full is required for hosted database admission",
       });
     }
+  }
+  if (result.data.NODE_ENV === "production") {
     if (!result.data.MEILI_SEARCH_KEY) {
-      issues.push({ field: "MEILI_SEARCH_KEY", message: "Required in production" });
+      issues.push({
+        field: "MEILI_SEARCH_KEY",
+        message: "Required in production",
+      });
     }
     if (new URL(result.data.MEILI_URL).protocol !== "https:") {
-      issues.push({ field: "MEILI_URL", message: "HTTPS is required in production" });
+      issues.push({
+        field: "MEILI_URL",
+        message: "HTTPS is required in production",
+      });
     }
     if (result.data.REFERENCE_TARGETS_ENABLED) {
       issues.push({
@@ -493,7 +536,10 @@ export function loadApiDependencyConfig(
       });
     }
     if (!result.data.RETENTION_FEATURES_ENABLED) {
-      issues.push({ field: "RETENTION_FEATURES_ENABLED", message: "Must be explicitly enabled" });
+      issues.push({
+        field: "RETENTION_FEATURES_ENABLED",
+        message: "Must be explicitly enabled",
+      });
     }
   }
   let retention: ApiRetentionDependencyConfig | null = null;
@@ -550,7 +596,10 @@ export function loadApiDependencyConfig(
       });
     }
     if (!safeAbsoluteDirectory(result.data.EXPORT_ARTIFACT_DIRECTORY)) {
-      issues.push({ field: "EXPORT_ARTIFACT_DIRECTORY", message: "Safe absolute path required" });
+      issues.push({
+        field: "EXPORT_ARTIFACT_DIRECTORY",
+        message: "Safe absolute path required",
+      });
     }
     if (
       result.data.EXPORT_ARTIFACT_READ_MAX_ARTIFACT_BYTES >
@@ -579,9 +628,15 @@ export function loadApiDependencyConfig(
       }
       if (result.data.EXPORT_ARTIFACT_STORE !== "azure") {
         if (!result.data.EXPORT_ARTIFACT_ENDPOINT) {
-          issues.push({ field: "EXPORT_ARTIFACT_ENDPOINT", message: "Required in production" });
+          issues.push({
+            field: "EXPORT_ARTIFACT_ENDPOINT",
+            message: "Required in production",
+          });
         } else if (new URL(result.data.EXPORT_ARTIFACT_ENDPOINT).protocol !== "https:") {
-          issues.push({ field: "EXPORT_ARTIFACT_ENDPOINT", message: "HTTPS is required" });
+          issues.push({
+            field: "EXPORT_ARTIFACT_ENDPOINT",
+            message: "HTTPS is required",
+          });
         }
         for (const field of [
           "EXPORT_ARTIFACT_BUCKET",
@@ -623,7 +678,9 @@ export function loadApiDependencyConfig(
         artifactRequestTimeoutMs: result.data.EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS,
         artifactStore: result.data.EXPORT_ARTIFACT_STORE,
         ...(result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL
-          ? { artifactAzureContainerUrl: result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL }
+          ? {
+              artifactAzureContainerUrl: result.data.EXPORT_ARTIFACT_AZURE_CONTAINER_URL,
+            }
           : {}),
         ...(result.data.EXPORT_ARTIFACT_AZURE_PREFIX
           ? { artifactAzurePrefix: result.data.EXPORT_ARTIFACT_AZURE_PREFIX }
@@ -641,13 +698,19 @@ export function loadApiDependencyConfig(
           ? { artifactEndpoint: result.data.EXPORT_ARTIFACT_ENDPOINT }
           : {}),
         ...(result.data.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID
-          ? { artifactReadAccessKeyId: result.data.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID }
+          ? {
+              artifactReadAccessKeyId: result.data.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID,
+            }
           : {}),
         ...(result.data.EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY
-          ? { artifactReadSecretAccessKey: result.data.EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY }
+          ? {
+              artifactReadSecretAccessKey: result.data.EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY,
+            }
           : {}),
         ...(result.data.EXPORT_ARTIFACT_READ_SESSION_TOKEN
-          ? { artifactReadSessionToken: result.data.EXPORT_ARTIFACT_READ_SESSION_TOKEN }
+          ? {
+              artifactReadSessionToken: result.data.EXPORT_ARTIFACT_READ_SESSION_TOKEN,
+            }
           : {}),
         ...(result.data.EXPORT_ARTIFACT_REGION
           ? { artifactRegion: result.data.EXPORT_ARTIFACT_REGION }
@@ -669,7 +732,7 @@ export function loadApiDependencyConfig(
       : { meiliSearchKey: result.data.MEILI_SEARCH_KEY }),
     meiliUrl: result.data.MEILI_URL,
     referenceTargetsEnabled: result.data.REFERENCE_TARGETS_ENABLED,
-    requireDatabaseRestoreAttestation: result.data.NODE_ENV === "production",
+    requireDatabaseRestoreAttestation,
     searchDatabaseMaxConcurrency: result.data.SEARCH_DB_MAX_CONCURRENCY,
     searchDatabaseMaxQueue: result.data.SEARCH_DB_MAX_QUEUE,
     searchRequestTimeoutMs: result.data.SEARCH_REQUEST_TIMEOUT_MS,

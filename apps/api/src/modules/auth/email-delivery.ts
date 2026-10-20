@@ -125,9 +125,15 @@ export class LocalMailpitEmailDelivery
   }
 }
 
+export const HOSTED_MAILPIT_WEB_ORIGINS = [
+  HOSTED_DEVELOPMENT_WEB_ORIGIN,
+  "https://staging.nourishing.app",
+] as const;
+
 export interface HostedMailpitEmailDeliveryOptions {
   readonly profile: typeof HOSTED_DEVELOPMENT_PROFILE;
   readonly nodeEnv: "development" | "test" | "production";
+  readonly publicOrigin: (typeof HOSTED_MAILPIT_WEB_ORIGINS)[number];
   readonly captureUrl: string;
   readonly ca: string;
   readonly username: string;
@@ -144,11 +150,20 @@ export function validateHostedMailpitEmailDeliveryOptions(
     throw new EmailDeliveryConfigurationError("Production email provider is not approved");
   }
   if (
-    !["profile", "nodeEnv", "captureUrl", "ca", "username", "password", "from", "timeoutMs"].every(
-      (field) => Object.hasOwn(options, field),
-    ) ||
+    ![
+      "profile",
+      "nodeEnv",
+      "publicOrigin",
+      "captureUrl",
+      "ca",
+      "username",
+      "password",
+      "from",
+      "timeoutMs",
+    ].every((field) => Object.hasOwn(options, field)) ||
     options.profile !== HOSTED_DEVELOPMENT_PROFILE ||
     options.nodeEnv !== "development" ||
+    !HOSTED_MAILPIT_WEB_ORIGINS.some((origin) => origin === options.publicOrigin) ||
     options.captureUrl !== "https://mail-capture:8025/api/v1/send" ||
     !/^[A-Za-z0-9._-]{1,128}$/u.test(options.username) ||
     !/^[A-Za-z0-9_-]{32,256}$/u.test(options.password)
@@ -177,6 +192,7 @@ export function validateHostedMailpitEmailDeliveryOptions(
 export class HostedMailpitEmailDelivery
   implements EmailVerificationDelivery, PasswordRecoveryDelivery
 {
+  readonly #publicOrigin: string;
   readonly #ca: string;
   readonly #authorization: string;
   readonly #from: string;
@@ -184,6 +200,7 @@ export class HostedMailpitEmailDelivery
 
   constructor(options: HostedMailpitEmailDeliveryOptions) {
     validateHostedMailpitEmailDeliveryOptions(options);
+    this.#publicOrigin = options.publicOrigin;
     this.#ca = options.ca;
     this.#authorization = `Basic ${Buffer.from(`${options.username}:${options.password}`, "utf8").toString("base64")}`;
     this.#from = envelopeAddress(options.from);
@@ -202,6 +219,7 @@ export class HostedMailpitEmailDelivery
         input.expiresAt,
         "verification",
         HOSTED_DEVELOPMENT_PROFILE,
+        this.#publicOrigin,
       ),
     );
   }
@@ -218,6 +236,7 @@ export class HostedMailpitEmailDelivery
         input.expiresAt,
         "recovery",
         HOSTED_DEVELOPMENT_PROFILE,
+        this.#publicOrigin,
       ),
     );
   }
@@ -348,6 +367,7 @@ function prepareAuthMail(
   expiresAt: Date,
   kind: "verification" | "recovery",
   profile?: typeof HOSTED_DEVELOPMENT_PROFILE,
+  publicOrigin: string = HOSTED_DEVELOPMENT_WEB_ORIGIN,
 ): AuthMail {
   assertEmail(recipient, "recipient");
   if (!Number.isFinite(expiresAt.getTime())) {
@@ -363,7 +383,7 @@ function prepareAuthMail(
   }
   const validOrigin =
     profile === HOSTED_DEVELOPMENT_PROFILE
-      ? url.origin === HOSTED_DEVELOPMENT_WEB_ORIGIN && url.href === link
+      ? url.origin === publicOrigin && url.href === link
       : url.protocol === "http:" && url.hostname === "127.0.0.1";
   if (
     !validOrigin ||

@@ -55,9 +55,28 @@ for committed-source packing, coverage and artifact limits.
 | --- | --- | --- |
 | Preflight | Source identity, versions, required tools and Docker/Compose availability | Prerequisites are usable; failures are classified before running the suite |
 | Development | Focused behavioral regressions, affected types and formatting | Each fix has relevant passing evidence, and independent review is integrated |
-| Final source | Canonical `pnpm check`, `pnpm build`, and applicable dependency/license/static checks | Behavioral, type, build and non-security checks pass; security findings are recorded without blocking source delivery; cache reuse and opt-in skips are explicit |
+| Final source | Checks proportionate to affected inputs; canonical `pnpm check` and `pnpm build` at meaningful integration milestones | Relevant behavioral, type, build and non-security evidence passes; unchanged-input reuse, partial coverage, cache and skips are explicit; security findings stay visible |
 | Local services | Required migration, API, restore, scoped search and privacy runbook steps | Executed integration counts and exact readiness/loopback evidence are recorded |
 | Delivery | Review final diff, staged contents, modes and secrets; commit/push under standing authorization; inspect automatic checks | Local/tracking/live-remote relationship and each workflow's observed state are recorded |
+
+Use `pnpm check:quick` and explicitly named affected root test files during
+implementation. The quick profile runs formatting, manifests, boundaries, mobile
+configuration, types and workspace package tests. It does not run the complete
+root scripts suite and must be recorded as partial validation.
+
+`pnpm test:scripts` retains the API/worker prerequisite build and the complete root
+Node test command with concurrency two. Canonical `pnpm check` includes it exactly
+once, in addition to every quick-profile stage. Run the full canonical check and
+build when affected inputs or a meaningful integration milestone require them,
+and retain the complete CI gates. Do not run the entire suite/build for a
+workflow-only, documentation-only or trivial reversible change merely because a
+checklist says so. Do not repeat the suite after each function or a status-only edit. Run selected regressions while resolving a failure, then integrate the related changes as one batch. Reuse earlier evidence
+only for unchanged inputs and record its source, environment, cache and skip
+limits. A quick pass never establishes a canonical pass or hosted acceptance.
+
+Keep the connected runtime suite uncached until its real tool, filesystem,
+platform and clock inputs have a proven deterministic cache boundary. Do not
+increase its in-file concurrency: the connected fixtures share hooks and state.
 
 `pnpm check` includes Compose policy tests: prove the genuine Docker and Compose
 CLI versions first. These tests parse configuration without contacting a daemon;
@@ -111,7 +130,7 @@ executed. If scope is unclear, use the broader required gate.
 
 | Changed input | Evidence to reconsider |
 | --- | --- |
-| Dependency manifest, lockfile, toolchain, install configuration | Strict frozen install, dependency checks, audit/license and affected builds/tests |
+| Dependency entries, lockfile, toolchain, install configuration | Strict frozen install, dependency checks, audit/license and affected builds/tests |
 | Client state, BFF, identity or navigation | Client behavior/type/build checks and relevant cross-owner, stale-response and integration paths |
 | API, schema, database authority, retained data or privacy | Database/API integrations, migration/readiness, restore, export/erasure and relevant clients |
 | Runtime, Compose, infrastructure, deployment policy | Boundary/static contracts, affected service/restore evidence and supply-chain gates |
