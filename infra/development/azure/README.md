@@ -4,6 +4,10 @@ This separate Terraform root describes one disposable, synthetic-only host in Ca
 
 The pinned Standard_B4ps_v2 has four CPUs and 16 GiB RAM. Its reported TrustedLaunchDisabled capability requires secure boot and vTPM to remain disabled. Ubuntu is pinned to `Canonical:ubuntu-24_04-lts:server-arm64:24.04.202609040`; there is no region, size or image fallback. Password login and VM extensions are disabled. Both disks are 64-GiB StandardSSD_LRS. This root has no preservation locks or automatic start.
 
+For the separately authorized software and encrypted-volume installation, use
+[the installed staging path](hosted/README.md). The empty-host Terraform root
+still installs no application and does not grant installation or deployment authority.
+
 ## Local validation
 
 Use qualified Terraform 1.5.7 and the exact AzureRM 4.79.0 lock. Offline validation uses a private Terraform data directory and the already authenticated local provider mirror. No Azure credentials are needed:

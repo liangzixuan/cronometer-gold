@@ -1,0 +1,10 @@
+[Unit]
+Description=Existing unlocked Nourishing encrypted data volume
+Before=docker.service nourishing-hosted.service
+
+[Mount]
+What=/dev/mapper/nourishing-data
+Where=/var/lib/nourishing
+Type=ext4
+Options=nodev,nosuid
+TimeoutSec=30

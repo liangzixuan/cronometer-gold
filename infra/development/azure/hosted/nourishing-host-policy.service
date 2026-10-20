@@ -1,0 +1,11 @@
+[Unit]
+Description=Reviewed Nourishing host and container network policy
+Before=docker.service nourishing-hosted.service
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nft --file /etc/nourishing/network.nft
+RemainAfterExit=yes
+TimeoutStartSec=30
+UMask=0077

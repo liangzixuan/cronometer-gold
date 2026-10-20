@@ -1,0 +1,32 @@
+[Unit]
+Description=Nourishing installed staging backend
+Requires=docker.service nourishing-host-policy.service
+After=docker.service nourishing-host-policy.service network-online.target
+Wants=network-online.target
+BindsTo=var-lib-nourishing.mount
+After=var-lib-nourishing.mount
+StartLimitIntervalSec=600
+StartLimitBurst=3
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/nourishing/current
+Environment=COMPOSE_MENU=false
+UMask=0077
+ExecStartPre=/usr/bin/mountpoint -q /var/lib/nourishing
+ExecStartPre=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted config --quiet
+ExecStartPre=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted up --no-build --pull never --detach --wait --wait-timeout 180 postgres meilisearch internal-tls capture
+ExecStartPre=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted up --no-deps --no-build --pull never --force-recreate --exit-code-from migrate migrate
+ExecStartPre=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted up --no-deps --no-build --pull never --force-recreate --exit-code-from search-bootstrap search-bootstrap
+ExecStartPre=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted up --no-deps --no-build --pull never --force-recreate --exit-code-from restore-admission restore-admission
+ExecStartPre=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted up --no-deps --no-build --pull never --detach --wait --wait-timeout 180 api worker
+ExecStart=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted up --no-deps --no-build --pull never --abort-on-container-exit --timeout 610 api worker public-edge
+ExecStopPost=/usr/bin/docker compose --env-file /etc/nourishing/compose.env -f infra/development/azure/runtime/compose.yaml -f infra/development/azure/hosted/compose.yaml --profile dependencies --profile maintenance --profile application --profile hosted stop --timeout 610
+KillSignal=SIGINT
+TimeoutStartSec=30min
+TimeoutStopSec=660
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

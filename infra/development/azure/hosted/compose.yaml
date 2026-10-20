@@ -1,0 +1,92 @@
+# Installed staging lifecycle. Merge with ../runtime/compose.yaml, never compose.client.yaml.
+# Dependencies and maintenance complete before application startup. No daemon restart policy
+# can bypass this ordering; systemd owns the foreground Compose process.
+services:
+  migrate:
+    logging: !override { driver: journald }
+    depends_on:
+      postgres: { condition: service_healthy }
+  search-bootstrap:
+    logging: !override { driver: journald }
+    depends_on:
+      meilisearch: { condition: service_healthy }
+  restore-admission:
+    logging: !override { driver: journald }
+    extends:
+      file: ../runtime/compose.yaml
+      service: azure-canary
+    profiles: [hosted]
+    env_file: !override
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/runtime.env
+      - ${RUNTIME_ROOT:?A prepared root is required}/config/restore.env
+    command: [node, dist/erasure-ledger-restore.js]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    volumes:
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/erasure-replay-spool
+        target: /var/lib/nutrition-tracker/erasure-replay-spool
+        bind: { create_host_path: false }
+    networks:
+      backend: { ipv4_address: 172.28.0.8 }
+      azure_egress: { ipv4_address: 172.30.0.6 }
+  api:
+    logging: !override { driver: journald }
+    depends_on:
+      restore-admission: { condition: service_completed_successfully }
+      search-bootstrap: { condition: service_completed_successfully }
+      internal-tls: { condition: service_healthy }
+      capture: { condition: service_started }
+  worker:
+    logging: !override { driver: journald }
+    environment:
+      NODE_ENV: production
+    depends_on:
+      restore-admission: { condition: service_completed_successfully }
+      search-bootstrap: { condition: service_completed_successfully }
+      internal-tls: { condition: service_healthy }
+  public-edge:
+    logging: !override { driver: journald }
+    extends:
+      file: ../runtime/compose.yaml
+      service: internal-tls
+    profiles: [hosted]
+    mem_limit: 256m
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      API_FQDN: staging-api.nourishing.app
+      ACME_EMAIL: ${ACME_EMAIL:?An approved ACME contact is required}
+      DEPLOYMENT_READINESS_TOKEN: ${DEPLOYMENT_READINESS_TOKEN:?A scoped readiness token is required}
+      BETA_ALLOWED_CIDRS: ${ADMIN_IPV4_CIDR:?One administrator IPv4 /32 is required}
+    depends_on:
+      api: { condition: service_healthy }
+      worker: { condition: service_healthy }
+    ports:
+      - target: 443
+        published: "443"
+        host_ip: 0.0.0.0
+        protocol: tcp
+    volumes: !override
+      - type: bind
+        source: ${RUNTIME_SOURCE:?A reviewed source root is required}/infra/azure/files/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${RUNTIME_ROOT:?A prepared root is required}/data/caddy
+        target: /data
+        bind: { create_host_path: false }
+    tmpfs: !override
+      - /tmp:rw,noexec,nosuid,size=16m,uid=1000,gid=1000,mode=1770
+      - /config:rw,noexec,nosuid,size=16m,uid=1000,gid=1000,mode=0700
+    networks: !override
+      backend: { ipv4_address: 172.28.0.9 }
+      azure_egress: { ipv4_address: 172.30.0.5 }
+  postgres:
+    logging: !override { driver: journald }
+  meilisearch:
+    logging: !override { driver: journald }
+  internal-tls:
+    logging: !override { driver: journald }
+  capture:
+    logging: !override { driver: journald }
