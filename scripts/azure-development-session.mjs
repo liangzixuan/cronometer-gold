@@ -105,36 +105,84 @@ export async function runDevelopmentSession(
     return AbortSignal.any([signal, AbortSignal.timeout(milliseconds)]);
   };
   const command = async (label, tool, args, options = {}) => {
-    await conserve();
     const startedAt = new Date().toISOString();
-    const result = await execute(tool, args, {
-      signal: remaining(options.milliseconds ?? 60_000),
-      env: options.env ?? baseEnvironment,
-      directory: options.directory ?? dirname(inputPath),
-      limit: options.limit ?? MAX_JSON,
-      outputPath: options.outputPath,
-    });
-    await conserve();
-    if (label)
-      phases.push({
-        phase: label,
-        completed: true,
-        exitCode: 0,
-        startedAt,
-        endedAt: new Date().toISOString(),
-        executableSha256: tool.sha256,
-        arguments: args,
-        argumentsSha256: hash(JSON.stringify(args)),
-        stdoutBytes: result.bytes,
-        stdoutSha256: result.sha256,
+    const diagnostics = [];
+    let diagnosticBytes = 0;
+    let observedDiagnosticBytes = 0;
+    try {
+      await conserve();
+      const result = await execute(tool, args, {
+        signal: remaining(options.milliseconds ?? 60_000),
+        env: options.env ?? baseEnvironment,
+        directory: options.directory ?? dirname(inputPath),
+        limit: options.limit ?? MAX_JSON,
+        outputPath: options.outputPath,
+        onStderr: (chunk) => {
+          observedDiagnosticBytes += chunk.length;
+          const retained = Buffer.from(chunk.subarray(0, Math.max(0, 65536 - diagnosticBytes)));
+          diagnosticBytes += retained.length;
+          if (retained.length) diagnostics.push(retained);
+        },
       });
-    return result;
+      await conserve();
+      if (label)
+        phases.push({
+          phase: label,
+          completed: true,
+          exitCode: 0,
+          startedAt,
+          endedAt: new Date().toISOString(),
+          executableSha256: tool.sha256,
+          arguments: args,
+          argumentsSha256: hash(JSON.stringify(args)),
+          stdoutBytes: result.bytes,
+          stdoutSha256: result.sha256,
+        });
+      return result;
+    } catch (error) {
+      const diagnostic = Buffer.concat(diagnostics);
+      const failure = {
+        schema_version: 1,
+        completed: false,
+        mode,
+        source_sha256: source,
+        request_sha256: input.sha256,
+        phase: label ?? options.failurePhase,
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        native_exit_status: "unknown",
+        completed_phases: phases,
+        scope:
+          "Failed caller phase only; published artifacts or remote work may remain. No retry authority.",
+        stderr: {
+          retained_bytes: diagnostic.length,
+          observed_bytes_at_least: observedDiagnosticBytes,
+          sha256: hash(diagnostic),
+          base64: diagnostic.toString("base64"),
+          scope: "Bounded callback bytes only; missing or partial stderr remains possible.",
+        },
+      };
+      try {
+        await trustedPath(dirname(inputPath), { directory: true, privateLeaf: true });
+        await writeFile(`${inputPath}.failure.json`, `${JSON.stringify(failure)}\n`, {
+          flag: "wx",
+          mode: 0o600,
+        });
+      } catch (retentionError) {
+        throw new AggregateError(
+          [error, retentionError],
+          "Session failure evidence could not be retained",
+        );
+      }
+      throw error;
+    }
   };
   const pure = async (stage, extra = []) =>
     JSON.parse(
       (
         await command(undefined, PYTHON, ["-I", "-B", HELPER, stage, mode, inputPath, ...extra], {
           limit: MAX_JSON,
+          failurePhase: stage,
         })
       ).text,
     );

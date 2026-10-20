@@ -213,6 +213,19 @@ async function fixture(t, subset) {
         assert.equal(intent.outcome, "unknown-until-reconciled");
         assert.equal(intent.binary_plan_sha256, hash(await readFile(argv.at(-1))));
         state.mutationStarted = true;
+        if (state.fail === "diagnostic-child" || state.fail === "diagnostic-small-child")
+          await runTool(
+            python,
+            [
+              "-I",
+              "-B",
+              "-c",
+              state.fail === "diagnostic-small-child"
+                ? "import sys; sys.stderr.buffer.write(b'provider diagnostic\\xff'); raise SystemExit(7)"
+                : "import sys; sys.stderr.buffer.write(b'provider diagnostic\\xff' + b'x' * 70000); raise SystemExit(7)",
+            ],
+            { ...options, outputPath: undefined },
+          );
         if (state.fail === "apply" || state.fail === "cleanup") {
           await writeFile(join(options.directory, "errored.tfstate"), "partial retained state", {
             flag: "wx",
@@ -1255,4 +1268,99 @@ test("owned deallocation failure or changed post-state retains one uncertain int
     else assert.equal(JSON.parse(await readFile(join(directory, "result.json"))).completed, true);
     assert.deepEqual(await snapshot(f.execution.directory), f.original);
   }
+});
+
+test("session retains bounded actual child failure diagnostics without retry", {
+  timeout: 60000,
+}, async (t) => {
+  const f = await fixture(t);
+  f.state.fail = "diagnostic-child";
+  await assert.rejects(f.execute());
+  const path = `${f.input}.failure.json`;
+  const failed = JSON.parse(await readFile(path, "utf8"));
+  assert.equal((await lstat(path)).mode & 0o777, 0o600);
+  assert.equal(failed.schema_version, 1);
+  assert.equal(failed.mode, "execute");
+  assert.equal(failed.phase, "apply");
+  assert.equal(failed.completed, false);
+  assert.equal(failed.source_sha256, await sourceDigest());
+  assert.equal(failed.request_sha256, hash(await readFile(f.input)));
+  assert.equal(failed.native_exit_status, "unknown");
+  assert.ok(failed.started_at <= failed.ended_at);
+  assert.ok(failed.completed_phases.length > 0);
+  assert.ok(failed.completed_phases.every((p) => p.completed === true && p.phase !== "apply"));
+  const diagnostic = Buffer.from(failed.stderr.base64, "base64");
+  const original = Buffer.concat([
+    Buffer.from("provider diagnostic"),
+    Buffer.from([255]),
+    Buffer.alloc(70000, 120),
+  ]);
+  assert.ok(diagnostic.length <= 65536);
+  assert.equal(failed.stderr.retained_bytes, diagnostic.length);
+  // The process boundary can reject before forwarding the overflowing chunk.
+  assert.ok(failed.stderr.observed_bytes_at_least >= diagnostic.length);
+  assert.ok(failed.stderr.observed_bytes_at_least <= original.length);
+  assert.deepEqual(diagnostic, original.subarray(0, diagnostic.length));
+  assert.equal(failed.stderr.sha256, hash(diagnostic));
+  assert.match(failed.stderr.scope, /partial/u);
+  assert.equal(f.state.calls.filter((c) => c.argv[0] === "apply").length, 1);
+  const directory = join(f.root, "nourishing-session-0123456789ab");
+  assert.equal(
+    JSON.parse(await readFile(join(directory, "mutation-intent.json"))).outcome,
+    "unknown-until-reconciled",
+  );
+  await absent(join(directory, "result.json"));
+});
+
+test("session retains exact small actual child failure diagnostics", {
+  timeout: 60000,
+}, async (t) => {
+  const f = await fixture(t);
+  f.state.fail = "diagnostic-small-child";
+  await assert.rejects(f.execute());
+  const failed = JSON.parse(await readFile(`${f.input}.failure.json`, "utf8"));
+  const expected = Buffer.concat([Buffer.from("provider diagnostic"), Buffer.from([255])]);
+  assert.deepEqual(Buffer.from(failed.stderr.base64, "base64"), expected);
+  assert.equal(failed.stderr.retained_bytes, expected.length);
+  assert.equal(failed.stderr.observed_bytes_at_least, expected.length);
+  assert.equal(failed.stderr.sha256, hash(expected));
+  assert.equal(failed.native_exit_status, "unknown");
+  assert.equal(f.state.calls.filter((c) => c.argv[0] === "apply").length, 1);
+  await absent(join(f.root, "nourishing-session-0123456789ab", "result.json"));
+});
+
+test("session rejection without stderr leaves native status unknown", {
+  timeout: 60000,
+}, async (t) => {
+  const f = await fixture(t);
+  f.state.fail = "apply";
+  await assert.rejects(f.execute());
+  const failed = JSON.parse(await readFile(`${f.input}.failure.json`, "utf8"));
+  assert.equal(failed.phase, "apply");
+  assert.equal(failed.native_exit_status, "unknown");
+  assert.equal(failed.stderr.retained_bytes, 0);
+  assert.equal(failed.stderr.observed_bytes_at_least, 0);
+  assert.equal(failed.stderr.sha256, hash(""));
+  assert.equal(failed.stderr.base64, "");
+  assert.equal(f.state.calls.filter((c) => c.argv[0] === "apply").length, 1);
+});
+
+test("session failure receipt collision preserves the original and both errors", {
+  timeout: 60000,
+}, async (t) => {
+  const f = await fixture(t);
+  f.state.fail = "apply";
+  const path = `${f.input}.failure.json`;
+  const original = "ORIGINAL_PRIVATE_FAILURE";
+  await writeFile(path, original, { mode: 0o600, flag: "wx" });
+  await assert.rejects(f.execute(), (error) => {
+    assert.ok(error instanceof AggregateError);
+    assert.equal(error.errors.length, 2);
+    assert.equal(error.errors[0].message, "synthetic failed apply");
+    assert.equal(error.errors[1].code, "EEXIST");
+    return true;
+  });
+  assert.equal(await readFile(path, "utf8"), original);
+  assert.equal(f.state.calls.filter((c) => c.argv[0] === "apply").length, 1);
+  await absent(join(f.root, "nourishing-session-0123456789ab", "result.json"));
 });
