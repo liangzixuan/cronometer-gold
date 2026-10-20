@@ -271,7 +271,7 @@ def require_repository_runtime_contract(variable, config):
             "io.cronometer.upstream.source.revision": "e2eee6a7fce366321294c9c2a79f3146891dcbdf",
             "io.cronometer.upstream.source.tag-object": "8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926",
             "io.cronometer.upstream.version": "v2.11.4",
-            "io.cronometer.upstream.vulnerability-patches": "golang.org/x/crypto=v0.57.0,golang.org/x/net=v0.60.0,golang.org/x/text=v0.42.0,google.golang.org/grpc=v1.83.2",
+            "io.cronometer.upstream.vulnerability-patches": "golang.org/x/crypto=v0.57.0,golang.org/x/net=v0.60.0,golang.org/x/text=v0.42.0,google.golang.org/grpc=v1.83.2,github.com/klauspost/compress=v1.18.7",
         }
         expected_environment = {
             "HOME=/home/caddy",

@@ -275,8 +275,8 @@ verifies its SSH signature against the repository-pinned Ed25519 signer. The
 source archive is checksum-pinned. Go 1.26.9 is pinned by image index digest,
 and the scratch runtime receives only the static Caddy binary, the exact Alpine
 `ca-certificates-bundle` 20260909-r0 payload, the exact `tzdata` 2026e-r0
-payload, and minimal user/directory files. The build explicitly advances the
-four vulnerable release dependencies to `golang.org/x/crypto` v0.57.0,
+payload, and minimal user/directory files. The build explicitly advances `github.com/klauspost/compress` v1.18.7 and the
+four other release dependencies to `golang.org/x/crypto` v0.57.0,
 `golang.org/x/net` v0.60.0, `golang.org/x/text` v0.42.0, and
 `google.golang.org/grpc` v1.83.2; final image labels disclose that patched
 graph, and the build asserts all four binary module versions. Caddy runs as
@@ -453,7 +453,7 @@ image producer does not provision that runtime or establish hosted acceptance.
 
 ## October 1 browser and database fixture replacement
 
-The browser and database CI fixtures now select the qualified PostgreSQL and
+At the October 1 milestone, browser and database CI fixtures selected PostgreSQL and
 Meilisearch images produced from `b7efcdef0b14791e4287d7e3264dea3a1c241c7e`:
 
 - PostgreSQL: `ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4`.
@@ -461,7 +461,7 @@ Meilisearch images produced from `b7efcdef0b14791e4287d7e3264dea3a1c241c7e`:
 
 Saved producer results, immutable index/ARM64 manifest/config metadata and signed
 GitHub provenance bind both images to that source and workflow revision. Their
-configs satisfy the current OpenSSL 3.5.9-r0 runtime policy. The older fixture
+configs satisfied that milestone\u0027s OpenSSL 3.5.9-r0 runtime policy. The older fixture
 pair and its failed admission remain historical evidence.
 
 BrowserStack admission now applies the shared runtime contract after the
@@ -481,6 +481,17 @@ digest, with exact Alpine 3.22 `curl` and `libcurl` 8.14.1-r4 packages.
 The build and publishing identity check require both installed versions; image
 admission requires their disclosed package label. Caddy uses the eligible Go
 1.26.9 builder and x/net v0.60.0 with its required crypto v0.57.0 and text
-v0.42.0 selections. These inputs address the retained October20 publication
-failures. The normal exact-digest scan and publication results still establish
+v0.42.0 selections, plus compress v1.18.7. These inputs address the retained
+October 20 publication failures. The normal exact-digest scan and publication results still establish
 admission; no scan or release gate is waived.
+
+## October 20 Meilisearch consumer replacement
+
+CI, BrowserStack and the qualified walkthrough profile now select
+`ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:2248c7443bcf66be1016f8dc8c3f9a15054cccf66e37828c9e5ab5ee10a90403`
+from producer/source `ef3fcfe7925dcc56ee594bde7d7e4738240a3911`. The
+producer passed its exact-digest scan, service contract and publication checks.
+The immutable tag/index relationship and signed GitHub workflow/source attestation
+were verified before this pin. PostgreSQL retains its October 1 producer and
+reference. Earlier proof remains tied to its actual source; this consumer change
+does not establish a new BrowserStack session or hosted journey.

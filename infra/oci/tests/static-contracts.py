@@ -1230,7 +1230,7 @@ ci_postgres_ref = (
 )
 ci_meili_ref = (
     "ghcr.io/liangzixuan/cronometer-gold-meilisearch@"
-    "sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe"
+    "sha256:2248c7443bcf66be1016f8dc8c3f9a15054cccf66e37828c9e5ab5ee10a90403"
 )
 assert re.findall(r"(?m)^    runs-on: (.+)$", database_job) == [
     "ubuntu-24.04-arm",

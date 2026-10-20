@@ -35,7 +35,7 @@ IMAGES = {
 
 CI_IMAGES = {
     "postgres": "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4",
-    "meilisearch": "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe",
+    "meilisearch": "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:2248c7443bcf66be1016f8dc8c3f9a15054cccf66e37828c9e5ab5ee10a90403",
 }
 CI_MEILI_TMPFS = "/meili_data:uid=1000,gid=1000,mode=0700,size=512m"
 CI_CONTEXT_KEYS = (

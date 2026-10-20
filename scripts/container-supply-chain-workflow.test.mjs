@@ -32,7 +32,7 @@ const containerSupplyChainDocs = readFileSync(
 
 const CADDY_GRPC_PATCH_VERSION = "v1.83.2";
 const CADDY_X_NET_PATCH_VERSION = "v0.60.0";
-const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.57.0,golang.org/x/net=${CADDY_X_NET_PATCH_VERSION},golang.org/x/text=v0.42.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
+const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.57.0,golang.org/x/net=${CADDY_X_NET_PATCH_VERSION},golang.org/x/text=v0.42.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION},github.com/klauspost/compress=v1.18.7`;
 const CADDY_GRPC_REQUIRE_LINE = `      -require=google.golang.org/grpc@${CADDY_GRPC_PATCH_VERSION}; \\`;
 const CADDY_GRPC_BINARY_ASSERTION_LINE = `    go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+${CADDY_GRPC_PATCH_VERSION}'; \\`;
 const CADDY_X_NET_REQUIRE_LINE = `      -require=golang.org/x/net@${CADDY_X_NET_PATCH_VERSION} \\`;

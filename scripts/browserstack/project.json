@@ -23,7 +23,7 @@
   },
   "images": [
     "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:5e55462afe7f9b04de2517a0d660847525aad085b34b42fd939fdddd69cb8df4",
-    "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe"
+    "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:2248c7443bcf66be1016f8dc8c3f9a15054cccf66e37828c9e5ab5ee10a90403"
   ],
   "imageProfile": "ci-qualified-arm64",
   "imageProducers": [
@@ -34,9 +34,9 @@
       "sourceRef": "refs/heads/codex/retention-features"
     },
     {
-      "image": "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:f8e88bf8a95d2e915d5dd408b0f33c2d453d51543931a66869deba69adb99cbe",
-      "sourceSha": "b7efcdef0b14791e4287d7e3264dea3a1c241c7e",
-      "workflowSha": "b7efcdef0b14791e4287d7e3264dea3a1c241c7e",
+      "image": "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:2248c7443bcf66be1016f8dc8c3f9a15054cccf66e37828c9e5ab5ee10a90403",
+      "sourceSha": "ef3fcfe7925dcc56ee594bde7d7e4738240a3911",
+      "workflowSha": "ef3fcfe7925dcc56ee594bde7d7e4738240a3911",
       "sourceRef": "refs/heads/codex/retention-features"
     }
   ]
