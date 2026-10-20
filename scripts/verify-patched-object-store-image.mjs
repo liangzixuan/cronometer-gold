@@ -15,8 +15,8 @@ export const PATCHED_STORE = {
   workflow: "liangzixuan/cronometer-gold/.github/workflows/container-supply-chain.yml",
   version: "4.47-grpc-patched",
   goImage:
-    "docker.io/library/golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83",
-  goArm64Digest: "sha256:1b2cb58c3df8b93b8bcb5739778692c35e491087599139deb2c8c03567cbb03e",
+    "docker.io/library/golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade",
+  goArm64Digest: "sha256:dccc7a8faa4dbaabed38c2ebb7a7bd24c342f2b0ee0fc1a0d2bd41b0243513ad",
   grpcVersion: "v1.85.0-dev.0.20260825072537-93e31b48545e",
 };
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
@@ -58,7 +58,7 @@ export function validateOptions(options) {
 
 export function verifyBinaryMetadata(text, lock, sums) {
   const lines = text.trimEnd().split("\n");
-  if (!/^.+: go1\.26\.6$/.test(lines.shift() ?? ""))
+  if (!/^.+: go1\.26\.9$/.test(lines.shift() ?? ""))
     throw new Error("Unexpected weed Go toolchain.");
   const known = new Map(
     sums
@@ -223,7 +223,7 @@ export function verifyBuildMaterials(payload, lock) {
       (uri) =>
         typeof uri === "string" &&
         uri.startsWith("pkg:docker/") &&
-        uri.includes("golang@1.26.6-alpine3.24"),
+        uri.includes("golang@1.26.9-alpine3.24"),
       [PATCHED_STORE.goImage.split("@sha256:")[1], PATCHED_STORE.goArm64Digest.slice(7)],
     ) ||
     !has(

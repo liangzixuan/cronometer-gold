@@ -108,7 +108,7 @@ export async function openRuntimeJournal(directory) {
     );
     const names = [...published.map((record) => record.name), ...pending].sort();
     assert.deepEqual((await readdir(directory)).sort(), names);
-    for (const record of published) {
+    const verifyRecord = async (record) => {
       const path = join(directory, record.name);
       assert.equal(fileIdentity(await lstat(path, { bigint: true })), record.identity);
       // The held, reverified parent pins each relative name. Recheck the original inode,
@@ -135,6 +135,15 @@ export async function openRuntimeJournal(directory) {
         current?.fill(0);
         await file.close();
       }
+    };
+    // Bound descriptors and buffers while preserving every record check. Settle
+    // all opened peers before rejecting, so cleanup never races an active read.
+    for (let offset = 0; offset < published.length; offset += 4) {
+      const outcomes = await Promise.allSettled(
+        published.slice(offset, offset + 4).map(verifyRecord),
+      );
+      const failure = outcomes.find((outcome) => outcome.status === "rejected");
+      if (failure) throw failure.reason;
     }
     assert.deepEqual((await readdir(directory)).sort(), names);
     assert.equal(directoryIdentity(await lstat(directory, { bigint: true })), expected);

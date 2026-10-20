@@ -25,7 +25,7 @@ const revision = "a".repeat(40);
 const media = "application/vnd.oci.image.manifest.v1+json";
 function metadata() {
   const grpc = lock.reviewedModules.find((item) => item.path === "google.golang.org/grpc");
-  return `/inspect/weed: go1.26.6
+  return `/inspect/weed: go1.26.9
 \tpath\tgithub.com/seaweedfs/seaweedfs/weed
 \tmod\tgithub.com/seaweedfs/seaweedfs\t(devel)
 \tdep\tgoogle.golang.org/grpc\t${grpc.version}\t${grpc.sum}
@@ -164,7 +164,7 @@ function fixture() {
             digest: { sha256: lock.sourceArchiveSha256 },
           },
           {
-            uri: "pkg:docker/golang@1.26.6-alpine3.24?platform=linux%2Farm64",
+            uri: "pkg:docker/golang@1.26.9-alpine3.24?platform=linux%2Farm64",
             digest: { sha256: PATCHED_STORE.goArm64Digest.slice(7) },
           },
           {

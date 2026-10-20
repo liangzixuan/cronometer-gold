@@ -105,7 +105,7 @@ test("reviewed module inputs match their frozen hashes and complete native versi
   ]);
 });
 test("new module evidence is old enough and pins official checksums and licenses", () => {
-  assert.equal(lock.reviewedModules.length, 10);
+  assert.equal(lock.reviewedModules.length, 19);
   const sums = read("object-store.go.sum");
   for (const module of lock.reviewedModules) {
     assert.ok(Date.now() - Date.parse(module.publishedAt) >= 86_400_000);
@@ -121,15 +121,15 @@ test("new module evidence is old enough and pins official checksums and licenses
 });
 test("native resolution provenance binds the full graph and frozen input checksums", () => {
   const resolution = lock.nativeResolution;
-  assert.equal(resolution.toolchainVersion, "go1.26.6");
-  assert.ok(PATCHED_STORE.goImage.includes("golang:1.26.6-"));
+  assert.equal(resolution.toolchainVersion, "go1.26.9");
+  assert.ok(PATCHED_STORE.goImage.includes("golang:1.26.9-"));
   assert.equal(resolution.hostPlatform, "linux/amd64");
   assert.equal(resolution.targetSettings, "linux/arm64");
   assert.deepEqual(resolution.graphCommand, ["go", "list", "-mod=readonly", "-m", "-json", "all"]);
   assert.equal(resolution.originalSelectedCount, 1159);
   assert.equal(resolution.selectedCount, Object.keys(lock.expectedSelectedVersions).length);
-  assert.equal(resolution.actualVersionChangeCount, 8);
-  assert.equal(resolution.addedChecksumRecordCount, 849);
+  assert.equal(resolution.actualVersionChangeCount, 9);
+  assert.equal(resolution.addedChecksumRecordCount, 18);
   assert.equal(resolution.goModSha256, lock.goModSha256);
   assert.equal(resolution.goSumSha256, lock.goSumSha256);
   const selected = Object.fromEntries(

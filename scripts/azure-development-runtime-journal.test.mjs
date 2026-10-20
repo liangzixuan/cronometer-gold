@@ -5,12 +5,14 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readdir,
   readFile,
   rename,
   rm,
   writeFile,
 } from "node:fs/promises";
+import { registerHooks } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -159,6 +161,107 @@ test("removed, replaced or edited published records refuse later work evidence",
       );
     await assert.rejects(journal.publish({ phase: "create-intent" }));
     assert(!(await readdir(f.directory)).includes("001-create-intent.json"));
+  }
+});
+
+test("a rejected journal read waits for opened peers to close before cleanup", {
+  timeout: 5000,
+}, async (t) => {
+  const f = await fixture(t),
+    moduleUrl = new URL("./azure-development-runtime-journal.mjs?peer-settlement", import.meta.url)
+      .href,
+    hook = registerHooks({
+      resolve(specifier, context, next) {
+        if (specifier === "node:fs/promises" && context.parentURL === moduleUrl)
+          return {
+            url: `data:text/javascript,${encodeURIComponent('export * from "node:fs/promises";export const open=(...args)=>globalThis.runtimeJournalOpenForTest(...args);')}`,
+            shortCircuit: true,
+          };
+        return next(specifier, context);
+      },
+    });
+  let gated = false,
+    firstName,
+    secondName,
+    release,
+    peerStarted,
+    failureClosed,
+    pending;
+  const blocked = new Promise((resolve) => {
+      release = resolve;
+    }),
+    reading = new Promise((resolve) => {
+      peerStarted = resolve;
+    }),
+    failedReadClosed = new Promise((resolve) => {
+      failureClosed = resolve;
+    }),
+    opened = new Set();
+  globalThis.runtimeJournalOpenForTest = async (...args) => {
+    const file = await open(...args),
+      name = String(args[0]).split("/").at(-1);
+    if (!gated || ![firstName, secondName].includes(name)) return file;
+    const descriptor = file.fd;
+    opened.add(descriptor);
+    return {
+      stat: file.stat.bind(file),
+      async read(...readArgs) {
+        if (name === firstName) {
+          peerStarted();
+          await blocked;
+          return file.read(...readArgs);
+        }
+        await reading;
+        throw new Error("Controlled journal read failure");
+      },
+      async close() {
+        await file.close();
+        opened.delete(descriptor);
+        if (name === secondName) failureClosed();
+      },
+    };
+  };
+  let journal;
+  try {
+    const isolated = await import(moduleUrl);
+    journal = await isolated.openRuntimeJournal(f.directory);
+    const first = await journal.publish({ phase: "admitted", inputSha256 }),
+      second = await journal.publish({ phase: "create-intent" });
+    firstName = first.path.split("/").at(-1);
+    secondName = second.path.split("/").at(-1);
+    gated = true;
+    let settled = false;
+    pending = journal.conserve();
+    pending.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise((resolve, reject) => {
+      const abort = () => reject(t.signal.reason);
+      t.signal.addEventListener("abort", abort, { once: true });
+      failedReadClosed.then(() => {
+        t.signal.removeEventListener("abort", abort);
+        resolve();
+      });
+      if (t.signal.aborted) abort();
+    });
+    await new Promise(setImmediate);
+    assert.equal(settled, false, "A failed read must wait for its still-open peer");
+    release();
+    await assert.rejects(pending, /Controlled journal read failure/);
+    assert.equal(opened.size, 0);
+    await assert.rejects(journal.publish({ phase: "created" }));
+    assert.equal((await readdir(f.directory)).length, 2);
+  } finally {
+    release();
+    await pending?.catch(() => {});
+    await journal?.close();
+    hook.deregister();
+    delete globalThis.runtimeJournalOpenForTest;
   }
 });
 

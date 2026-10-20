@@ -96,6 +96,14 @@ always-running pull-request checks do not depend on publishing permissions or
 conditionally skipped container jobs. Storage permissions, versioning, privacy
 and restore acceptance remain mandatory after the consumer pin.
 
+The October 20 storage follow-up keeps the same SeaweedFS source, upstream runtime
+and gRPC correction. Go 1.26.9 and x/net 0.60.0 address the current required-image
+scan findings. Go minimum-version selection requires nine existing golang.org/x
+modules to move together; the complete 1,159-path graph, authenticated sums and
+BSD notices are recorded in the existing lock. Its native-resolution record
+describes this change from `ef2739f`; the earlier record remains in that commit.
+No new module path, runtime service or scan exception is introduced.
+
 ## Repository-owned patched Node runtime
 
 `infra/docker/node-runtime.Dockerfile` builds Node.js v22.23.2 from the official

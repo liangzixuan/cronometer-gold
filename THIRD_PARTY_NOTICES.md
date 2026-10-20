@@ -17,6 +17,11 @@ platform sharp/libvips binaries under LGPL-3.0-or-later, unmodified
 Their notice, attribution, source/relinking, and modification obligations remain
 a release gate; the automated policy is recorded in `config/license-policy.json`.
 
+The sharp/libvips 1.3.4 platform packages retain their upstream
+LGPL-3.0-or-later classification. Their bundled library notices list Cairo
+1.18.6 under MPL-1.1. Preserve those notices and review the complete binary
+bundle's distribution, source and relinking obligations before release.
+
 ## Food data
 
 - USDA FoodData Central: public-domain/CC0 source; attribution is retained as a

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
-ARG GO_IMAGE=docker.io/library/golang:1.26.6-alpine3.24@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83
+ARG GO_IMAGE=docker.io/library/golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
 ARG UPSTREAM_IMAGE=ghcr.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882
 
 FROM ${GO_IMAGE} AS build
@@ -58,7 +58,7 @@ LABEL org.opencontainers.image.source="https://github.com/liangzixuan/cronometer
       io.cronometer.runtime.component="object-store" \
       io.cronometer.upstream.source.revision="c5073360007d28385a33426a42ac3e4ec504c5a3" \
       io.cronometer.upstream.image.digest="sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882" \
-      io.cronometer.module-lock.sha256="dec013a4efaa79c0875d64f4e7471302dbac939e779ead1b59de6bae6d1d561c" \
+      io.cronometer.module-lock.sha256="e4a99de72a8abd1892d0a266772f3dfaaa16e35c5662fde137e2c169b5a49850" \
       io.cronometer.grpc.version="v1.85.0-dev.0.20260825072537-93e31b48545e"
 # Preserve the upstream entrypoint, companions and its drop to seaweed UID/GID 1000.
 COPY --from=build /out/weed /usr/bin/weed
