@@ -27,12 +27,13 @@ FIELDS = {"execute": COMMON | {"plan_request", "plan_result", "plan_result_sha25
           "dispose": COMMON | {"disposal_result", "disposal_result_sha256"}}
 FIELDS["reconcile-partial"] = FIELDS["reconcile"]
 FIELDS["observe-shutdown"] = FIELDS["prepare-dispose"]
+FIELDS["deallocate"] = FIELDS["prepare-dispose"]
 FIELDS["reconcile-dispose"] = COMMON | {"dispose_request", "dispose_directory", "dispose_session_sha256", "dispose_intent_sha256"}
 MAX_JSON = 20 * 1024 * 1024
 OUTPUTS = {"session.json": MAX_JSON, "mutation-intent.json": 65536, "result.json": MAX_JSON,
            "phases.json": MAX_JSON, "version.json": 65536, "rendered.json": MAX_JSON,
            "state.json": MAX_JSON, "final-state.json": MAX_JSON, "apply.stdout": MAX_JSON,
-           "destroy.tfplan": Q.MAX_FILE, "evidence-request.json": 65536, "init.stdout": MAX_JSON, "prepare-dispose.stdout": MAX_JSON,
+           "deallocate.stdout": MAX_JSON, "destroy.tfplan": Q.MAX_FILE, "evidence-request.json": 65536, "init.stdout": MAX_JSON, "prepare-dispose.stdout": MAX_JSON,
            **{"auth-" + n + ".json": 65536 for n in ("version", "extensions", "account", "subscription")}}
 UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 canonical = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -52,10 +53,18 @@ def reference(path, digest):
     value, actual = private(path); require(actual == digest, "reviewed private reference changed")
     return value
 
-def private_bytes(path):
+def private_bytes(path, *, allow_empty_deallocation=False):
     # Bind every protected non-JSON output and Terraform state through its held descriptor.
     P.safe_path(path)
-    expected = A.H._secure_regular_file(path, "private session output", path.suffix, MAX_JSON)
+    if allow_empty_deallocation:
+        require(path.name == 'deallocate.stdout', 'only the fixed deallocation response may be empty')
+        A.H._require_private_directory(path.parent, 'private deallocation output')
+        expected = path.lstat()
+        require(stat.S_ISREG(expected.st_mode) and expected.st_uid == os.getuid()
+                and stat.S_IMODE(expected.st_mode) == 0o600 and expected.st_nlink == 1
+                and 0 <= expected.st_size <= MAX_JSON, 'unsafe deallocation output')
+    else:
+        expected = A.H._secure_regular_file(path, "private session output", path.suffix, MAX_JSON)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         identity = lambda item: (item.st_dev, item.st_ino, item.st_size, item.st_mtime_ns)
@@ -213,11 +222,12 @@ def load_request(mode, path, now):
             require(prepared_hash == disposal["state_sha256"] and prepared == state, "reviewed deletion state differs")
             digest_plan, _ = A.H.secure_plan_digest(Path(disposal["binary_plan_path"]))
             require(digest_plan == disposal["binary_plan_sha256"], "reviewed deletion binary changed")
-    if mode == 'observe-shutdown':
+    if mode in ('observe-shutdown','deallocate'):
         require(ownership['mode'] in ('execute','reconcile') and ownership.get('ownership_scope') is None
                 and ownership.get('state_addresses') is None, 'complete ownership required for shutdown observation')
-        require(A.utc(original['values']['shutdown_deadline_utc'],'original shutdown deadline') < now,
-                'original shutdown deadline has not passed')
+        if mode == 'observe-shutdown':
+            require(A.utc(original['values']['shutdown_deadline_utc'],'original shutdown deadline') < now,
+                    'original shutdown deadline has not passed')
         require(A.receipt_utc(ownership.get('completedAt'),'ownership completion') <= now, 'future ownership result')
         old=Path(request['ownership_result']).parent;new=path.parent/request['operation_name']
         require(old != new and old not in new.parents and new not in old.parents and old not in path.parents,
@@ -236,9 +246,9 @@ def load_request(mode, path, now):
     if mode in RECONCILIATION_MODES: snapshot["reconciliation"] = original["reconciliation"]
     if mode=="reconcile-dispose": snapshot["disposal_reconciliation"] = original["disposal_reconciliation"]
     if ownership: snapshot["ownership"] = ownership_hash
-    if mode=='observe-shutdown':
+    if mode in ('observe-shutdown','deallocate'):
         info=old.stat()
-        snapshot['observation_origin']={'directory':str(old),'directory_identity':[info.st_dev,info.st_ino],
+        snapshot['observation_origin' if mode=='observe-shutdown' else 'deallocation_origin']={'directory':str(old),'directory_identity':[info.st_dev,info.st_ino],
                                         'retained_files':Q.tree(old)}
     if disposal: snapshot["disposal"] = request["disposal_result_sha256"]
     return request, original, ownership, disposal, snapshot
@@ -297,7 +307,7 @@ def verify(mode, path, directory, state_hash, now):
     # The provider/source baseline is immutable; only the local state is expected to change.
     current = Q.tree(directory)
     for name, value in state['baseline'].items():
-        if mode in (*READ_ONLY_MODES,'observe-shutdown') or name != 'work/terraform.tfstate': require(current.get(name) == value, "fixed session input changed")
+        if mode in (*READ_ONLY_MODES,'observe-shutdown','deallocate') or name != 'work/terraform.tfstate': require(current.get(name) == value, "fixed session input changed")
     link = 'data/providers/registry.terraform.io/hashicorp/azurerm/4.79.0/linux_amd64'
     parents = {str(p) for p in Path(link).parents if str(p) != '.'}
     evidence_name = 'nourishing-evidence-'+request['operation_name'].rsplit('-',1)[1]
@@ -380,7 +390,7 @@ def resource_reads(mode,directory,original,ownership):
         _,_,_,resources=retained_graph(directory,original['values'],partial=True)
         addresses=set(resources)
         if ownership:require(sorted(addresses)==ownership['state_addresses'],'owned subset changed')
-    return read_commands(original['values'],'resources',addresses,observe_shutdown=mode=='observe-shutdown')
+    return read_commands(original['values'],'resources',addresses,observe_shutdown=mode in ('observe-shutdown','deallocate'))
 
 def documents(directory,prefix,values,stage,addresses=None):
     return {row['label']:private(directory/(prefix+'-'+row['label']+'.json'))[0] for row in read_commands(values,stage,addresses)}
@@ -580,14 +590,23 @@ def same_owned(actual, expected):
             and actual['serial']==expected['serial'] and actual['state_sha256']==expected['state_sha256'],
             "owned state, resource generation or readback changed")
 
-def observed_shutdown(directory, original, ownership, now):
-    deadline=A.utc(original['values']['shutdown_deadline_utc'],'original shutdown deadline')
-    require(deadline < now, 'original shutdown deadline has not passed')
-    current,_=current_ownership(directory,'before',original)
+def shutdown_ownership(directory, prefix, original, ownership):
+    current,_=current_ownership(directory,prefix,original)
     # Response bytes can change independently of resource identity; keep same_owned unchanged.
     require(all(current[key]==ownership[key] for key in ('state_sha256','lineage','serial','ids','generations')),
             'owned shutdown state or generation changed')
-    vm,_=private(directory/'before-vm.json')
+    return current
+
+def deallocate_arguments(original):
+    return ['vm','deallocate','--ids',ids(original['values'])['vm'],
+            '--subscription',original['expected']['subscriptionId'],'--only-show-errors','--output','json']
+
+def observed_shutdown(directory, original, ownership, now, *, prefix='before', after_deadline=True):
+    if after_deadline:
+        deadline=A.utc(original['values']['shutdown_deadline_utc'],'original shutdown deadline')
+        require(deadline < now, 'original shutdown deadline has not passed')
+    current=shutdown_ownership(directory,prefix,original,ownership)
+    vm,_=private(directory/(prefix+'-vm.json'))
     view=vm['properties'].get('instanceView')
     require(isinstance(view,dict) and isinstance(view.get('statuses'),list) and view['statuses'],
             'VM runtime statuses missing')
@@ -663,13 +682,14 @@ def audit(mode,path,directory,digest,now):
     elif mode=='reconcile-dispose':
         authenticate(mode,path,directory,digest,now)
         observed_disposal(directory,original)
-    elif mode=='observe-shutdown':
+    elif mode in ('observe-shutdown','deallocate'):
         authenticate(mode,path,directory,digest,now)
         document,rendered_hash=private(directory/'rendered.json')
         require(rendered_hash==original['result']['rendered_sha256'], 'original binary rendered differently')
         recorded=A.receipt_utc(original['result']['phases'][-1]['endedAt'],'historical plan completion')
         A.audit_plan(document,original['documents'],original['hashes'],recorded)
-        observed_shutdown(directory,original,ownership,now)
+        if mode=='observe-shutdown':observed_shutdown(directory,original,ownership,now)
+        else:shutdown_ownership(directory,'before',original,ownership)
     else:
         authenticate(mode,path,directory,digest,now)
         current,state=current_ownership(directory,'before',original,partial_mode(mode,ownership))
@@ -687,7 +707,7 @@ def audit(mode,path,directory,digest,now):
     return original
 
 def intent(mode,path,directory,digest,now):
-    require(mode in ('execute','dispose'), "only apply modes create mutation intent")
+    require(mode in ('execute','dispose','deallocate'), "only fixed mutation modes create intent")
     original=audit(mode,path,directory,digest,now)
     state,request,_,ownership,disposal=verify(mode,path,directory,digest,now)
     binary=Path(disposal['binary_plan_path']) if disposal else Path(original['binary'])
@@ -696,8 +716,14 @@ def intent(mode,path,directory,digest,now):
            'source_sha256':source_digest(),'request_sha256':state['snapshot']['request'],
            'binary_plan_sha256':binary_hash,'owned_state_sha256':ownership['state_sha256'] if ownership else None,
            'limits':'Local process settlement is not remote cancellation. Readbacks do not make provider deletion conditional.'}
+    if mode=='deallocate':
+        current=shutdown_ownership(directory,'before',original,ownership)
+        value.update(vm_resource_id=current['ids']['vm'],vm_generation=current['generations']['vm'],
+                     before_graph_sha256=current['readback_sha256'])
     A.publish_result(directory/'mutation-intent.json',value)
-    return {'published':True,'sha256':A.private_json(directory/'mutation-intent.json')[1]}
+    result={'published':True,'sha256':A.private_json(directory/'mutation-intent.json')[1]}
+    if mode=='deallocate':result['arguments']=deallocate_arguments(original)
+    return result
 
 def validate_intent(mode, directory, state, original, ownership, disposal, now):
     value, digest = private(directory/'mutation-intent.json')
@@ -708,6 +734,10 @@ def validate_intent(mode, directory, state, original, ownership, disposal, now):
                 'source_sha256':source_digest(),'request_sha256':state['snapshot']['request'],
                 'binary_plan_sha256':binary_hash,'owned_state_sha256':ownership['state_sha256'] if ownership else None,
                 'limits':'Local process settlement is not remote cancellation. Readbacks do not make provider deletion conditional.'}
+    if mode=='deallocate':
+        current=shutdown_ownership(directory,'before',original,ownership)
+        expected.update(vm_resource_id=current['ids']['vm'],vm_generation=current['generations']['vm'],
+                        before_graph_sha256=current['readback_sha256'])
     require(value == expected and A.receipt_utc(state['createdAt'],'session start') <= created <= now,
             'mutation intent identity or content changed')
     return digest, created
@@ -737,13 +767,17 @@ def completion_phases(mode, directory, state, original, ownership, disposal, pha
         if ownership:require(sorted(addresses)==ownership['state_addresses'], 'completion subset differs')
     if mode not in ('execute','reconcile-dispose'):
         rows.append(('state',A.TF_SHA256,['show','-json',str(directory/'work/terraform.tfstate')],'state.json'))
-        rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in read_commands(original['values'],'resources',addresses,observe_shutdown=mode=='observe-shutdown')]
+        rows += [('before-'+r['label'],P.CLI_SHA256,r['arguments'],'before-'+r['label']+'.json') for r in read_commands(original['values'],'resources',addresses,observe_shutdown=mode in ('observe-shutdown','deallocate'))]
     if mode=='reconcile-dispose':
         rows += [('show',A.TF_SHA256,['show','-json',descriptor],'rendered.json'),
                  ('state-after',A.TF_SHA256,['show','-json',str(directory/'work/terraform.tfstate')],'final-state.json')]
         rows += [('after-'+r['label'],P.CLI_SHA256,r['arguments'],'after-'+r['label']+'.json') for r in read_commands(original['values'],'groups')]
     elif mode in (*RECONCILIATION_MODES,'observe-shutdown'):
         rows.append(('show',A.TF_SHA256,['show','-json',descriptor],'rendered.json'))
+    elif mode=='deallocate':
+        rows += [('show',A.TF_SHA256,['show','-json',descriptor],'rendered.json'),
+                 ('deallocate',P.CLI_SHA256,deallocate_arguments(original),'deallocate.stdout')]
+        rows += [('after-'+r['label'],P.CLI_SHA256,r['arguments'],'after-'+r['label']+'.json') for r in read_commands(original['values'],'resources',observe_shutdown=True)]
     elif mode=='prepare-dispose':
         rows += [('prepare-dispose',A.TF_SHA256,['plan','-destroy','-input=false','-no-color','-lock-timeout=0s','-parallelism=1','-var-file=inputs.tfvars.json','-out='+str(binary)],'prepare-dispose.stdout'),
                  ('show-dispose',A.TF_SHA256,['show','-json',descriptor],'rendered.json')]
@@ -755,7 +789,7 @@ def completion_phases(mode, directory, state, original, ownership, disposal, pha
         rows += [('after-'+r['label'],P.CLI_SHA256,r['arguments'],'after-'+r['label']+'.json') for r in read_commands(original['values'],'resources' if mode=='execute' else 'groups')]
     require([p.get('phase') for p in phases]==[r[0] for r in rows], 'fixed ordered phase sequence differs')
     last=A.receipt_utc(state['createdAt'],'session start'); intent_hash=intent_time=None
-    if mode in ('execute','dispose'):intent_hash,intent_time=validate_intent(mode,directory,state,original,ownership,disposal,now)
+    if mode in ('execute','dispose','deallocate'):intent_hash,intent_time=validate_intent(mode,directory,state,original,ownership,disposal,now)
     else:require(not (directory/'mutation-intent.json').exists(), 'unexpected mutation intent during read-only mode')
     for phase,(label,executable,args,output) in zip(phases,rows):
         keys={'phase','completed','exitCode','startedAt','endedAt','executableSha256','arguments','argumentsSha256','stdoutBytes','stdoutSha256'}
@@ -767,11 +801,11 @@ def completion_phases(mode, directory, state, original, ownership, disposal, pha
         require(phase['executableSha256']==executable and phase['arguments']==args
                 and phase['argumentsSha256']==A.sha(json.dumps(args,ensure_ascii=False,separators=(',',':')).encode()),
                 'direct child tool or arguments changed')
-        raw=private_bytes(directory/output)
+        raw=private_bytes(directory/output,allow_empty_deallocation=mode=='deallocate' and label=='deallocate')
         require(type(phase['stdoutBytes']) is int and phase['stdoutBytes']==len(raw)
                 and phase['stdoutSha256']==A.sha(raw), 'retained output differs from observed child bytes')
         if label in ('show','show-dispose','apply'):require(phase['binaryPlanSha256']==binary_hash, 'rendered/applied binary differs')
-        if label=='apply':require(intent_time<=start, 'apply preceded durable intent')
+        if label in ('apply','deallocate'):require(intent_time<=start, 'mutation preceded durable intent')
         if mode=='observe-shutdown' and label=='before-vm':
             require(A.utc(original['values']['shutdown_deadline_utc'],'shutdown deadline') < start,
                     'runtime observation preceded configured deadline')
@@ -814,6 +848,15 @@ def finish(mode,path,directory,digest,now):
             schedule_causation_verified=False,transition_time_verified=False,permanent_shutdown_verified=False,
             remote_operation_completion_verified=False,external_quiescence_verified=False,zero_remaining_cost_verified=False,
             scope="Azure-reported last-known deallocated state observed after the configured deadline; no schedule causation, transition time, permanent shutdown, remote completion, disposal or zero disk/IP cost.")
+    elif mode=='deallocate':
+        audit(mode,path,directory,digest,now)
+        current=observed_shutdown(directory,original,ownership,now,prefix='after',after_deadline=False)
+        observed=next(p for p in phases if p['phase']=='after-vm')
+        result.update(current,ownership_result=request['ownership_result'],ownership_result_sha256=request['ownership_result_sha256'],
+            deallocation_requested=True,deallocation_observed=True,power_state='PowerState/deallocated',
+            observation_started_at=observed['startedAt'],observation_completed_at=observed['endedAt'],vm_response_sha256=observed['stdoutSha256'],
+            remote_operation_completion_verified=False,external_quiescence_verified=False,zero_remaining_cost_verified=False,
+            scope='One bounded owned VM deallocation command and subsequent last-known deallocated state; no permanent shutdown, restart, disposal, remote completion, exclusive use or zero remaining disk/IP cost.')
     elif mode=='prepare-dispose':
         authenticate(mode,path,directory,digest,now)
         current,current_state=current_ownership(directory,'before',original,partial_mode(mode,ownership));same_owned(current,ownership)

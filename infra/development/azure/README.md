@@ -140,7 +140,7 @@ qualified invocations.
 
 ## Execute and dispose of an owned empty-host session
 
-The native Linux session command has seven fixed modes. Select any real mutation
+The native Linux session command has eight fixed modes. Select any real mutation
 separately after reviewing the exact plan and current resource budget. The local
 tests use synthetic Azure/Terraform responses and do not qualify a real allocation,
 shutdown or deletion.
@@ -152,6 +152,7 @@ node scripts/azure-development-session.mjs reconcile --input /absolute/private/r
 node scripts/azure-development-session.mjs reconcile-partial --input /absolute/private/reconcile-partial.json
 node scripts/azure-development-session.mjs reconcile-dispose --input /absolute/private/reconcile-dispose.json
 node scripts/azure-development-session.mjs observe-shutdown --input /absolute/private/observe-shutdown.json
+node scripts/azure-development-session.mjs deallocate --input /absolute/private/deallocate.json
 node scripts/azure-development-session.mjs prepare-dispose --input /absolute/private/prepare-dispose.json
 node scripts/azure-development-session.mjs dispose --input /absolute/private/dispose.json
 ```
@@ -174,6 +175,9 @@ the entire bound inside the authorized work window. Mode-specific fields are:
 - `observe-shutdown`: `ownership_result`, `ownership_result_sha256`, referring to
   a completed `execute` or complete `reconcile` result. Partial ownership, disposal
   and previous observation results are rejected.
+- `deallocate`: `ownership_result`, `ownership_result_sha256`, referring to a
+  completed `execute` or complete `reconcile` result. Partial ownership and prior
+  shutdown/deallocation results are rejected.
 - `prepare-dispose`: `ownership_result`, `ownership_result_sha256`, referring to
   the completed execution or separate reconciliation result and its retained
   exact local state.
@@ -297,6 +301,33 @@ shutdown, remote-operation completion or external quiescence. It is not disposal
 disks and IP addresses may still incur charges. Observation results cannot become
 ownership or deletion-preparation inputs. There is no stop/deallocate call,
 polling or retry, and local synthetic tests do not qualify real Azure shutdown.
+
+`deallocate` requests one non-destructive stop of a completely owned VM. It
+authenticates and checks the original binary plan, copied state and complete live
+graph before publishing a durable mutation intent. The intent binds the exact VM
+ID, generation and pre-action graph. One fixed `az vm deallocate --ids` command
+then runs under the existing supervisor, with a five-minute child limit. No force,
+hibernation, `--no-wait`, caller retry or alternative target is selected. Azure CLI
+may poll internally; one CLI invocation is not a claim of one HTTP request.
+
+The complete post-action graph must retain the original IDs, generations, state
+hash, lineage and serial. Its expanded VM response must report exactly one
+`PowerState/deallocated`. The original operation and state remain unchanged. A
+command failure, interruption, changed graph, missing readback or publication
+uncertainty rejects completion and preserves the intent and partial files. Local
+process settlement does not cancel the remote action or establish its completion.
+
+This mode may run before or after the schedule deadline under its own accepted
+finite shutdown scope; it renews no original host lease. The caller must first
+settle application/host work and establish exclusive use. Full ownership only is
+supported: partial apply, lost/emergency state and uncertain remote work still
+need separate reconciliation. Pre/post generation checks cannot make Azure's
+deallocation request conditional or prove exclusive use. The result is not an
+allocation, restart, disposal or later-host authorization. Disks, IP addresses,
+state and all evidence remain; their costs can continue. Controlled tests qualify
+source behavior only, not an actual Azure shutdown or hosted acceptance.
+
+Protocol: [Azure CLI VM deallocation](https://learn.microsoft.com/en-us/cli/azure/vm?view=azure-cli-latest#az-vm-deallocate).
 
 These checks require exclusive use of the resource group and local state. Azure
 readbacks do not make Terraform deletes conditional on generation or etag. The

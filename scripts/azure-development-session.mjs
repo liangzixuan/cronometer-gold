@@ -66,6 +66,7 @@ export async function runDevelopmentSession(
       "reconcile-partial",
       "reconcile-dispose",
       "observe-shutdown",
+      "deallocate",
       "prepare-dispose",
       "dispose",
     ].includes(mode),
@@ -251,8 +252,25 @@ export async function runDevelopmentSession(
       await held.verify();
       phases.at(-1).binaryPlanSha256 = held.sha256;
       if (mode === "execute") await reads("groups", "before");
+      if (mode === "deallocate") {
+        const intent = await pure("intent", extra);
+        await command("deallocate", session.azure, intent.arguments, {
+          env,
+          directory,
+          outputPath: resolve(session.directory, "deallocate.stdout"),
+          milliseconds: 300_000,
+        });
+        await verify();
+        await reads("resources", "after");
+      }
       if (
-        !["reconcile", "reconcile-partial", "reconcile-dispose", "observe-shutdown"].includes(mode)
+        ![
+          "reconcile",
+          "reconcile-partial",
+          "reconcile-dispose",
+          "observe-shutdown",
+          "deallocate",
+        ].includes(mode)
       ) {
         // Publish unknown outcome durably before the only mutating command.
         await pure("intent", extra);
@@ -270,7 +288,13 @@ export async function runDevelopmentSession(
       await held.close();
     }
     if (
-      !["reconcile", "reconcile-partial", "reconcile-dispose", "observe-shutdown"].includes(mode)
+      ![
+        "reconcile",
+        "reconcile-partial",
+        "reconcile-dispose",
+        "observe-shutdown",
+        "deallocate",
+      ].includes(mode)
     ) {
       await tool(
         "state-after",
@@ -320,13 +344,15 @@ async function main() {
     console.log(
       args[0] === "prepare-dispose"
         ? "Private deletion plan prepared for separate review; no deletion attempted."
-        : args[0] === "observe-shutdown"
-          ? "Private last-known deallocated state observed; schedule causation and remaining costs are not established."
-          : args[0] === "reconcile-dispose"
-            ? "Private current disposal observation recorded; original disposal outcome remains unconfirmed."
-            : ["reconcile", "reconcile-partial"].includes(args[0])
-              ? "Private current ownership recorded; original execution outcome remains unconfirmed."
-              : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
+        : args[0] === "deallocate"
+          ? "Private owned VM deallocation observed; retained disks/IP may still incur costs. No later host authority."
+          : args[0] === "observe-shutdown"
+            ? "Private last-known deallocated state observed; schedule causation and remaining costs are not established."
+            : args[0] === "reconcile-dispose"
+              ? "Private current disposal observation recorded; original disposal outcome remains unconfirmed."
+              : ["reconcile", "reconcile-partial"].includes(args[0])
+                ? "Private current ownership recorded; original execution outcome remains unconfirmed."
+                : "Private empty-host lifecycle result recorded; no application runtime or release acceptance.",
     );
   } finally {
     for (const name of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(name, stop);

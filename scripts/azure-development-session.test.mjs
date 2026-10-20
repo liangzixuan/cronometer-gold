@@ -176,12 +176,24 @@ async function fixture(t, subset) {
           assert.match(argv[2], /^\/proc\/[0-9]+\/fd\/[0-9]+$/u);
           assert.equal(
             await readFile(argv[2], "utf8"),
-            ["execute", "reconcile", "reconcile-partial", "observe-shutdown"].includes(state.mode)
+            [
+              "execute",
+              "reconcile",
+              "reconcile-partial",
+              "observe-shutdown",
+              "deallocate",
+            ].includes(state.mode)
               ? "private synthetic binary plan"
               : "synthetic destruction plan",
           );
           if (
-            ["execute", "reconcile", "reconcile-partial", "observe-shutdown"].includes(state.mode)
+            [
+              "execute",
+              "reconcile",
+              "reconcile-partial",
+              "observe-shutdown",
+              "deallocate",
+            ].includes(state.mode)
           )
             text = f.rendered;
           else value = f.responses.destroy;
@@ -1042,4 +1054,205 @@ test("shutdown observation rejects an allocated stopped VM without publishing su
       ),
   );
   assert.deepEqual(await snapshot(f.execution.directory), f.original);
+});
+
+async function deallocationFixture(t) {
+  const f = await fixture(t);
+  const execution = await f.execute();
+  const ownership = join(execution.directory, "result.json");
+  const original = await snapshot(execution.directory);
+  const instant = "2026-10-01T08:01:00.000Z";
+  t.mock.timers.setTime(new Date(instant).getTime());
+  f.state.instant = instant;
+  f.state.mode = "deallocate";
+  f.responses.live.vm.properties.instanceView = { statuses: [{ code: "PowerState/running" }] };
+  const request = {
+    schema_version: 1,
+    source_sha256: await sourceDigest(),
+    operation_name: "nourishing-session-" + "d".repeat(12),
+    not_after_utc: "2026-10-01T08:19:00Z",
+    ownership_result: ownership,
+    ownership_result_sha256: hash(await readFile(ownership)),
+  };
+  let mutations = 0;
+  const run = async (tool, argv, options) => {
+    if (tool.path === "/usr/bin/az" && argv[0] === "vm") {
+      mutations++;
+      assert.equal(mutations, 1);
+      assert.deepEqual(argv, [
+        "vm",
+        "deallocate",
+        "--ids",
+        f.responses.live.vm.id,
+        "--subscription",
+        f.expected.subscriptionId,
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+      const directory = dirname(options.directory);
+      const intent = JSON.parse(await readFile(join(directory, "mutation-intent.json")));
+      assert.equal(intent.mode, "deallocate");
+      assert.equal(intent.vm_resource_id, f.responses.live.vm.id);
+      assert.equal(intent.vm_generation, f.responses.live.vm.properties.vmId.toLowerCase());
+      assert.equal(intent.outcome, "unknown-until-reconciled");
+      f.state.calls.push({
+        tool: tool.path,
+        argv: [...argv],
+        output: basename(options.outputPath),
+      });
+      await writeFile(options.outputPath, "", { flag: "wx", mode: 0o600 });
+      if (f.state.deallocationFailure === "command")
+        throw new Error("synthetic uncertain deallocation");
+      if (f.state.deallocationFailure === "abort")
+        throw new DOMException("synthetic interruption", "AbortError");
+      f.responses.live.vm.properties.instanceView.statuses = [
+        { code: f.state.finalPowerState ?? "PowerState/deallocated" },
+      ];
+      if (f.state.deallocationFailure === "generation")
+        f.responses.live.vm.properties.vmId = "99999999-9999-4999-8999-999999999999";
+      return { bytes: 0, sha256: hash(""), stderrBytes: 0, stderrSha256: hash("") };
+    }
+    return f.run(tool, argv, options);
+  };
+  return { ...f, execution, ownership, original, request, run, mutations: () => mutations };
+}
+
+test("owned deallocation completes before scheduled shutdown with intent and preserved custody", {
+  timeout: 120000,
+}, async (t) => {
+  const f = await deallocationFixture(t);
+  const input = join(f.root, "deallocate.json");
+  await json(input, f.request);
+  const start = f.state.calls.length;
+  const stopped = await runDevelopmentSession("deallocate", input, { environment: {} }, f.run);
+  assert.equal(f.mutations(), 1);
+  const calls = f.state.calls.slice(start);
+  assert.ok(
+    calls.every(
+      (c) =>
+        !["apply", "plan", "refresh", "import", "delete", "start", "restart"].includes(c.argv[0]),
+    ),
+  );
+  assert.equal(calls.filter((c) => c.output === "after-vm.json").length, 1);
+  assert.match(calls.find((c) => c.output === "after-vm.json").argv[4], /&\$expand=instanceView$/u);
+  const result = JSON.parse(await readFile(join(stopped.directory, "result.json")));
+  assert.equal(result.mode, "deallocate");
+  assert.equal(result.deallocation_observed, true);
+  assert.equal(result.power_state, "PowerState/deallocated");
+  assert.equal(result.ownership_result_sha256, hash(await readFile(f.ownership)));
+  assert.equal(
+    result.vm_response_sha256,
+    hash(await readFile(join(stopped.directory, "after-vm.json"))),
+  );
+  assert.equal(result.remote_operation_completion_verified, false);
+  assert.equal(result.external_quiescence_verified, false);
+  assert.equal(result.zero_remaining_cost_verified, false);
+  assert.deepEqual(await snapshot(f.execution.directory), f.original);
+  assert.equal(
+    hash(await readFile(join(stopped.directory, "work/terraform.tfstate"))),
+    hash(await readFile(JSON.parse(await readFile(f.ownership)).state_path)),
+  );
+});
+
+test("owned deallocation rejects unqualified ownership before mutation", {
+  timeout: 180000,
+}, async (t) => {
+  const f = await deallocationFixture(t);
+  const original = JSON.parse(await readFile(f.ownership));
+  for (const [index, changes] of [
+    { mode: "reconcile-partial", ownership_scope: "partial", state_addresses: [] },
+    { mode: "deallocate" },
+    { completedAt: "2026-10-01T09:00:00Z" },
+  ].entries()) {
+    const path = join(f.execution.directory, "unqualified-" + index + ".json");
+    await json(path, { ...original, ...changes });
+    const input = join(f.root, "unqualified-" + index + ".json");
+    await json(input, {
+      ...f.request,
+      operation_name: "nourishing-session-" + String(index + 1).repeat(12),
+      ownership_result: path,
+      ownership_result_sha256: hash(await readFile(path)),
+    });
+    await assert.rejects(runDevelopmentSession("deallocate", input, { environment: {} }, f.run));
+  }
+  assert.equal(f.mutations(), 0);
+});
+
+test("owned deallocation failure or changed post-state retains one uncertain intent without retry", {
+  timeout: 240000,
+}, async (t) => {
+  const f = await deallocationFixture(t);
+  const vmId = f.responses.live.vm.properties.vmId;
+  for (const [index, kind] of [
+    "command",
+    "abort",
+    "power",
+    "generation",
+    "readback",
+    "publication",
+  ].entries()) {
+    const suffix = String(index + 1).repeat(12);
+    const input = join(f.root, "deallocate-" + kind + ".json");
+    const request = { ...f.request, operation_name: "nourishing-session-" + suffix };
+    await json(input, request);
+    f.state.deallocationFailure = ["command", "abort", "generation"].includes(kind)
+      ? kind
+      : undefined;
+    f.state.finalPowerState = kind === "power" ? "PowerState/stopped" : undefined;
+    f.state.fail = ["readback", "publication"].includes(kind) ? kind : undefined;
+    f.responses.live.vm.properties.vmId = vmId;
+    const controller = new AbortController();
+    const callsBefore = f.state.calls.length;
+    const run = async (tool, argv, options) => {
+      // Each independently named attempted operation admits exactly one mutation.
+      if (tool.path === "/usr/bin/az" && argv[0] === "vm") {
+        const intent = JSON.parse(
+          await readFile(join(dirname(options.directory), "mutation-intent.json")),
+        );
+        assert.equal(intent.mode, "deallocate");
+        await writeFile(options.outputPath, "", { flag: "wx", mode: 0o600 });
+        if (kind === "command") throw new Error("synthetic uncertain command");
+        if (kind === "abort") {
+          controller.abort(new Error("synthetic deallocation cancellation"));
+          assert.equal(options.signal.aborted, true);
+        }
+        f.responses.live.vm.properties.instanceView.statuses = [
+          { code: f.state.finalPowerState ?? "PowerState/deallocated" },
+        ];
+        if (kind === "generation")
+          f.responses.live.vm.properties.vmId = "99999999-9999-4999-8999-999999999999";
+        return { bytes: 0, sha256: hash(""), stderrBytes: 0, stderrSha256: hash("") };
+      }
+      return f.run(tool, argv, options);
+    };
+    let attempts = 0;
+    const counted = async (...args) => {
+      if (args[0].path === "/usr/bin/az" && args[1][0] === "vm") attempts++;
+      return run(...args);
+    };
+    await assert.rejects(
+      runDevelopmentSession(
+        "deallocate",
+        input,
+        { environment: {}, signal: controller.signal },
+        counted,
+      ),
+    );
+    assert.equal(attempts, 1);
+    if (kind === "abort") {
+      assert.equal(controller.signal.aborted, true);
+      assert.ok(
+        f.state.calls.slice(callsBefore).every((call) => !call.output.startsWith("after-")),
+      );
+    }
+    const directory = join(f.root, request.operation_name);
+    assert.equal(
+      JSON.parse(await readFile(join(directory, "mutation-intent.json"))).mode,
+      "deallocate",
+    );
+    if (kind !== "publication") await absent(join(directory, "result.json"));
+    else assert.equal(JSON.parse(await readFile(join(directory, "result.json"))).completed, true);
+    assert.deepEqual(await snapshot(f.execution.directory), f.original);
+  }
 });
