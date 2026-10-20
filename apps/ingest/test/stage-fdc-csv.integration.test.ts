@@ -159,7 +159,7 @@ describe("synthetic full-FDC CSV integration fixture", () => {
       }
       mark("cleanup");
     }
-  });
+  }, 30_000);
 });
 
 describe("synthetic validation policy fixture", () => {

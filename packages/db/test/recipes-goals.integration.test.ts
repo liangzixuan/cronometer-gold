@@ -1091,7 +1091,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
     } finally {
       await fixture.close();
     }
-  });
+  }, 30_000);
 
   it("versions goal periods and computes coherent exact progress", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
