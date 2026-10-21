@@ -57,7 +57,7 @@ function verifyStorageWorkflow(text) {
     "TRIVY_PLATFORM: linux/arm64",
     "uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
     "version: v0.74.0",
-    "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30",
+    "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:52eed42db355d06738916fc8a5c71b38387f5ae2fbf194211a54d2b85015a817",
     "scanners: vuln",
     "vuln-type: os,library",
     "severity: HIGH,CRITICAL",
@@ -120,7 +120,7 @@ for (const [name, before, after] of [
   ["ignore exit", 'exit-code: "1"', 'exit-code: "0"'],
   [
     "mutable scan",
-    "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30",
+    "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:52eed42db355d06738916fc8a5c71b38387f5ae2fbf194211a54d2b85015a817",
     "image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store:latest",
   ],
   [

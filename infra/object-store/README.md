@@ -20,10 +20,10 @@ The reviewed dependency notices accompany both that evidence and the derived
 image under `/usr/share/licenses/nourishing-object-store/NOTICES.txt`.
 
 CI consumes the qualified project image pinned by `scripts/prepare-ci-object-store.mjs`:
-index `sha256:f936639ab401e5ba291eebdc8eae421c382faee0c971e71e0a9dba94e7c08c2e`,
-ARM64 runtime `sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30`.
-Its original source and workflow revision is
-`e109b1ea70720a186c35d13e9fe4fedba93759e1`, built by
+index `sha256:6216183112982e473e271d0bbc35ea684305baef7078321b959279e22c50ef56`,
+ARM64 runtime `sha256:52eed42db355d06738916fc8a5c71b38387f5ae2fbf194211a54d2b85015a817`.
+Its pinned source and workflow revision is
+`8ab18c253a6831f0af07352ab9187b568c8020aa`, built by
 `.github/workflows/container-supply-chain.yml` on `refs/heads/codex/retention-features`.
 The upstream signature authenticates only the original base; the derivative's
 own signature, source-bound provenance, SBOM, runtime layers and compiled module
@@ -36,7 +36,7 @@ The CI-only Compose override changes only the image; rendered topology must
 otherwise match local Compose exactly. After startup, the helper checks the
 pinned image/config identity and actual process UID/GID 1000. Existing S3
 permissions, versioning, privacy, immutable-ledger and full-restore tests remain
-mandatory. The original build's qualification does not replace these consumer
+mandatory. The producer's qualification does not replace these consumer
 tests or broader release acceptance. No production storage or running preview
 changes here.
 

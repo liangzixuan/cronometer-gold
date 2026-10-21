@@ -7,15 +7,15 @@ import { pathToFileURL } from "node:url";
 import { OBJECT_STORE_REF } from "./verify-local-object-store-image.mjs";
 import { verifyPatchedObjectStoreImage } from "./verify-patched-object-store-image.mjs";
 
-// Qualified by the original trusted build; consumer and pull-request revisions differ.
+// Qualified by the pinned trusted build; consumer and pull-request revisions differ.
 export const CI_OBJECT_STORE = Object.freeze({
   imageRef:
-    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:f936639ab401e5ba291eebdc8eae421c382faee0c971e71e0a9dba94e7c08c2e",
+    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:6216183112982e473e271d0bbc35ea684305baef7078321b959279e22c50ef56",
   runtimeRef:
-    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30",
-  configDigest: "sha256:f7e1acdf8387e17e542efb5cdd3343b0dcd15df247cc6ddd2e1660e14479e080",
-  revision: "e109b1ea70720a186c35d13e9fe4fedba93759e1",
-  workflowSha: "e109b1ea70720a186c35d13e9fe4fedba93759e1",
+    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:52eed42db355d06738916fc8a5c71b38387f5ae2fbf194211a54d2b85015a817",
+  configDigest: "sha256:350637edc45bff6b5f9c05ed4704fdbf66749f82e8403dafdff260f2d33aa55f",
+  revision: "8ab18c253a6831f0af07352ab9187b568c8020aa",
+  workflowSha: "8ab18c253a6831f0af07352ab9187b568c8020aa",
   sourceRef: "refs/heads/codex/retention-features",
 });
 const composeFile = "infra/docker/compose.yml";

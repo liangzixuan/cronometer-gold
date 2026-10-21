@@ -207,8 +207,8 @@ test("read-only push and fork-PR consumers retain the original qualified build i
       assert.deepEqual(options, {
         mode: "verify",
         imageRef,
-        revision: "e109b1ea70720a186c35d13e9fe4fedba93759e1",
-        workflowSha: "e109b1ea70720a186c35d13e9fe4fedba93759e1",
+        revision: "8ab18c253a6831f0af07352ab9187b568c8020aa",
+        workflowSha: "8ab18c253a6831f0af07352ab9187b568c8020aa",
         sourceRef: "refs/heads/codex/retention-features",
       });
       return verification;
