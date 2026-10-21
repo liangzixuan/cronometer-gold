@@ -365,3 +365,6 @@ b97569b970f6b3f695e4c9d4b64ea42e6566f2de:repomix-output.md:sourcegraph-access-to
 b97569b970f6b3f695e4c9d4b64ea42e6566f2de:repomix-output.md:sourcegraph-access-token:515955
 b97569b970f6b3f695e4c9d4b64ea42e6566f2de:repomix-output.md:sourcegraph-access-token:516025
 b97569b970f6b3f695e4c9d4b64ea42e6566f2de:repomix-output.md:sourcegraph-access-token:516147
+
+# Deterministic synthetic cursor secret used only by the Azure retention config test.
+f3068fd33092212866eb5a23bd9a76c877290463:apps/api/test/azure-retention-storage.test.ts:generic-api-key:236
