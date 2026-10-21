@@ -126,6 +126,16 @@ another approval solely for a red security check. Prioritize functionality, host
 integration and the daily workflow. Separate deployment, spending, credential,
 destructive-action and native-release permissions remain in force.
 
+### Dependency continuity
+
+The October 21, 2026 user instruction requires active fixes, reviewed upstream
+patches, maintained replacements or another supported implementation when a
+dependency obstructs delivery. An unpublished fix is a reason to investigate these
+paths, not to stop indefinitely. Keep the product working, verify affected behavior
+and continue independent authorized work. Avoid repeated unchanged audit polling.
+Report actual findings and preserve applicable acceptance, permission and
+individual automatic-review boundaries.
+
 ### Governing hosted-delivery outcome
 
 The immediate outcome is one working Appwrite URL connected to the Azure backend.

@@ -49,6 +49,16 @@ age enforcement and no lifecycle scripts or age exceptions. It does not alter th
 application lock. Use the [root README](../../README.md#repository-context-artifacts)
 for committed-source packing, coverage and artifact limits.
 
+## Resolve dependency obstacles
+
+Treat each dependency obstacle as a bounded engineering task: reproduce its effect
+on the product, check existing options and parent dependencies, then fix, apply a
+reviewed upstream patch or replace it with a maintained implementation. Verify the
+affected behavior and continue other authorized product work while resolving it.
+Do not make an upstream release the only possible exit or repeatedly rerun an
+unchanged failed audit. Keep scan results truthful and retain all applicable
+acceptance and permission controls, including individual automatic-review stops.
+
 ## Validation stages
 
 | Stage | Work | Exit condition |
