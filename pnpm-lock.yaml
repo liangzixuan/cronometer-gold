@@ -14,6 +14,9 @@ overrides:
   react: 19.2.3
   react-dom: 19.2.3
 
+patchedDependencies:
+  node-forge@1.4.0: b6876574a5de19521a766856b293aeae2689848c5d8dab03f93040be0a64b8b4
+
 importers:
 
   .:
@@ -4643,7 +4646,7 @@ snapshots:
       glob: 13.0.6
       lan-network: 0.2.1
       multitars: 1.0.2
-      node-forge: 1.4.0
+      node-forge: 1.4.0(patch_hash=b6876574a5de19521a766856b293aeae2689848c5d8dab03f93040be0a64b8b4)
       npm-package-arg: 11.0.3
       ora: 3.4.0
       picomatch: 4.0.5
@@ -4679,7 +4682,7 @@ snapshots:
 
   '@expo/code-signing-certificates@0.0.6':
     dependencies:
-      node-forge: 1.4.0
+      node-forge: 1.4.0(patch_hash=b6876574a5de19521a766856b293aeae2689848c5d8dab03f93040be0a64b8b4)
 
   '@expo/config-plugins@57.0.10(supports-color@8.1.1)(typescript@6.0.3)':
     dependencies:
@@ -6759,7 +6762,7 @@ snapshots:
       json-bigint: 1.0.0
       undici: 6.29.0
 
-  node-forge@1.4.0: {}
+  node-forge@1.4.0(patch_hash=b6876574a5de19521a766856b293aeae2689848c5d8dab03f93040be0a64b8b4): {}
 
   node-int64@0.4.0: {}
 

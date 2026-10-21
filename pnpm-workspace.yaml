@@ -66,3 +66,6 @@ supportedArchitectures:
 allowBuilds:
   esbuild: true
   sharp: true
+
+patchedDependencies:
+  node-forge@1.4.0: patches/node-forge@1.4.0.patch
