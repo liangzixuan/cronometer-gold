@@ -121,8 +121,8 @@ async function diaryCount(number) {
   );
 }
 async function terminalDetails() {
-  // Only a validated passed/running session may be read again after close. All reads,
-  // response bodies and delays share one deadline and byte cap; no journey is replayed.
+  // Only matching passed metadata may be observed again while execution or its duration
+  // is incomplete. All reads, bodies and delays share one deadline and byte cap.
   const signal = AbortSignal.timeout(15_000);
   let size = 0;
   for (let attempt = 0; attempt < 4; attempt++) {
@@ -202,19 +202,21 @@ async function terminalDetails() {
     };
     if (cancelled) receipt.terminalFailureReason = "cancelled";
     assert(!cancelled, "Session cancelled");
-    if (details.browserstack_status === "done") {
-      if (receipt.status === "passed") {
-        assert.equal(details.status, "passed");
-        if (!Number.isInteger(details.duration))
-          receipt.terminalFailureReason = "duration-unavailable";
-        assert(Number.isInteger(details.duration));
-      }
+    if (
+      details.browserstack_status === "done" &&
+      (receipt.status !== "passed" || Number.isInteger(details.duration))
+    ) {
+      if (receipt.status === "passed") assert.equal(details.status, "passed");
       return;
     }
     assert.equal(receipt.status, "passed");
     assert.equal(details.status, "passed");
-    assert.equal(details.browserstack_status, "running");
-    assert(attempt < 3, "Session remains nonterminal");
+    if (details.browserstack_status === "done") {
+      if (attempt === 3) receipt.terminalFailureReason = "duration-unavailable";
+    } else {
+      assert.equal(details.browserstack_status, "running");
+    }
+    assert(attempt < 3, "Session metadata remains incomplete");
     await delay([1_000, 2_000, 4_000][attempt], undefined, { signal });
   }
 }

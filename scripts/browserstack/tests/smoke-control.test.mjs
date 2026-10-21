@@ -947,10 +947,28 @@ test("cancellation during metadata cannot accept a passed-done record", async ()
   assert.equal(summary.failedBrowser.remoteExecutionStatus, "done");
 });
 
-test("passed-done requires an actual integer duration", async () => {
-  const result = await exercise({ terminalSequence: [{ duration: null }] });
+test("a completed session may publish its duration within the existing observation budget", async () => {
+  const result = await exercise({
+    terminalSequence: [{ duration: null }, { duration: 25 }],
+  });
+  assert.equal(result.receipt.status, "passed");
+  assert.equal(result.receipt.terminal.durationSeconds, 25);
+  assert.equal(result.receipt.terminalReadCount, 2);
+  assert.deepEqual(result.metadataDelays, [1000]);
+  assert.equal(result.metadataSignals.length, 1);
+  assert.equal(result.metadataSignals[0].milliseconds, 15000);
+  assert(result.fetches.every(([, config]) => config.signal === result.metadataSignals[0].signal));
+  assert.equal(result.connected, 1);
+  assert.equal(result.closed, 1);
+  assert.equal(result.addClicks, 1);
+  assert.equal(result.receipt.terminalFailureReason, undefined);
+});
+
+test("passed-done without an integer duration fails within the four-read budget", async () => {
+  const result = await exercise({ terminalSequence: Array(4).fill({ duration: null }) });
   assert.equal(result.receipt.status, "failed");
-  assert.equal(result.fetches.length, 1);
+  assert.equal(result.fetches.length, 4);
+  assert.deepEqual(result.metadataDelays, [1000, 2000, 4000]);
   assert.equal(result.receipt.failedStage, "terminal-verification");
   assert.equal(result.receipt.terminalFailureReason, "duration-unavailable");
   const summary = publicSummary(result.receipt);
@@ -958,6 +976,24 @@ test("passed-done requires an actual integer duration", async () => {
   assert.equal(summary.failedBrowser.terminalReason, "duration-unavailable");
   assert.equal(summary.failedBrowser.remoteStatus, "passed");
   assert.equal(summary.failedBrowser.remoteExecutionStatus, "done");
+});
+
+test("waiting for a completed session duration keeps the shared metadata deadline", async () => {
+  const result = await exercise({
+    terminalSequence: [
+      { duration: null, requestMs: 7000, bodyMs: 3000 },
+      { duration: null, requestMs: 2000, bodyMs: 2000 },
+    ],
+  });
+  assert.equal(result.receipt.status, "failed");
+  assert.equal(result.receipt.failedStage, "terminal-verification");
+  assert.equal(result.fetches.length, 2);
+  assert.deepEqual(result.metadataDelays, [1000]);
+  assert.equal(result.metadataSignals.length, 1);
+  assert.equal(result.metadataSignals[0].milliseconds, 15000);
+  assert.equal(result.connected, 1);
+  assert.equal(result.closed, 1);
+  assert.equal(result.addClicks, 1);
 });
 
 test("terminal reasons do not replace an earlier journey failure", async () => {
