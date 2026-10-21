@@ -34,6 +34,10 @@ const reviewedExposureRules = [
   "!pnpm-workspace.yaml",
   "!tsconfig.base.json",
   "!turbo.json",
+  "!patches/",
+  "patches/*",
+  "!patches/braces@3.0.3.patch",
+  "!patches/node-forge@1.4.0.patch",
   "!apps/",
   "apps/*",
   "!apps/api/",
@@ -509,5 +513,20 @@ test("Mailpit context includes every local COPY input and verifier dependency", 
         `${file} requires an unreviewed context input: ${dependency}`,
       );
     }
+  }
+});
+
+test("Docker frozen installs receive every declared pnpm patch as an exact public input", () => {
+  const workspace = readFileSync(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
+  const declarations = workspace.split("\npatchedDependencies:\n")[1];
+  assert.ok(declarations, "The workspace must retain its reviewed patch declarations.");
+  const paths = [...declarations.matchAll(/^ {2}[^\r\n]+: (patches\/[^\r\n]+)$/gmu)].map(
+    (match) => match[1],
+  );
+  assert.equal(paths.length, 2);
+  const rules = dockerignoreRules();
+  for (const path of paths) {
+    assert.ok(existsSync(join(repositoryRoot, path)), `${path} must exist.`);
+    assert.ok(rules.includes(`!${path}`), `${path} must be an exact Docker context inclusion.`);
   }
 });

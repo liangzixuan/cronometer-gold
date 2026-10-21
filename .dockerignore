@@ -8,6 +8,12 @@
 !tsconfig.base.json
 !turbo.json
 
+# Exact public pnpm patches required by the frozen workspace lockfile.
+!patches/
+patches/*
+!patches/braces@3.0.3.patch
+!patches/node-forge@1.4.0.patch
+
 # Runtime application workspaces. Mobile and ingestion CLIs are not image inputs.
 !apps/
 apps/*
