@@ -10,12 +10,12 @@ import { verifyPatchedObjectStoreImage } from "./verify-patched-object-store-ima
 // Qualified by the pinned trusted build; consumer and pull-request revisions differ.
 export const CI_OBJECT_STORE = Object.freeze({
   imageRef:
-    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:6216183112982e473e271d0bbc35ea684305baef7078321b959279e22c50ef56",
+    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:f5df3ccba9dce7f9bd74f0057d11bfc3b034e06ee4e342fdff9f6ac48db01df7",
   runtimeRef:
-    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:52eed42db355d06738916fc8a5c71b38387f5ae2fbf194211a54d2b85015a817",
-  configDigest: "sha256:350637edc45bff6b5f9c05ed4704fdbf66749f82e8403dafdff260f2d33aa55f",
-  revision: "8ab18c253a6831f0af07352ab9187b568c8020aa",
-  workflowSha: "8ab18c253a6831f0af07352ab9187b568c8020aa",
+    "ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:42bf364639e55c85608b872675fb5359cbf7babc909e7c6f387554dcae60fe1e",
+  configDigest: "sha256:b8c7920171a9fcc29d1af49c542357fc9bb2cbc3142feb0a95495b02f0699ea1",
+  revision: "fd8ad262b0bded6ac4bc5b10368eb19e43005829",
+  workflowSha: "fd8ad262b0bded6ac4bc5b10368eb19e43005829",
   sourceRef: "refs/heads/codex/retention-features",
 });
 const composeFile = "infra/docker/compose.yml";

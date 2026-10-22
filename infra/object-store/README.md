@@ -20,10 +20,10 @@ The reviewed dependency notices accompany both that evidence and the derived
 image under `/usr/share/licenses/nourishing-object-store/NOTICES.txt`.
 
 CI consumes the qualified project image pinned by `scripts/prepare-ci-object-store.mjs`:
-index `sha256:6216183112982e473e271d0bbc35ea684305baef7078321b959279e22c50ef56`,
-ARM64 runtime `sha256:52eed42db355d06738916fc8a5c71b38387f5ae2fbf194211a54d2b85015a817`.
+index `sha256:f5df3ccba9dce7f9bd74f0057d11bfc3b034e06ee4e342fdff9f6ac48db01df7`,
+ARM64 runtime `sha256:42bf364639e55c85608b872675fb5359cbf7babc909e7c6f387554dcae60fe1e`.
 Its pinned source and workflow revision is
-`8ab18c253a6831f0af07352ab9187b568c8020aa`, built by
+`fd8ad262b0bded6ac4bc5b10368eb19e43005829`, built by
 `.github/workflows/container-supply-chain.yml` on `refs/heads/codex/retention-features`.
 The upstream signature authenticates only the original base; the derivative's
 own signature, source-bound provenance, SBOM, runtime layers and compiled module
