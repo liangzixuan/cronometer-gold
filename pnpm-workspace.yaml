@@ -23,6 +23,13 @@ overrides:
   react-dom: 19.2.3
 
 minimumReleaseAgeExclude:
+  # One-time six-version exception approved for NOURISHING-EXPO-AGE-20261022.
+  - expo@57.0.31
+  - '@expo/cli@57.0.32'
+  - '@expo/config-plugins@57.0.11'
+  - '@expo/router-server@57.0.14'
+  - expo-modules-core@57.0.24
+  - expo-modules-jsi@57.1.3
   - '@expo/cli@57.0.23 || 57.0.24'
   - '@expo/metro-file-map@57.0.3'
   - babel-preset-expo@57.0.11
