@@ -122,7 +122,7 @@ test("new module evidence is old enough and pins official checksums and licenses
 test("native resolution provenance binds the full graph and frozen input checksums", () => {
   const resolution = lock.nativeResolution;
   assert.equal(resolution.toolchainVersion, "go1.26.9");
-  assert.ok(PATCHED_STORE.goImage.includes("golang:1.26.9-"));
+  assert.ok(PATCHED_STORE.goImage.includes("golang:1.26.10-"));
   assert.equal(resolution.hostPlatform, "linux/amd64");
   assert.equal(resolution.targetSettings, "linux/arm64");
   assert.deepEqual(resolution.graphCommand, ["go", "list", "-mod=readonly", "-m", "-json", "all"]);

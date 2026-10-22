@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
-# Go 1.26.9 is pinned by its multi-platform index. The reviewed linux/arm64
-# child is sha256:dccc7a8faa4dbaabed38c2ebb7a7bd24c342f2b0ee0fc1a0d2bd41b0243513ad.
-ARG GO_IMAGE=docker.io/library/golang:1.26.9-alpine3.24@sha256:3082400e369fa24d5fc60bca20edab3f6d604e0c5a690ec66b295eff4dd87ade
+# Go 1.26.10 is pinned by its multi-platform index. The reviewed linux/arm64
+# child is sha256:838da1d688161cd81dee9f6dcddc85fed0686a7bec6e9c0998a20d78bc4e394b.
+ARG GO_IMAGE=docker.io/library/golang:1.26.10-alpine3.24@sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca
 
 FROM ${GO_IMAGE} AS build
 

@@ -280,7 +280,7 @@ provenance, or immutable-tag gates.
 `e2eee6a7fce366321294c9c2a79f3146891dcbdf`. CI checks that annotated tag
 object `8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926` resolves to that commit and
 verifies its SSH signature against the repository-pinned Ed25519 signer. The
-source archive is checksum-pinned. Go 1.26.9 is pinned by image index digest,
+source archive is checksum-pinned. Go 1.26.10 is pinned by image index digest,
 and the scratch runtime receives only the static Caddy binary, the exact Alpine
 `ca-certificates-bundle` 20260909-r0 payload, the exact `tzdata` 2026e-r0
 payload, and minimal user/directory files. The build explicitly advances `github.com/klauspost/compress` v1.18.7 and the
@@ -503,3 +503,23 @@ The immutable tag/index relationship and signed GitHub workflow/source attestati
 were verified before this pin. PostgreSQL retains its October 1 producer and
 reference. Earlier proof remains tied to its actual source; this consumer change
 does not establish a new BrowserStack session or hosted journey.
+
+## October 22 Go builder correction
+
+The current storage and Caddy publication scans reported CVE-2026-111943 in
+Go 1.26.9. Both source builds now use the compatible Go 1.26.10 patch, released
+on October 19 with the `crypto/x509` fix. The Docker Official Image
+`golang:1.26.10-alpine3.24` was published on October 20 at 04:26:09 UTC, more
+than 24 hours before selection. Its pinned index is
+`sha256:9ce231b28998b32e116927c61aa5c406183061d4f3f2d61b292c88e7f6bdf7ca`;
+the verified Linux ARM64 child is
+`sha256:838da1d688161cd81dee9f6dcddc85fed0686a7bec6e9c0998a20d78bc4e394b`.
+The storage verifier requires this builder material and Go 1.26.10 binary
+metadata. Upstream application sources, module versions, checksums and runtime
+contracts remain unchanged. The module lock's Go 1.26.9 resolution records its
+actual historical graph proof; the new image build must still authenticate and
+verify that full frozen graph. Exact-image scans, native service checks,
+provenance and publication remain required before admission.
+
+Sources: [Go release history](https://go.dev/doc/devel/release) and
+[Docker Official Image tag metadata](https://hub.docker.com/v2/repositories/library/golang/tags/1.26.10-alpine3.24).
