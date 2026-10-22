@@ -175,7 +175,7 @@ const exactDependencies = {
   "@sbaiahmed1/react-native-biometrics": "0.16.0",
   "expo-build-properties": "57.0.22",
   "expo-camera": "57.0.6",
-  "expo-notifications": "57.0.23",
+  "expo-notifications": "57.0.24",
   "react-native-health-connect": "4.1.3",
   "react-native-nitro-modules": "0.36.5",
 };

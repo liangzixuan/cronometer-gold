@@ -23,6 +23,8 @@ overrides:
   react-dom: 19.2.3
 
 minimumReleaseAgeExclude:
+  # One-time exception approved for NOURISHING-NOTIFICATIONS-AGE-20261022.
+  - expo-notifications@57.0.24
   # One-time six-version exception approved for NOURISHING-EXPO-AGE-20261022.
   - expo@57.0.31
   - '@expo/cli@57.0.32'
