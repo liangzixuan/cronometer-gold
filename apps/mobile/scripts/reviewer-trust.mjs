@@ -120,8 +120,11 @@ export function validateReviewerTrustStore(trustStore, { expectedSchema, label }
       throw new TypeError(`${name}.algorithm must be Ed25519.`);
     }
     const validFromTimestamp = parseCanonicalInstant(reviewer.validFrom, `${name}.validFrom`);
-    const validUntilTimestamp = parseCanonicalInstant(reviewer.validUntil, `${name}.validUntil`);
-    if (validUntilTimestamp <= validFromTimestamp) {
+    const validUntilTimestamp =
+      reviewer.validUntil === null && expectedSchema === RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA
+        ? null
+        : parseCanonicalInstant(reviewer.validUntil, `${name}.validUntil`);
+    if (validUntilTimestamp !== null && validUntilTimestamp <= validFromTimestamp) {
       throw new TypeError(`${name} validity interval must be nonempty and increasing.`);
     }
     const { publicKey, publicKeyFingerprintSha256 } = parsePublicKey(
@@ -177,5 +180,9 @@ export function validateReviewerTrustStores({ deployment, health }) {
 }
 
 export function reviewerKeyWasActiveAt(reviewer, reviewedAt) {
-  return reviewer.validFromTimestamp <= reviewedAt && reviewedAt <= reviewer.validUntilTimestamp;
+  return (
+    Number.isFinite(reviewedAt) &&
+    reviewer.validFromTimestamp <= reviewedAt &&
+    (reviewer.validUntilTimestamp === null || reviewedAt <= reviewer.validUntilTimestamp)
+  );
 }

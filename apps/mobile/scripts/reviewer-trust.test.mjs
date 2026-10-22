@@ -35,7 +35,7 @@ function deploymentStore(reviewers = []) {
 }
 
 describe("reviewer trust roots", () => {
-  it("accepts the intentionally empty checked-in trust roots", () => {
+  it("accepts empty trust stores", () => {
     expect(
       validateReviewerTrustStores({ deployment: deploymentStore(), health: healthStore() }),
     ).toEqual({ deployment: [], health: [] });
@@ -76,6 +76,34 @@ describe("reviewer trust roots", () => {
     expect(reviewerKeyWasActiveAt(parsed, parsed.validUntilTimestamp)).toBe(true);
     expect(reviewerKeyWasActiveAt(parsed, parsed.validFromTimestamp - 1)).toBe(false);
     expect(reviewerKeyWasActiveAt(parsed, parsed.validUntilTimestamp + 1)).toBe(false);
+  });
+
+  it("accepts a deployment key without expiry only from its validity start", () => {
+    const [parsed] = validateReviewerTrustStore(deploymentStore([reviewer({ validUntil: null })]), {
+      expectedSchema: RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
+      label: "deployment reviewer trust store",
+    });
+    expect(reviewerKeyWasActiveAt(parsed, parsed.validFromTimestamp - 1)).toBe(false);
+    expect(reviewerKeyWasActiveAt(parsed, parsed.validFromTimestamp)).toBe(true);
+    expect(reviewerKeyWasActiveAt(parsed, Date.parse("9999-12-31T23:59:59.999Z"))).toBe(true);
+    for (const invalidTime of [NaN, Infinity, -Infinity])
+      expect(reviewerKeyWasActiveAt(parsed, invalidTime)).toBe(false);
+  });
+
+  it("requires explicit null for a deployment key without expiry", () => {
+    for (const validUntil of [undefined, "", "never", false, 0])
+      expect(() =>
+        validateReviewerTrustStore(deploymentStore([reviewer({ validUntil })]), {
+          expectedSchema: RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
+          label: "deployment reviewer trust store",
+        }),
+      ).toThrow(/canonical ISO-8601/u);
+    expect(() =>
+      validateReviewerTrustStore(healthStore([reviewer({ validUntil: null })]), {
+        expectedSchema: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
+        label: "health reviewer trust store",
+      }),
+    ).toThrow(/canonical ISO-8601/u);
   });
 
   it.each([

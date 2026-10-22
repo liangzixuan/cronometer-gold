@@ -73,6 +73,16 @@ backup/restore remain required implementations/qualifications. This decision
 does not mark them passed. Staging and production resources, live observations,
 formal signatures and browser/native evidence cannot be supplied by code tests.
 
+## Deployment reviewer key validity
+
+Kendall Buckner's public Ed25519 deployment key `kendall-staging-20261022` is
+valid from `2026-10-22T15:31:12.000Z`, with no expiry, as requested by the user.
+The deployment trust store records an explicit `validUntil: null` for a key
+without expiry. Its start time, signature, independent principal and trust-purpose
+checks still apply. Health-review keys require a finite expiry. Signed reviews
+still expire after 24 hours and observations after one hour. Key enrollment does
+not supply a review or authorize a deployment, spending, or reviewer contact.
+
 ## Review triggers
 
 Review this decision when Appwrite changes runtime behavior, exposes verifiable

@@ -1,4 +1,13 @@
 {
   "schemaVersion": "nutrition-tracker-release-deployment-reviewer-trust-v1",
-  "reviewers": []
+  "reviewers": [
+    {
+      "keyId": "kendall-staging-20261022",
+      "principal": "Kendall Buckner",
+      "validFrom": "2026-10-22T15:31:12.000Z",
+      "validUntil": null,
+      "algorithm": "Ed25519",
+      "publicKeySpkiDerBase64": "MCowBQYDK2VwAyEACOG2kb9cvgGI/Tldm4UrK/IcH+Y3Ja8T9ccI3dT+myg="
+    }
+  ]
 }

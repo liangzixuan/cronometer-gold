@@ -45,13 +45,18 @@ function verifier(f: ReturnType<typeof fixture>, request: typeof fetch = async (
 }
 test("independently signed six-image backend and v8 candidate validate with ephemeral test trust", () => {
   const f = fixture();
-  assert.equal(validateBackendAdmission(f.bundle, f.expected, f.trust).sourceRevision, REVISION);
-  assert.equal(
-    validateManagedDeployment(f.bundle, f.expected, f.trust).web.deploymentId,
-    "fixture-deployment",
-  );
+  for (const trust of [
+    f.trust,
+    { ...f.trust, reviewers: f.trust.reviewers.map((root) => ({ ...root, validUntil: null })) },
+  ]) {
+    assert.equal(validateBackendAdmission(f.bundle, f.expected, trust).sourceRevision, REVISION);
+    assert.equal(
+      validateManagedDeployment(f.bundle, f.expected, trust).web.deploymentId,
+      "fixture-deployment",
+    );
+  }
 });
-test("real empty checked-in reviewer trust rejects a well-shaped signed fixture", () => {
+test("checked-in reviewer trust rejects an unenrolled signed fixture", () => {
   const f = fixture();
   assert.throws(
     () => validateBackendAdmission(f.bundle, f.expected, loadReviewerTrustStore()),
@@ -99,14 +104,18 @@ test("signed evidence still fails source, target, API and configuration substitu
       /context_mismatch/,
     );
 });
-test("signed review expires after 24 hours and observations expire after one hour", () => {
+test("a key without expiry still requires fresh signed reviews and observations", () => {
   const f = fixture();
+  const trust = {
+    ...f.trust,
+    reviewers: f.trust.reviewers.map((root) => ({ ...root, validUntil: null })),
+  };
   assert.throws(
-    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 24 * 3600000 }, f.trust),
+    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 24 * 3600000 }, trust),
     /review_stale/,
   );
   assert.throws(
-    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 3600000 }, f.trust),
+    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 3600000 }, trust),
     /observation_stale/,
   );
 });
