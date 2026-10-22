@@ -1684,6 +1684,8 @@ describe("native activity occurrence integration", () => {
   });
 
   it("retires both selected candidates if the loaded profile zone changes after a failed write", async () => {
+    // Use a historical fold; later timezone rules can remove a future occurrence.
+    vi.setSystemTime(new Date("2025-11-02T07:30:45.123Z"));
     let nextZone = zone;
     const { harness, writes } = setup(
       (request) => {
@@ -1694,13 +1696,17 @@ describe("native activity occurrence integration", () => {
       },
       [foldSource],
     );
+    harness.updateProps({ requestedDate: "2025-11-02" });
     await fill(harness, { name: "Walk", duration: "30", time: "01:30" });
     await press(harness, laterAdd);
     await press(harness, "Edit activity");
-    await press(harness, earlierEdit);
+    const selected = await press(harness, earlierEdit);
+    expect(button(selected, laterAdd).props.accessibilityState.selected).toBe(true);
+    expect(button(selected, earlierEdit).props.accessibilityState.selected).toBe(true);
     await press(harness, "Save activity");
     nextZone = "America/Winnipeg";
     const tree = await press(harness, "Retry day view");
+    expect(text(tree)).toContain("America/Winnipeg");
     expect(button(tree, laterAdd).props.accessibilityState.selected).toBe(false);
     expect(button(tree, earlierEdit).props.accessibilityState.selected).toBe(false);
     await press(harness, "Save activity");
