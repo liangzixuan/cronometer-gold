@@ -404,7 +404,7 @@ class Contract(unittest.TestCase):
         d=evidence();d["providers"]["commands"][0].pop("completed");self.rejects(d=d)
     def test_binary_boundary_conserves_inputs_and_suppresses_failed_acceptance(self):
         # Exact synthetic executable/renderer seam; no claim that this is an Azure binary plan.
-        executable=Path('/usr/bin/true')
+        executable=Path('/usr/bin/true').resolve(strict=True)
         with tempfile.TemporaryDirectory() as t:
             folder=Path(t);binary=folder/'plan.tfplan';binary.write_bytes(b'owned synthetic binary');binary.chmod(0o600)
             docs=evidence();paths={};hashes={}
