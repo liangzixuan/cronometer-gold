@@ -39,6 +39,22 @@ activation observation, bound to the current source. Existing reviewer trust,
 key validity, independent principals, native identifier history and device
 acceptance remain required. No test key becomes a release authority.
 
+## Finite hosted staging dependency policy
+
+The user's direct approval permits the existing hosted staging trial to retain
+failed standalone dependency checks. Admission applies from
+2026-10-22T00:37:43Z until 2026-10-23T18:37:37Z, exclusive. It covers only the
+production-dependency advisory and object-store vulnerability jobs in `ci.yml`,
+and the PostgreSQL/Meilisearch fixture vulnerability jobs in `browserstack-web.yml`.
+Each job and its exact scan step must complete. Their actual failed results remain
+in the evidence; missing, skipped or failed setup steps are not accepted.
+
+Production retains successful-check requirements. Functional/build checks,
+secret/history scans, licenses, source identity, image integrity/provenance,
+browser acceptance, backup/recovery, cleanup and independent review remain required.
+The existing one-trial spending, duration and resource limits still apply. This
+policy neither starts the trial nor grants a production release.
+
 ## Consequences and alternatives
 
 Appwrite host drift and hidden-component coverage remain explicit provider risks.

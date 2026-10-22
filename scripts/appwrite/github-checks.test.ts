@@ -379,7 +379,8 @@ function apiFixture(
     | "missing-cleanup"
     | "branch-advanced"
     | "default-branch"
-    | "final-branch-drift",
+    | "final-branch-drift"
+    | "dependency-failure",
 ) {
   const calls: { url: string; authorization: string | null }[] = [];
   const lookups = new Map<string, number>();
@@ -388,6 +389,11 @@ function apiFixture(
   const summary = browser();
   summary.build.lockSha256 = lockHash;
   const workflows = Object.keys(WORKFLOW_POLICIES);
+  function fixtureRun(workflow: string, id: number, attempt = 1) {
+    const result = run(workflow, id, attempt);
+    if (change === "dependency-failure" && workflow === "ci.yml") result.conclusion = "failure";
+    return result;
+  }
   const fetcher: typeof fetch = async (input, init) => {
     const url = new URL(String(input));
     calls.push({ url: url.href, authorization: new Headers(init?.headers).get("authorization") });
@@ -436,7 +442,11 @@ function apiFixture(
       return json({
         total_count: change === "missing-page" ? 2 : 1,
         workflow_runs: [
-          run(workflow, 30 + workflows.indexOf(workflow), change === "rerun" && count > 1 ? 2 : 1),
+          fixtureRun(
+            workflow,
+            30 + workflows.indexOf(workflow),
+            change === "rerun" && count > 1 ? 2 : 1,
+          ),
         ],
       });
     }
@@ -446,6 +456,16 @@ function apiFixture(
       const name = workflows[id - 30];
       assert.ok(name);
       const result = jobs(name, id);
+      if (change === "dependency-failure" && name === "ci.yml") {
+        const scanner = result.find((job) => job.name === "production dependency advisories");
+        assert.ok(scanner);
+        scanner.conclusion = "failure";
+        const scan = scanner.steps.find(
+          (step) => step.name === "Reject high-severity production dependency advisories",
+        );
+        assert.ok(scan);
+        scan.conclusion = "failure";
+      }
       if (change === "shuffled-browser-jobs" && name === "browserstack-web.yml") result.reverse();
       if (change === "missing-cleanup" && name === "browserstack-web.yml")
         first(result).steps = first(result).steps.filter(
@@ -457,7 +477,7 @@ function apiFixture(
     if (runId) {
       const name = workflows[Number(runId) - 30];
       assert.ok(name);
-      return json(run(name, Number(runId)));
+      return json(fixtureRun(name, Number(runId)));
     }
     if (path === "/actions/jobs/100/logs")
       return new Response("", {
@@ -619,3 +639,148 @@ for (const securityJob of ["production dependency advisories", "object-store vul
     });
   }
 }
+
+const STAGING_POLICY_START = Date.parse("2026-10-22T00:37:43Z");
+const STAGING_POLICY_NOW = Date.parse("2026-10-22T12:00:00Z");
+const STAGING_POLICY_END = Date.parse("2026-10-23T18:37:37Z");
+const STAGING_FAILURE_CASES = [
+  [
+    "ci.yml",
+    "production dependency advisories",
+    "Reject high-severity production dependency advisories",
+  ],
+  [
+    "ci.yml",
+    "object-store vulnerabilities",
+    "Reject high or critical object-store vulnerabilities",
+  ],
+  [
+    "browserstack-web.yml",
+    "postgres-fixture-vulnerabilities",
+    "Reject high or critical PostgreSQL fixture vulnerabilities",
+  ],
+  [
+    "browserstack-web.yml",
+    "meilisearch-fixture-vulnerabilities",
+    "Reject high or critical Meilisearch fixture vulnerabilities",
+  ],
+] as const;
+function failedDependency(
+  data: ReturnType<typeof evidence>,
+  entry: (typeof STAGING_FAILURE_CASES)[number],
+) {
+  const [workflow, name, stepName] = entry;
+  const record = data.requiredRuns.find((item) => item.workflow === workflow);
+  assert.ok(record);
+  const job = record.jobs.find((item) => item.name === name);
+  assert.ok(job);
+  const step = job.steps.find((item) => item.name === stepName);
+  assert.ok(step);
+  record.run.conclusion = "failure";
+  job.conclusion = "failure";
+  step.conclusion = "failure";
+  return { record, job, step };
+}
+for (const entry of STAGING_FAILURE_CASES) {
+  test(`approved staging retains actual failed dependency results: ${entry[1]}`, () => {
+    const data = evidence();
+    const { record } = failedDependency(data, entry);
+    const before = clone(data);
+    for (const now of [STAGING_POLICY_START, STAGING_POLICY_NOW, STAGING_POLICY_END - 1])
+      assert.doesNotThrow(() => validateGitHubEvidence(data, context, now));
+    assert.deepEqual(data, before);
+    assert.throws(() => validateJobs(record.jobs, record.run, entry[0], SHA));
+    assert.throws(() =>
+      validateJobs(record.jobs, record.run, entry[0], SHA, "production", STAGING_POLICY_NOW),
+    );
+    for (const now of [
+      STAGING_POLICY_START - 1,
+      STAGING_POLICY_END,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ])
+      assert.throws(() => validateGitHubEvidence(data, context, now));
+  });
+}
+
+test("the approved staging exception accepts all four scans together without rewriting failure evidence", () => {
+  const data = evidence();
+  for (const entry of STAGING_FAILURE_CASES) failedDependency(data, entry);
+  const before = clone(data);
+  assert.doesNotThrow(() => validateGitHubEvidence(data, context, STAGING_POLICY_NOW));
+  assert.deepEqual(data, before);
+});
+
+for (const mutation of [
+  "missing-job",
+  "missing-scan",
+  "skipped-scan",
+  "pending-scan",
+  "successful-job",
+  "successful-run",
+  "failed-setup",
+  "failed-functional",
+  "unnamed-functional-failure",
+] as const) {
+  test(`staging dependency approval still rejects ${mutation}`, () => {
+    const data = evidence();
+    const { record, job, step } = failedDependency(data, STAGING_FAILURE_CASES[0]);
+    if (mutation === "missing-job") record.jobs = record.jobs.filter((item) => item !== job);
+    if (mutation === "missing-scan") job.steps = job.steps.filter((item) => item !== step);
+    if (mutation === "skipped-scan") step.conclusion = "skipped";
+    if (mutation === "pending-scan") step.status = "in_progress";
+    if (mutation === "successful-job") job.conclusion = "success";
+    if (mutation === "successful-run") record.run.conclusion = "success";
+    if (mutation === "failed-setup") first(job.steps).conclusion = "failure";
+    if (mutation === "failed-functional" || mutation === "unnamed-functional-failure") {
+      const quality = record.jobs.find((item) => item.name === "quality");
+      assert.ok(quality);
+      quality.conclusion = "failure";
+      first(quality.steps).conclusion = "failure";
+      if (mutation === "unnamed-functional-failure")
+        Object.assign(first(quality.steps), { name: undefined });
+    }
+    assert.throws(() => validateGitHubEvidence(data, context, STAGING_POLICY_NOW));
+  });
+}
+
+test("the collector preserves a failed scan and run through its final fresh read", async () => {
+  const fixture = apiFixture("dependency-failure");
+  const result = await collectGitHubEvidence({
+    ...context,
+    token: "private-token",
+    fetch: fixture.fetcher,
+    now: () => STAGING_POLICY_NOW,
+  });
+  const ci = result.requiredRuns.find((record) => record.workflow === "ci.yml");
+  assert.ok(ci);
+  assert.equal(ci.run.conclusion, "failure");
+  const job = ci.jobs.find((entry) => entry.name === "production dependency advisories");
+  assert.ok(job);
+  assert.equal(job.conclusion, "failure");
+  assert.equal(
+    (job.steps as { name: string; conclusion: string }[]).find(
+      (step) => step.name === STAGING_FAILURE_CASES[0][2],
+    )?.conclusion,
+    "failure",
+  );
+  assert.doesNotThrow(() => validateGitHubEvidence(result, context, STAGING_POLICY_NOW));
+});
+
+test("the collector rejects approval expiry during collection using its final clock", async () => {
+  const fixture = apiFixture("dependency-failure");
+  let reads = 0;
+  await assert.rejects(
+    collectGitHubEvidence({
+      ...context,
+      token: "private-token",
+      fetch: fixture.fetcher,
+      now: () => (++reads === 1 ? STAGING_POLICY_NOW : STAGING_POLICY_END),
+    }),
+  );
+  assert.ok(reads > 1);
+  assert.equal(
+    fixture.calls.filter((call) => call.url.includes(`/git/ref/heads/${BRANCH}`)).length,
+    2,
+  );
+});

@@ -81,9 +81,48 @@ export function selectLatestRun(value: unknown, workflow: string, revision: stri
   need(latest);
   return latest;
 }
-export function validateJobs(value: unknown, run: Run, workflow: string, revision: string): Row[] {
+// Exact direct user approval; limited to the existing hosted staging trial.
+const STAGING_DEPENDENCY_APPROVAL_START = Date.parse("2026-10-22T00:37:43Z");
+const STAGING_DEPENDENCY_APPROVAL_END = Date.parse("2026-10-23T18:37:37Z");
+const STAGING_DEPENDENCY_FAILURES = [
+  [
+    "ci.yml",
+    "production dependency advisories",
+    "Reject high-severity production dependency advisories",
+  ],
+  [
+    "ci.yml",
+    "object-store vulnerabilities",
+    "Reject high or critical object-store vulnerabilities",
+  ],
+  [
+    "browserstack-web.yml",
+    "postgres-fixture-vulnerabilities",
+    "Reject high or critical PostgreSQL fixture vulnerabilities",
+  ],
+  [
+    "browserstack-web.yml",
+    "meilisearch-fixture-vulnerabilities",
+    "Reject high or critical Meilisearch fixture vulnerabilities",
+  ],
+] as const;
+
+export function validateJobs(
+  value: unknown,
+  run: Run,
+  workflow: string,
+  revision: string,
+  target: Target = "production",
+  now = Date.now(),
+): Row[] {
   const policy = WORKFLOW_POLICIES[workflow];
-  need(policy && run.status === "completed" && run.conclusion === "success");
+  need(policy && run.status === "completed");
+  const stagingApproval =
+    target === "staging" &&
+    Number.isFinite(now) &&
+    now >= STAGING_DEPENDENCY_APPROVAL_START &&
+    now < STAGING_DEPENDENCY_APPROVAL_END;
+  let failedDependencyJob = false;
   const jobs = rows(value).map(row);
   need(jobs.length === Object.keys(policy).length);
   need(new Set(jobs.map((j) => j.id)).size === jobs.length);
@@ -98,7 +137,13 @@ export function validateJobs(value: unknown, run: Run, workflow: string, revisio
         job.run_attempt === run.run_attempt &&
         job.head_sha === revision,
     );
-    need(job.status === "completed" && job.conclusion === "success");
+    need(job.status === "completed");
+    const permittedFailure = stagingApproval
+      ? STAGING_DEPENDENCY_FAILURES.find(
+          ([file, name]) => file === workflow && name === job.name,
+        )?.[2]
+      : undefined;
+    let failedDependencyStep = false;
     need(typeof job.started_at === "string" && typeof job.completed_at === "string");
     need(
       Number.isFinite(Date.parse(job.started_at)) &&
@@ -110,13 +155,21 @@ export function validateJobs(value: unknown, run: Run, workflow: string, revisio
     for (const step of steps) {
       need(positive(step.number) && step.number > previous && step.status === "completed");
       previous = step.number;
+      const admittedFailure =
+        permittedFailure !== undefined &&
+        step.conclusion === "failure" &&
+        step.name === permittedFailure;
       need(
         step.conclusion === "success" ||
+          admittedFailure ||
           (step.conclusion === "skipped" &&
             typeof step.name === "string" &&
             jobPolicy.skipped.includes(step.name)),
       );
+      failedDependencyStep ||= admittedFailure;
     }
+    need(job.conclusion === (failedDependencyStep ? "failure" : "success"));
+    failedDependencyJob ||= failedDependencyStep;
     const required = jobPolicy.required;
     need(
       steps
@@ -125,6 +178,7 @@ export function validateJobs(value: unknown, run: Run, workflow: string, revisio
         .join("\n") === required.join("\n"),
     );
   }
+  need(run.conclusion === (failedDependencyJob ? "failure" : "success"));
   return jobs;
 }
 export function parseBrowserSummary(log: string): unknown {
@@ -302,7 +356,11 @@ export function validateProductionReview(value: unknown, expected: EvidenceConte
   );
   return p;
 }
-export function validateGitHubEvidence(value: unknown, expected: EvidenceContext): GitHubEvidence {
+export function validateGitHubEvidence(
+  value: unknown,
+  expected: EvidenceContext,
+  now = Date.now(),
+): GitHubEvidence {
   const e = row(value);
   const release = row(e.release);
   need(
@@ -325,7 +383,7 @@ export function validateGitHubEvidence(value: unknown, expected: EvidenceContext
   for (const r of records) {
     need(typeof r.workflow === "string" && Object.hasOwn(WORKFLOW_POLICIES, r.workflow));
     const run = verifyRun(r.run, r.workflow, expected.revision);
-    validateJobs(r.jobs, run, r.workflow, expected.revision);
+    validateJobs(r.jobs, run, r.workflow, expected.revision, expected.target, now);
   }
   const browserRun = row(records.find((r) => r.workflow === "browserstack-web.yml")?.run);
   const browser = row(e.browser);
@@ -353,6 +411,7 @@ export async function collectGitHubEvidence(
     releaseAttempt: number;
     token: string;
     fetch?: typeof fetch;
+    now?: () => number;
   },
 ): Promise<GitHubEvidence> {
   need(
@@ -362,6 +421,7 @@ export async function collectGitHubEvidence(
   );
   need(options.token.length > 0 && options.token.length <= 4096 && !/[\r\n]/.test(options.token));
   const request = options.fetch ?? fetch;
+  const now = options.now ?? Date.now;
   async function bytes(
     url: string,
     maximum: number,
@@ -477,7 +537,7 @@ export async function collectGitHubEvidence(
     const page = row(
       await api(`/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`),
     );
-    const jobs = validateJobs(page.jobs, run, workflow, options.revision);
+    const jobs = validateJobs(page.jobs, run, workflow, options.revision, options.target, now());
     need(page.total_count === jobs.length);
     requiredRuns.push({ workflow, run, jobs });
   }
@@ -511,7 +571,7 @@ export async function collectGitHubEvidence(
       current.id === previous.run.id &&
         current.run_attempt === previous.run.run_attempt &&
         current.status === "completed" &&
-        current.conclusion === "success",
+        current.conclusion === previous.run.conclusion,
     );
   }
   await currentBranch();
@@ -531,6 +591,7 @@ export async function collectGitHubEvidence(
       productionReview,
     },
     options,
+    now(),
   );
 }
 
