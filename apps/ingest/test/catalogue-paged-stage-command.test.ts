@@ -52,7 +52,7 @@ const BUILD = "b".repeat(64),
   MAPPING = "d".repeat(64),
   EXPORT = "e".repeat(64),
   ARTIFACT = "a".repeat(64);
-const REVIEWER = "synthetic_quality",
+const RETIRED_REVIEWER = "synthetic_quality",
   STAGER = "synthetic_stage";
 const RUNNER = {
   authenticationMethod: "workload-identity" as const,
@@ -65,7 +65,7 @@ let releaseDatabase: () => Promise<void>;
 let responses: unknown[];
 
 function principal(capability = "nutrition_catalogue_stage") {
-  const name = capability === "nutrition_catalogue_stage" ? STAGER : REVIEWER;
+  const name = capability === "nutrition_catalogue_stage" ? STAGER : RETIRED_REVIEWER;
   return {
     databasePrincipal: name,
     effectivePrincipal: name,
@@ -79,9 +79,9 @@ function accepted(requestDocument: string) {
   const requestSha256 = catalogueDocumentSha256V2(requestDocument, 131072);
   return {
     schemaVersion: 2,
-    admissionSha256: catalogueFramedSha256V2("admission", [requestSha256, REVIEWER]),
+    admissionSha256: catalogueFramedSha256V2("admission", [requestSha256, STAGER]),
     requestSha256,
-    admittedBy: REVIEWER,
+    admittedBy: STAGER,
     requestDocument,
   };
 }
@@ -232,12 +232,12 @@ describe("paged stage CLI admission boundaries", () => {
     expect(result.output).toEqual([]);
   });
 
-  it("submits only exact canonical bytes using the actual restricted quality-principal check", async () => {
+  it("submits only exact canonical bytes using the actual restricted stage-principal check", async () => {
     const fixture = await commandFixture(),
       pin = await retained({ schemaVersion: 2, requestDocument: fixture.document });
     const receipt = accepted(fixture.document),
       { requestDocument: _document, ...response } = receipt;
-    responses.push(principal("nutrition_catalogue_approve_quality"), response);
+    responses.push(principal(), response);
     const result = capture();
     mocks.destroy.mockImplementation(async () => {
       expect(result.output).toEqual([]);
@@ -291,10 +291,10 @@ describe("paged stage CLI admission boundaries", () => {
     expect(result.output).toEqual([]);
   });
 
-  it("rejects a stage-only login for quality admission before the mutation call", async () => {
+  it("rejects a retired reviewer-only login before the admission mutation", async () => {
     const fixture = await commandFixture(),
       pin = await retained({ schemaVersion: 2, requestDocument: fixture.document });
-    responses.push(principal());
+    responses.push(principal("nutrition_catalogue_approve_quality"));
     const result = capture();
     expect(await runCommand(admissionArgs(pin), result.io)).toBe(1);
     expect(mocks.query).toHaveBeenCalledOnce();
@@ -307,7 +307,7 @@ describe("paged stage CLI admission boundaries", () => {
     const fixture = await commandFixture(),
       pin = await retained({ schemaVersion: 2, requestDocument: fixture.document });
     const { requestDocument: _document, ...response } = accepted(fixture.document);
-    responses.push(principal("nutrition_catalogue_approve_quality"), response);
+    responses.push(principal(), response);
     mocks.destroy.mockRejectedValueOnce(new Error("synthetic cleanup failure"));
     const result = capture();
     expect(await runCommand(admissionArgs(pin), result.io)).toBe(1);
@@ -324,7 +324,13 @@ describe("paged stage CLI accepted-resource and cleanup boundaries", () => {
     const fixture = await commandFixture(),
       receipt = accepted(fixture.document),
       result = capture();
-    responses.push(principal(), receipt);
+    responses.push(
+      {
+        ...principal(),
+        capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"],
+      },
+      receipt,
+    );
     mocks.destroy.mockImplementation(async () => {
       expect(result.output).toEqual([]);
     });
@@ -368,7 +374,6 @@ describe("paged stage CLI accepted-resource and cleanup boundaries", () => {
     { canLogin: false },
     { effectivePrincipal: "assumed_stage" },
     { capabilities: ["nutrition_catalogue_validate"] },
-    { capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_approve_quality"] },
   ])("rejects unsafe actual session %j before admission read or snapshot", async (change) => {
     const fixture = await commandFixture(),
       result = capture();
