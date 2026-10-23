@@ -695,6 +695,32 @@ test("the approved staging exception accepts all four scans together without rew
   assert.deepEqual(data, before);
 });
 
+const HOSTED_JOURNEY_START = Date.parse("2026-10-23T22:16:12Z");
+const HOSTED_JOURNEY_END = Date.parse("2026-10-24T10:16:12Z");
+test("the separate hosted attempt retains only its two approved failed CI scans", () => {
+  const data = evidence();
+  for (const entry of [STAGING_FAILURE_CASES[0], STAGING_FAILURE_CASES[1]])
+    failedDependency(data, entry);
+  const before = clone(data);
+  for (const now of [HOSTED_JOURNEY_START, HOSTED_JOURNEY_END - 1])
+    assert.doesNotThrow(() => validateGitHubEvidence(data, context, now));
+  assert.deepEqual(data, before);
+  for (const now of [HOSTED_JOURNEY_START - 1, HOSTED_JOURNEY_END, Number.NaN])
+    assert.throws(() => validateGitHubEvidence(data, context, now));
+  const ci = data.requiredRuns.find((record) => record.workflow === "ci.yml");
+  assert.ok(ci);
+  assert.throws(() =>
+    validateJobs(ci.jobs, ci.run, "ci.yml", SHA, "production", HOSTED_JOURNEY_START),
+  );
+});
+for (const entry of [STAGING_FAILURE_CASES[2], STAGING_FAILURE_CASES[3]]) {
+  test(`the new hosted scope excludes the earlier allowance for ${entry[1]}`, () => {
+    const data = evidence();
+    failedDependency(data, entry);
+    assert.throws(() => validateGitHubEvidence(data, context, HOSTED_JOURNEY_START));
+  });
+}
+
 for (const mutation of [
   "missing-job",
   "missing-scan",
@@ -724,7 +750,8 @@ for (const mutation of [
       if (mutation === "unnamed-functional-failure")
         Object.assign(first(quality.steps), { name: undefined });
     }
-    assert.throws(() => validateGitHubEvidence(data, context, STAGING_POLICY_NOW));
+    for (const now of [STAGING_POLICY_NOW, HOSTED_JOURNEY_START])
+      assert.throws(() => validateGitHubEvidence(data, context, now));
   });
 }
 
@@ -767,4 +794,18 @@ test("the collector rejects approval expiry during collection using its final cl
     fixture.calls.filter((call) => call.url.includes(`/git/ref/heads/${BRANCH}`)).length,
     2,
   );
+});
+
+test("the collector rejects expiry of the separate hosted allowance on its final read", async () => {
+  const fixture = apiFixture("dependency-failure");
+  let reads = 0;
+  await assert.rejects(
+    collectGitHubEvidence({
+      ...context,
+      token: "private-token",
+      fetch: fixture.fetcher,
+      now: () => (++reads === 1 ? HOSTED_JOURNEY_START : HOSTED_JOURNEY_END),
+    }),
+  );
+  assert.ok(reads > 1);
 });

@@ -107,6 +107,24 @@ const STAGING_DEPENDENCY_FAILURES = [
   ],
 ] as const;
 
+// NOURISHING-HOSTED-JOURNEY-47C8898-20261023: approved through the delegated
+// Oracle-to-Gmail reply route at 2026-10-23T22:16:12Z. One staging attempt only.
+// The earlier interval above remains expired history and is not extended.
+const HOSTED_JOURNEY_APPROVAL_START = Date.parse("2026-10-23T22:16:12Z");
+const HOSTED_JOURNEY_APPROVAL_END = Date.parse("2026-10-24T10:16:12Z");
+const HOSTED_JOURNEY_FAILURES = [
+  [
+    "ci.yml",
+    "production dependency advisories",
+    "Reject high-severity production dependency advisories",
+  ],
+  [
+    "ci.yml",
+    "object-store vulnerabilities",
+    "Reject high or critical object-store vulnerabilities",
+  ],
+] as const;
+
 export function validateJobs(
   value: unknown,
   run: Run,
@@ -117,11 +135,14 @@ export function validateJobs(
 ): Row[] {
   const policy = WORKFLOW_POLICIES[workflow];
   need(policy && run.status === "completed");
-  const stagingApproval =
-    target === "staging" &&
-    Number.isFinite(now) &&
-    now >= STAGING_DEPENDENCY_APPROVAL_START &&
-    now < STAGING_DEPENDENCY_APPROVAL_END;
+  const allowedFailures =
+    target !== "staging" || !Number.isFinite(now)
+      ? []
+      : now >= STAGING_DEPENDENCY_APPROVAL_START && now < STAGING_DEPENDENCY_APPROVAL_END
+        ? STAGING_DEPENDENCY_FAILURES
+        : now >= HOSTED_JOURNEY_APPROVAL_START && now < HOSTED_JOURNEY_APPROVAL_END
+          ? HOSTED_JOURNEY_FAILURES
+          : [];
   let failedDependencyJob = false;
   const jobs = rows(value).map(row);
   need(jobs.length === Object.keys(policy).length);
@@ -138,11 +159,9 @@ export function validateJobs(
         job.head_sha === revision,
     );
     need(job.status === "completed");
-    const permittedFailure = stagingApproval
-      ? STAGING_DEPENDENCY_FAILURES.find(
-          ([file, name]) => file === workflow && name === job.name,
-        )?.[2]
-      : undefined;
+    const permittedFailure = allowedFailures.find(
+      ([file, name]) => file === workflow && name === job.name,
+    )?.[2];
     let failedDependencyStep = false;
     need(typeof job.started_at === "string" && typeof job.completed_at === "string");
     need(
