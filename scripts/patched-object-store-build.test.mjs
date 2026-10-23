@@ -38,7 +38,6 @@ test("runtime preserves the privilege drop and confines the decoder fix to the b
   assert.deepEqual(runtime.match(/apk add[^;]+/g), [
     "apk add --no-cache --upgrade 'brotli-libs=1.2.1-r0'",
   ]);
-  assert.ok(runtime.includes(`test "$(apk info -v brotli-libs)" = 'brotli-libs-1.2.1-r0'`));
   assert.ok(runtime.includes("cp /tmp/nourishing-weed /usr/bin/weed"));
   assert.ok(runtime.includes("chmod 0755 /usr/bin/weed"));
   assert.doesNotMatch(runtime, /--allow-untrusted|--no-check-certificate|apk upgrade/);

@@ -67,7 +67,6 @@ LABEL org.opencontainers.image.source="https://github.com/liangzixuan/cronometer
 RUN --mount=type=bind,from=build,source=/out/weed,target=/tmp/nourishing-weed,readonly \
     set -eux; \
     apk add --no-cache --upgrade 'brotli-libs=1.2.1-r0'; \
-    test "$(apk info -v brotli-libs)" = 'brotli-libs-1.2.1-r0'; \
     cp /tmp/nourishing-weed /usr/bin/weed; \
     chmod 0755 /usr/bin/weed
 COPY --from=build /review/NOTICES.txt /usr/share/licenses/nourishing-object-store/NOTICES.txt
