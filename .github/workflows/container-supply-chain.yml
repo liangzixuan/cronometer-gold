@@ -237,6 +237,8 @@ jobs:
           target: runtime
           platforms: linux/arm64
           pull: true
+          cache-from: type=gha,scope=node-runtime-linux-arm64,version=2
+          cache-to: type=gha,scope=node-runtime-linux-arm64,version=2,mode=max
           build-args: |
             NODE_SOURCE_BUILD_IMAGE=${{ env.NODE_SOURCE_BUILD_IMAGE }}
             NODE_CPP_RUNTIME_SOURCE_IMAGE=${{ env.NODE_CPP_RUNTIME_SOURCE_IMAGE }}
