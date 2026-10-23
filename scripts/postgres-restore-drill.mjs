@@ -38,7 +38,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "b27f3f04e607ffe7d0b7a4b155c3f9cfe4c235383ca0a6c83c50b4d87a062eb3";
+  "29e89da47cd176345fe045b33b2bfb0442b7c3336fa28201294c0b2c8222ecd0";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -590,7 +590,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303",
+      sourceSha256: "be0b69606769894428896f4dac560ec59d7e58306d5c32bb533aa95561d539be",
       strict: false,
       volatility: "v",
     },

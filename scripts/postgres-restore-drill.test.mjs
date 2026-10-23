@@ -264,7 +264,7 @@ test("tracks migrations through single-operator catalogue policy in the exact re
   assert.equal(migrationLedger.length, 34);
   assert.deepEqual(migrationLedger.at(-1), {
     name: "0034_single_operator_catalogue.sql",
-    checksum: "553af207369fd934a6f5da64c1af2596df7cbc29f9908509424e180e48756bee",
+    checksum: "88138df903a8e1e77344be86d84312634f1ea26b8e168f20e0fbf6ccfb9c1f3c",
   });
   assert.equal(
     migrationLedger.find((entry) => entry.name === "0025_manual_activity_ledger.sql")?.name,
@@ -3347,7 +3347,7 @@ test("shared target boundary definitions conserve exact existing SQL and immutab
   });
   assert.equal(
     createHash("sha256").update(AUTHORITY_POLICY_SQL).digest("hex"),
-    "b27f3f04e607ffe7d0b7a4b155c3f9cfe4c235383ca0a6c83c50b4d87a062eb3",
+    "29e89da47cd176345fe045b33b2bfb0442b7c3336fa28201294c0b2c8222ecd0",
   );
 });
 

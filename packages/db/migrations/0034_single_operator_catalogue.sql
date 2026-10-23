@@ -26,7 +26,7 @@ begin
       or capabilities[1] <> 'nutrition_catalogue_validate'$patch$,$patch$not coalesce('nutrition_catalogue_validate' = any(capabilities), false)$patch$),
     ('catalogue_promote_import_batch_v1','2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96','5c530927354957bb28fb7e0e233d04ce73f807e1ed0ec5f80acf6bf960f8e120',1,$patch$coalesce(pg_catalog.cardinality(catalogue_capabilities), 0) <> 1
       or catalogue_capabilities[1] <> 'nutrition_catalogue_promote_activate'$patch$,$patch$not coalesce('nutrition_catalogue_promote_activate' = any(catalogue_capabilities), false)$patch$),
-    ('catalogue_rollback_source_release_v1','a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915','4bf91bf7c1952578e788ee93372f59c8cf7164f42d6e8857e98ee66e7c481550',1,$patch$coalesce(pg_catalog.cardinality(catalogue_capabilities), 0) <> 1
+    ('catalogue_rollback_source_release_v1','1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303','be0b69606769894428896f4dac560ec59d7e58306d5c32bb533aa95561d539be',1,$patch$coalesce(pg_catalog.cardinality(catalogue_capabilities), 0) <> 1
       or catalogue_capabilities[1] <> 'nutrition_catalogue_rollback'$patch$,$patch$not coalesce('nutrition_catalogue_rollback' = any(catalogue_capabilities), false)$patch$),
     ('catalogue_require_preparation_role_v2','7a1284c7da1e999e2ac0c72eef8171f029c88986c423f2a1edb6b300260d38a1','85ddcd4c7882280045d10830d4dc04d153f2dc0e33d80609043579e38a8eec81',1,$patch$p_role is null or pg_catalog.cardinality(capabilities) is distinct from 1
     or capabilities[1] is distinct from p_role$patch$,$patch$p_role is null or not coalesce(p_role = any(capabilities), false)$patch$),

@@ -680,7 +680,7 @@ export function postgresAuthorityFixture(expectedOwner = "nutrition_owner") {
       },
       {
         ...functionSemantics(
-          "1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303",
+          "be0b69606769894428896f4dac560ec59d7e58306d5c32bb533aa95561d539be",
           "jsonb",
         ),
         acl: [acl(expectedOwner, "EXECUTE")],
