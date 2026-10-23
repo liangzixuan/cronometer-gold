@@ -56,6 +56,25 @@ test("independently signed six-image backend and v8 candidate validate with ephe
     );
   }
 });
+test("backend admission rejects legacy and unknown provenance even with a valid review", () => {
+  for (const predicateType of [
+    "https://slsa.dev/provenance/v0.2",
+    "https://slsa.dev/provenance/v2",
+  ]) {
+    const f = fixture();
+    const security = required(f.bundle.backendReports.security);
+    const details = security.details as {
+      imageChecks: { provenance: { predicateType: string } }[];
+    };
+    required(details.imageChecks[0]).provenance.predicateType = predicateType;
+    f.bundle.backend.reports.security = evidenceSha256(security);
+    f.bundle.backend = f.signRecord(f.bundle.backend);
+    assert.throws(
+      () => validateBackendAdmission(f.bundle, f.expected, f.trust),
+      /image_provenance_mismatch/,
+    );
+  }
+});
 test("checked-in reviewer trust rejects an unenrolled signed fixture", () => {
   const f = fixture();
   assert.throws(

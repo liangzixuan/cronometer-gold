@@ -141,7 +141,7 @@ export function fixture(target = "staging") {
         provenance: {
           subjectDigest: `sha256:${SHA}`,
           sourceRevision: REVISION,
-          predicateType: "https://slsa.dev/provenance/v0.2",
+          predicateType: "https://slsa.dev/provenance/v1",
           materialsSha256: SHA,
         },
         scan: {

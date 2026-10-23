@@ -395,7 +395,7 @@ export function validateBackendAdmission(
     if (
       check.provenance.subjectDigest !== digest ||
       check.provenance.sourceRevision !== backend.sourceRevision ||
-      check.provenance.predicateType !== "https://slsa.dev/provenance/v0.2"
+      check.provenance.predicateType !== "https://slsa.dev/provenance/v1"
     )
       fail("image_provenance_mismatch");
     hash(check.provenance.materialsSha256, "image_materials_unbound");
