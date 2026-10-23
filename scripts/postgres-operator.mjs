@@ -8,6 +8,7 @@ import {
   parseArtifactEncryptionKeyRing,
   snapshotPostgresBackupReadExpectation,
 } from "../packages/artifact-store/dist/index.js";
+import { snapshotDevelopmentRuntimePrincipals } from "./azure-development-runtime-database-policy.mjs";
 import { postgresBackupStorage } from "./postgres-backup-storage.mjs";
 import { heldOperatorInput } from "./postgres-operator-input.mjs";
 import { trustedPath } from "./postgres-operator-process.mjs";
@@ -613,6 +614,10 @@ export async function runPostgresOperator(args, { signal } = {}) {
       evidenceOptions = Object.freeze({
         expectedBackup: Object.freeze({ ...settings.expectedBackup }),
         expectedOwner: settings.expectedOwner,
+        runtimePrincipals: snapshotDevelopmentRuntimePrincipals(
+          settings.runtimePrincipals,
+          settings.expectedOwner,
+        ),
         maxDumpBytes: settings.maxDumpBytes,
         keyRing: { keys: new Map(keys.keys) },
       });

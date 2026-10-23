@@ -90,6 +90,15 @@ separate database/storage roles. Both auth link origins must be exactly
 worker uses production validation; both applications require the same admitted
 restore epoch and verified database TLS.
 
+For a database that has the maintained synthetic runtime grants, supply the same
+independently held `runtimePrincipals: { api, worker }` mapping in both backup and
+restore operator settings. Recovery validates the exact shared permission profile,
+keeps the complete source ACL fingerprint in the encrypted backup, and reapplies
+those table and column grants on the new fenced target before comparison. It does
+not grant runtime database CONNECT. Omitting the mapping retains the strict
+catalogue-only policy and rejects runtime ACLs. This profile is for development
+and staging; production does not accept it.
+
 Start the installed backend only after the applicable release admission:
 
 ```sh

@@ -1,17 +1,24 @@
 /** Exact privileges for the finite synthetic custom-food journey, not general runtime isolation. */
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { canonicalJson } from "../packages/contracts/dist/index.js";
 import {
   assertDatabaseMigrationLedgerReady,
   type createDatabase,
 } from "../packages/db/dist/index.js";
+import {
+  DEVELOPMENT_RUNTIME_COLUMN_UPDATES,
+  DEVELOPMENT_RUNTIME_DATABASE_POLICY_SHA256,
+  DEVELOPMENT_RUNTIME_DATABASE_PROFILE,
+  DEVELOPMENT_RUNTIME_RELATION_GROUPS,
+} from "./azure-development-runtime-database-policy.mjs";
 
 const require = createRequire(new URL("../packages/db/package.json", import.meta.url));
 const { sql } =
   require("kysely") as typeof import("../packages/db/node_modules/kysely/dist/index.js");
-const PROFILE = "synthetic-private-custom-food-journey-v1";
+const PROFILE = DEVELOPMENT_RUNTIME_DATABASE_PROFILE;
+const groups = DEVELOPMENT_RUNTIME_RELATION_GROUPS;
+const columns = DEVELOPMENT_RUNTIME_COLUMN_UPDATES;
+const policySha256 = DEVELOPMENT_RUNTIME_DATABASE_POLICY_SHA256;
 const rights = [
   "SELECT",
   "INSERT",
@@ -22,45 +29,6 @@ const rights = [
   "TRIGGER",
   "MAINTAIN",
 ] as const;
-const groups = {
-  api: [
-    [
-      "SELECT",
-      "app_schema_migration database_restore_attestation nutrient food_source food_source_release food_barcode promoted_food_search_catalogue_v1 food_search_projection_revision",
-    ],
-    [
-      "SELECT,INSERT,UPDATE",
-      "app_user user_password_credential user_profile user_session user_data_watermark diary diary_entry",
-    ],
-    ["SELECT,INSERT,UPDATE,DELETE", "auth_action_token"],
-    ["SELECT,UPDATE", "reauthentication_proof"],
-    ["INSERT", "audit_log outbox_event"],
-    [
-      "SELECT,INSERT",
-      "food food_version food_nutrient_value food_serving custom_food custom_food_version custom_food_version_nutrient retention_operation diary_operation diary_entry_revision diary_entry_revision_nutrient",
-    ],
-  ],
-  worker: [
-    [
-      "SELECT",
-      "app_schema_migration database_restore_attestation privacy_export_artifact promoted_food_search_catalogue_v1 food_barcode food_serving",
-    ],
-    [
-      "SELECT,UPDATE",
-      "privacy_export_job privacy_export_upload_artifact privacy_export_artifact_deletion account_erasure_job retention_dead_letter_event outbox_event food_search_projection_revision",
-    ],
-    ["SELECT,DELETE", "privacy_export_record privacy_export_entity_snapshot"],
-    ["INSERT", "retention_dead_letter_event"],
-  ],
-} as const;
-const columns = {
-  food: ["current_version_id"],
-  food_version: ["id"],
-  custom_food: ["current_revision"],
-};
-const policySha256 = createHash("sha256")
-  .update(canonicalJson({ profile: PROFILE, groups, columns }))
-  .digest("hex");
 type Principals = { readonly api: string; readonly worker: string };
 interface Target {
   readonly databaseName: string;

@@ -11,6 +11,7 @@ import {
   EXPORT_ENTITY_SPECS,
   USER_LINKED_EXPORT_EXCLUSIONS,
 } from "../packages/db/dist/retention-privacy-policy.js";
+import { DEVELOPMENT_RUNTIME_PRINCIPAL_QUERY } from "./azure-development-runtime-database-policy.mjs";
 import { postgresAuthorityFixture } from "./postgres-authority-fixture.mjs";
 import { canonicalizeRestoreAuthorityEvidence } from "./postgres-restore-drill.mjs";
 
@@ -204,6 +205,24 @@ export async function runtimeOperatorWire(state, files, storage) {
         ]);
       }
       assert.fail("Unmodeled restored replay SQL: " + sql);
+    }
+    if (text === DEVELOPMENT_RUNTIME_PRINCIPAL_QUERY) {
+      assert.deepEqual(values, [state.input.database.api, state.input.database.worker]);
+      return one(
+        [state.input.database.api, state.input.database.worker].sort().map((name) => ({
+          name,
+          login: true,
+          superuser: false,
+          createDb: false,
+          createRole: false,
+          replication: false,
+          bypassRls: false,
+          inherit: false,
+          connectionLimit: 16,
+          configuration: ["search_path=public"],
+          memberships: "0",
+        })),
+      );
     }
     if (client.config.database === state.input.database.databaseName) {
       if (text === "begin isolation level repeatable read read only") {
@@ -401,22 +420,78 @@ export async function runtimeOperatorWire(state, files, storage) {
               assert(raw.subarray(0, 5).equals(Buffer.from("PGDMP")));
               restored = JSON.parse(raw.subarray(5).toString());
               assert.deepEqual(restored, JSON.parse(JSON.stringify(exported)));
+              // Native --no-privileges omits both runtime table and column ACLs.
+              assert(argv.includes("--no-privileges"));
+              const base = policy.validAuthorityEvidence();
+              for (const relation of restored.authority.relations) {
+                relation.acl = relation.acl.filter(
+                  (row) =>
+                    ![state.input.database.api, state.input.database.worker].includes(row.grantee),
+                );
+                relation.acl_is_default =
+                  base.relations.find((row) => row.name === relation.name)?.acl_is_default ?? true;
+              }
+              restored.authority.columnAcls = [];
+              restored.authority.explicitColumnAclAttributeCount = "0";
             } else {
               assert.equal(file, files.tools.psql.path);
               assert(restored);
-              assert.equal(
-                raw.toString(),
+              const basePolicy =
                 'set role "' +
-                  state.input.database.owner +
-                  '";\n' +
-                  (await fs.readFile(
-                    new URL(
-                      "../packages/db/restore/0014_catalogue_authority_policy.sql",
-                      import.meta.url,
-                    ),
-                    "utf8",
-                  )),
-              );
+                state.input.database.owner +
+                '";\n' +
+                (await fs.readFile(
+                  new URL(
+                    "../packages/db/restore/0014_catalogue_authority_policy.sql",
+                    import.meta.url,
+                  ),
+                  "utf8",
+                ));
+              assert(raw.toString().startsWith(basePolicy));
+              const extra = raw.toString().slice(basePolicy.length).trim();
+              if (extra) {
+                const lines = extra.split("\n");
+                assert.equal(lines.shift(), "BEGIN;");
+                assert.equal(lines.pop(), "COMMIT;");
+                for (const line of lines) {
+                  const table =
+                    /^GRANT ([A-Z,]+) ON TABLE public\."([a-z][a-z0-9_]*)" TO "([a-z0-9_]+)";$/u.exec(
+                      line,
+                    );
+                  const column =
+                    /^GRANT UPDATE \(([^)]+)\) ON TABLE public\."([a-z][a-z0-9_]*)" TO "([a-z0-9_]+)";$/u.exec(
+                      line,
+                    );
+                  if (table) {
+                    const relation = restored.authority.relations.find(
+                      (row) => row.name === table[2],
+                    );
+                    assert(relation);
+                    relation.acl_is_default = false;
+                    for (const privilege of table[1].split(","))
+                      relation.acl.push(policy.acl(table[3], privilege));
+                  } else {
+                    assert(column);
+                    for (const name of column[1].split(",")) {
+                      assert(/^"[a-z_]+"$/u.test(name));
+                      restored.authority.columnAcls.push({
+                        relation_name: column[2],
+                        column_name: name.slice(1, -1),
+                        ...policy.acl(column[3], "UPDATE"),
+                      });
+                    }
+                  }
+                }
+                restored.authority.columnAcls.sort(
+                  (a, b) =>
+                    a.relation_name.localeCompare(b.relation_name) ||
+                    a.column_name.localeCompare(b.column_name) ||
+                    a.grantee.localeCompare(b.grantee),
+                );
+                restored.authority.explicitColumnAclAttributeCount = String(
+                  restored.authority.columnAcls.length,
+                );
+              }
               policyApplied = true;
             }
             status();

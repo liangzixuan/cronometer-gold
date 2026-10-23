@@ -81,13 +81,19 @@ export async function runtimeSeedSql(state) {
       for (const right of allowed) relation.acl.push(acl(role, right));
     }
     authority.columnAcls = [...columnGrants].flatMap(([k, columns]) => {
-      const [role, table_name] = k.split(":");
+      const [role, relation_name] = k.split(":");
       return columns.map((column_name) => ({
-        table_name,
+        relation_name,
         column_name,
-        acl: [acl(role, "UPDATE")],
+        ...acl(role, "UPDATE"),
       }));
     });
+    authority.columnAcls.sort(
+      (a, b) =>
+        a.relation_name.localeCompare(b.relation_name) ||
+        a.column_name.localeCompare(b.column_name) ||
+        a.grantee.localeCompare(b.grantee),
+    );
     authority.explicitColumnAclAttributeCount = String(authority.columnAcls.length);
   };
   const row = (table) => {

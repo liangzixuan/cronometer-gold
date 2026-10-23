@@ -28,6 +28,10 @@ import {
   postgresBackupPasswordFile,
 } from "../packages/db/dist/index.js";
 import {
+  developmentRuntimeRestoreGrantsSql,
+  snapshotDevelopmentRuntimePrincipals,
+} from "./azure-development-runtime-database-policy.mjs";
+import {
   POSTGRES_BACKUP_EVIDENCE_LIMITS,
   parsePostgresBackupEvidence,
 } from "./postgres-backup-evidence.mjs";
@@ -62,6 +66,7 @@ function settings(input) {
   const allowed = [
     "expectedBackup",
     "expectedOwner",
+    "runtimePrincipals",
     "keyRing",
     "storage",
     "tmpfsRoot",
@@ -101,8 +106,17 @@ function settings(input) {
   );
   for (const key of ["host", "port", "sslMode", "caCertificate"])
     requireValue(maintenanceConnection[key] === targetConnection[key]);
+  const runtimePrincipals = snapshotDevelopmentRuntimePrincipals(
+    input.runtimePrincipals,
+    input.expectedOwner,
+  );
+  requireValue(!runtimePrincipals || expected.deploymentTarget !== "production");
   const connectAllowlist = roles(input.connectAllowlist);
   const deniedRuntimePrincipals = roles(input.deniedRuntimePrincipals);
+  requireValue(
+    !runtimePrincipals ||
+      Object.values(runtimePrincipals).every((name) => deniedRuntimePrincipals.includes(name)),
+  );
   requireValue(
     connectAllowlist.includes(maintenanceConnection.user) &&
       connectAllowlist.includes(targetConnection.user),
@@ -162,6 +176,7 @@ function settings(input) {
   }
   return Object.freeze({
     ...input,
+    runtimePrincipals,
     storage,
     erasureReplay,
     expectedBackup: Object.freeze({ ...expected }),
@@ -465,7 +480,7 @@ export function snapshotPostgresRestoreAuthenticatedBackup(value, options, readE
     );
     // Recovery already verified the canonical manifest and complete dump. Keep
     // exact copied evidence, joined to that recovered manifest and selected backup.
-    parsePostgresBackupEvidence(sourceEvidence, options.expectedOwner);
+    parsePostgresBackupEvidence(sourceEvidence, options.expectedOwner, options.runtimePrincipals);
     const metadata = Object.freeze({
       envelopeVersion: observed.envelopeVersion,
       encryptionKeyId: observed.encryptionKeyId,
@@ -547,6 +562,7 @@ function authenticatedBackupSnapshot(recovered, options, readExpectation) {
       parsedEvidence: parsePostgresBackupEvidence(
         authenticatedBackup.sourceEvidence,
         options.expectedOwner,
+        options.runtimePrincipals,
       ),
       sourceEvidenceSha256: manifest.sourceEvidenceSha256,
       dumpBytes: manifest.dumpBytes,
@@ -666,6 +682,7 @@ async function targetEvidence(options, signal, epoch, oid) {
     await command(session, 'set role "' + options.expectedOwner + '"');
     const collector = await preparePostgresRestoreEvidence(session.query, {
       expectedOwner: options.expectedOwner,
+      runtimePrincipals: options.runtimePrincipals,
       signal: session.signal,
     });
     await command(session, "begin isolation level repeatable read read only");
@@ -876,7 +893,14 @@ export async function runPostgresRestore(input) {
     await boundary(admin, options, identity.oid, true);
     phase = "authority policy";
     const policy = Buffer.from(
-      'set role "' + options.expectedOwner + '";\n' + AUTHORITY_POLICY_SQL,
+      'set role "' +
+        options.expectedOwner +
+        '";\n' +
+        AUTHORITY_POLICY_SQL +
+        (options.runtimePrincipals
+          ? "\n" +
+            developmentRuntimeRestoreGrantsSql(options.runtimePrincipals, options.expectedOwner)
+          : ""),
     );
     requireValue(policy.byteLength <= 1_048_576);
     await runTool(

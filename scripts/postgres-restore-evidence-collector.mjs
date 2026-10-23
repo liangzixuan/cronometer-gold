@@ -1,4 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
+import {
+  DEVELOPMENT_RUNTIME_PRINCIPAL_QUERY,
+  snapshotDevelopmentRuntimePrincipals,
+  validateDevelopmentRuntimePrincipalAttributes,
+} from "./azure-development-runtime-database-policy.mjs";
 
 import {
   POSTGRES_BACKUP_EVIDENCE_LIMITS,
@@ -141,7 +146,11 @@ function executor(query, signal) {
  * caller starts the exported READ ONLY REPEATABLE READ snapshot. A failed
  * rollback leaves the connection unusable; the caller must close it.
  */
-export async function preparePostgresRestoreEvidence(query, { expectedOwner, signal } = {}) {
+export async function preparePostgresRestoreEvidence(
+  query,
+  { expectedOwner, signal, runtimePrincipals: inputPrincipals } = {},
+) {
+  const runtimePrincipals = snapshotDevelopmentRuntimePrincipals(inputPrincipals, expectedOwner);
   requireValue(
     typeof query === "function" && typeof expectedOwner === "string" && NAME.test(expectedOwner),
   );
@@ -214,6 +223,15 @@ export async function preparePostgresRestoreEvidence(query, { expectedOwner, sig
         ])) === expectedOwner,
       );
 
+      if (runtimePrincipals)
+        validateDevelopmentRuntimePrincipalAttributes(
+          await read(DEVELOPMENT_RUNTIME_PRINCIPAL_QUERY, [
+            runtimePrincipals.api,
+            runtimePrincipals.worker,
+          ]),
+          runtimePrincipals,
+          expectedOwner,
+        );
       const authority = {};
       for (const [name, definition] of Object.entries(RESTORE_EVIDENCE_QUERIES)) {
         const value = await read(definition.parts.join(" "));
@@ -265,8 +283,9 @@ export async function preparePostgresRestoreEvidence(query, { expectedOwner, sig
       };
       checkSignal(collectionSignal);
       return parsePostgresBackupEvidence(
-        serializePostgresBackupEvidence(evidence, expectedOwner),
+        serializePostgresBackupEvidence(evidence, expectedOwner, runtimePrincipals),
         expectedOwner,
+        runtimePrincipals,
       );
     },
   });

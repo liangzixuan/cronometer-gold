@@ -95,12 +95,13 @@ export function runtimeWireServices(t, state) {
       objects.delete(key);
       return response(request, 202);
     }
-    if (
-      request.method !== "PUT" ||
-      !["export-writer", "ledger-writer"].includes(role) ||
-      objects.has(key)
-    )
+    if (request.method !== "PUT" || !["export-writer", "ledger-writer"].includes(role))
       return denial(request);
+    if (objects.has(key))
+      return denial(
+        request,
+        role === "ledger-writer" ? "UnauthorizedBlobOverwrite" : "AuthorizationPermissionMismatch",
+      );
     if (u.searchParams.get("comp") === "block") {
       staged.set(key, Buffer.from(request.body));
       return response(request, 201);

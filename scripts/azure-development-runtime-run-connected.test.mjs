@@ -748,6 +748,9 @@ async function fastProtectedRecovery(t, options = {}) {
       assembly: { path: bundlePath, sha256: assembly.bundle_sha256 },
       settings: {
         ...settings,
+        ...(options.recoverRuntimeGrants
+          ? { runtimePrincipals: { api: f.input.database.api, worker: f.input.database.worker } }
+          : {}),
         tmpfsRoot: join(f.input.root, "tmpfs"),
         expectedOwner: f.input.database.owner,
       },
@@ -779,7 +782,7 @@ async function fastProtectedRecovery(t, options = {}) {
     deploymentTarget: "development",
     backupId: f.input.owner,
   };
-  if (options.earlyGrants) {
+  if (options.earlyGrants && !options.recoverRuntimeGrants) {
     const observed = f.operator.snapshot().authority;
     assert.equal(observed.explicitColumnAclAttributeCount, "3");
     assert(
@@ -847,8 +850,11 @@ test("fast protected recovery wire uses actual seed assembly collector crypto an
 test("protected recovery rejects a changed restored nutrient count, refences the target and publishes no accepted handoff", (t) =>
   fastProtectedRecovery(t, { countDrift: true }));
 
-test("actual protected backup observes runtime grants and refuses their pre-recovery authority drift", (t) =>
+test("protected backup without an independently selected runtime profile refuses runtime ACL drift", (t) =>
   fastProtectedRecovery(t, { earlyGrants: true }));
+
+test("protected encrypted backup restores exact selected runtime grants and replays while application traffic stays fenced", (t) =>
+  fastProtectedRecovery(t, { earlyGrants: true, recoverRuntimeGrants: true }));
 
 test("actual controller process remains visible through the synthetic native process seam", async (t) => {
   const f = await runtimeRunFixture(t, { validOperator: true });

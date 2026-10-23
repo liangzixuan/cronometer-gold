@@ -155,9 +155,12 @@ function aclRows(value) {
   uniqueIdentities(value, ["grantor", "grantee", "privilege"]);
 }
 
-function authorityProjection(authority) {
+function authorityProjection(authority, runtimePrincipals) {
   exactKeys(authority, AUTHORITY_KEYS);
-  requireEvidence(authority.version === 16 && authority.explicitColumnAclAttributeCount === "0");
+  requireEvidence(
+    authority.version === 16 &&
+      authority.explicitColumnAclAttributeCount === (runtimePrincipals ? "3" : "0"),
+  );
   for (const key of AUTHORITY_KEYS) {
     if (!["version", "schema", "explicitColumnAclAttributeCount"].includes(key)) {
       requireEvidence(Array.isArray(authority[key]));
@@ -250,7 +253,7 @@ function authorityProjection(authority) {
   // by the existing validator, including their keys and order.
 }
 
-function validateRecord(record, expectedOwner) {
+function validateRecord(record, expectedOwner, runtimePrincipals) {
   requireEvidence(typeof expectedOwner === "string" && NAME.test(expectedOwner));
   exactKeys(record, RECORD_KEYS);
   requireEvidence(record.formatVersion === FORMAT && record.expectedOwner === expectedOwner);
@@ -260,12 +263,12 @@ function validateRecord(record, expectedOwner) {
       SHA256.test(record.authorityFingerprintSha256),
   );
   const authority = canonicalDocument(record.authorityFingerprint);
-  authorityProjection(authority);
+  authorityProjection(authority, runtimePrincipals);
   requireEvidence(
     createHash("sha256").update(record.authorityFingerprint, "utf8").digest("hex") ===
       record.authorityFingerprintSha256,
   );
-  validateRestoreAuthorityEvidence(authority, expectedOwner);
+  validateRestoreAuthorityEvidence(authority, expectedOwner, runtimePrincipals);
   canonicalDocument(record.migrationLedger);
   requireEvidence(
     validateRestoreMigrationLedger(record.migrationLedger) === record.migrationLedger,
@@ -299,7 +302,7 @@ function validateRecord(record, expectedOwner) {
 }
 
 /** Serialize caller-collected evidence; this does not establish snapshot provenance. */
-export function serializePostgresBackupEvidence(evidence, expectedOwner) {
+export function serializePostgresBackupEvidence(evidence, expectedOwner, runtimePrincipals) {
   try {
     exactKeys(evidence, COLLECTED_KEYS);
     requireEvidence(
@@ -320,7 +323,7 @@ export function serializePostgresBackupEvidence(evidence, expectedOwner) {
         .sort((left, right) => (left.table < right.table ? -1 : left.table > right.table ? 1 : 0)),
     };
     boundJson(record);
-    validateRecord(record, expectedOwner);
+    validateRecord(record, expectedOwner, runtimePrincipals);
     const bytes = Buffer.from(canonicalizeRestoreAuthorityEvidence(record), "utf8");
     requireEvidence(bytes.length <= POSTGRES_BACKUP_EVIDENCE_LIMITS.bytes);
     return bytes;
@@ -330,7 +333,7 @@ export function serializePostgresBackupEvidence(evidence, expectedOwner) {
 }
 
 /** Validate authenticated bytes against current policy and an independently supplied owner. */
-export function parsePostgresBackupEvidence(bytes, expectedOwner) {
+export function parsePostgresBackupEvidence(bytes, expectedOwner, runtimePrincipals) {
   try {
     requireEvidence(
       Buffer.isBuffer(bytes) &&
@@ -339,7 +342,7 @@ export function parsePostgresBackupEvidence(bytes, expectedOwner) {
     );
     const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     const record = canonicalDocument(text);
-    return validateRecord(record, expectedOwner);
+    return validateRecord(record, expectedOwner, runtimePrincipals);
   } catch {
     throw new PostgresBackupEvidenceError();
   }

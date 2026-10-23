@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { projectDevelopmentRuntimeAuthority } from "./azure-development-runtime-database-policy.mjs";
 
 import {
   createRestoreEvidenceQueries,
@@ -2061,7 +2062,13 @@ export async function retainRestoreAuthorityConstraintMismatch(operation, direct
   }
 }
 
-export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
+export function validateRestoreAuthorityEvidence(evidence, expectedOwner, runtimePrincipals) {
+  evidence = projectDevelopmentRuntimeAuthority(
+    evidence,
+    expectedOwner,
+    runtimePrincipals,
+    PAGED_AUTHORITY_POLICY.tables,
+  );
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
   if (!evidence || typeof evidence !== "object" || evidence.version !== 16) {
     throw new Error("Database-authority fingerprint has an unsupported version");

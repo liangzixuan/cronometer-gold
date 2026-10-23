@@ -3,13 +3,13 @@ import { constants, createReadStream } from "node:fs";
 import { lstat, mkdir, mkdtemp, rm, statfs, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { finished } from "node:stream/promises";
-
 import { EncryptedPostgresBackupStore } from "../packages/artifact-store/dist/index.js";
 import {
   normalizePostgresBackupConnection,
   postgresBackupLibpqEnvironment,
   postgresBackupPasswordFile,
 } from "../packages/db/dist/index.js";
+import { snapshotDevelopmentRuntimePrincipals } from "./azure-development-runtime-database-policy.mjs";
 import { withPostgresBackupSnapshot } from "./postgres-backup-snapshot.mjs";
 import { createPostgresBackupRawStore, postgresBackupStorage } from "./postgres-backup-storage.mjs";
 import {
@@ -33,6 +33,7 @@ function inputSettings(input) {
   const allowed = [
     "connection",
     "expectedOwner",
+    "runtimePrincipals",
     "sourceRevision",
     "deploymentTarget",
     "backupId",
@@ -91,6 +92,11 @@ function inputSettings(input) {
       /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u.test(input.keyRing.currentKeyId),
   );
   requireValue(input.keyRing.keys.has(input.keyRing.currentKeyId));
+  const runtimePrincipals = snapshotDevelopmentRuntimePrincipals(
+    input.runtimePrincipals,
+    input.expectedOwner,
+  );
+  requireValue(!runtimePrincipals || input.deploymentTarget !== "production");
   const storage = postgresBackupStorage(input.storage, "backup", input.maxDumpBytes);
   const keys = new Map();
   for (const [id, bytes] of input.keyRing.keys) {
@@ -100,6 +106,7 @@ function inputSettings(input) {
   }
   return Object.freeze({
     ...input,
+    runtimePrincipals,
     storage,
     connection: normalizePostgresBackupConnection(input.connection),
     tools: Object.freeze(tools),
@@ -189,6 +196,7 @@ export async function runPostgresBackup(input) {
       {
         connection: options.connection,
         expectedOwner: options.expectedOwner,
+        runtimePrincipals: options.runtimePrincipals,
         timeoutMs: options.timeoutMs,
         signal: controller.signal,
       },

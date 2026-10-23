@@ -14,7 +14,7 @@ const failed = (phase) => new Error(`PostgreSQL backup snapshot ${phase} failed`
  * that ignores cancellation, and it does not execute or attest pg_dump.
  */
 export async function withPostgresBackupSnapshot(options, consume) {
-  const { expectedOwner, ...connection } = options ?? {};
+  const { expectedOwner, runtimePrincipals, ...connection } = options ?? {};
   if (
     typeof expectedOwner !== "string" ||
     !OWNER.test(expectedOwner) ||
@@ -30,6 +30,7 @@ export async function withPostgresBackupSnapshot(options, consume) {
   try {
     const collector = await preparePostgresRestoreEvidence(session.query, {
       expectedOwner,
+      runtimePrincipals,
       signal: session.signal,
     });
     phase = "export";
@@ -55,7 +56,11 @@ export async function withPostgresBackupSnapshot(options, consume) {
       throw failed("export");
     phase = "collection";
     const evidence = await collector.collect({ signal: session.signal });
-    const sourceEvidence = serializePostgresBackupEvidence(evidence, expectedOwner);
+    const sourceEvidence = serializePostgresBackupEvidence(
+      evidence,
+      expectedOwner,
+      runtimePrincipals,
+    );
     if (session.signal.aborted) throw failed("cancellation");
     phase = "consumer";
     result = await consume(Object.freeze({ snapshotId, sourceEvidence, signal: session.signal }));

@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  DEVELOPMENT_RUNTIME_COLUMN_UPDATES,
+  DEVELOPMENT_RUNTIME_RELATION_GROUPS,
+  validateDevelopmentRuntimePrincipalAttributes,
+} from "./azure-development-runtime-database-policy.mjs";
+import {
   acl,
   authorityConstraints,
   authorityFrozenColumns,
@@ -3368,4 +3373,148 @@ test("runtime fresh bootstrap preserves the maintained backup authority schema A
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     "Fresh owner-only backup must remain admissible before runtime grants",
   );
+});
+
+function selectedRuntimeAuthority() {
+  const observed = validAuthorityEvidence(),
+    principals = { api: "runtime_api", worker: "runtime_worker" };
+  for (const [role, groups] of Object.entries(DEVELOPMENT_RUNTIME_RELATION_GROUPS))
+    for (const [rights, names] of groups)
+      for (const name of names.split(" ")) {
+        let relation = observed.relations.find((row) => row.name === name);
+        if (!relation) {
+          relation = {
+            name,
+            kind: name === "promoted_food_search_catalogue_v1" ? "v" : "r",
+            owner: expectedOwner,
+            acl_is_default: true,
+            acl: [acl(expectedOwner, "SELECT")],
+          };
+          observed.relations.push(relation);
+        }
+        relation.acl_is_default = false;
+        for (const privilege of rights.split(","))
+          relation.acl.push(acl(principals[role], privilege));
+      }
+  observed.columnAcls = Object.entries(DEVELOPMENT_RUNTIME_COLUMN_UPDATES).flatMap(
+    ([relation_name, columns]) =>
+      columns.map((column_name) => ({
+        relation_name,
+        column_name,
+        ...acl(principals.api, "UPDATE"),
+      })),
+  );
+  observed.explicitColumnAclAttributeCount = "3";
+  return { observed, principals };
+}
+test("selected runtime backup keeps the complete ACL fingerprint and requires independent exact principals", () => {
+  const { observed, principals } = selectedRuntimeAuthority(),
+    before = structuredClone(observed);
+  validateRestoreAuthorityEvidence(observed, expectedOwner, principals);
+  assert.deepEqual(observed, before);
+  const evidence = completeBackupEvidence({ observedAuthority: observed }),
+    bytes = serializePostgresBackupEvidence(evidence, expectedOwner, principals);
+  const restored = parsePostgresBackupEvidence(bytes, expectedOwner, principals);
+  assert.equal(restored.authorityFingerprint, evidence.authorityFingerprint);
+  assert.throws(
+    () => parsePostgresBackupEvidence(bytes, expectedOwner),
+    PostgresBackupEvidenceError,
+  );
+  assert.throws(
+    () =>
+      parsePostgresBackupEvidence(bytes, expectedOwner, {
+        api: principals.worker,
+        worker: principals.api,
+      }),
+    PostgresBackupEvidenceError,
+  );
+});
+test("selected runtime backup rejects privilege drift and leaves its observed evidence intact", () => {
+  const mutations = [
+    (a) => a.columnAcls.pop(),
+    (a) => a.columnAcls.push({ ...a.columnAcls[0] }),
+    (a) => {
+      a.explicitColumnAclAttributeCount = "4";
+    },
+    (a) => {
+      a.columnAcls[0].grantable = true;
+    },
+    (a) => {
+      a.columnAcls[0].grantor = "other_owner";
+    },
+    (a) => {
+      a.columnAcls[0].grantee = "unexpected_reader";
+    },
+    (a) => {
+      a.columnAcls[0].privilege = "SELECT";
+    },
+    (a) => {
+      a.columnAcls[0].column_name = "unexpected_column";
+    },
+    (a) => {
+      a.columnAcls[0].extra = true;
+    },
+    (a) => {
+      const r = a.relations.find((r) => r.name === "diary");
+      r.acl.push(acl("runtime_api", "DELETE"));
+    },
+    (a) => {
+      const r = a.relations.find((r) => r.name === "diary");
+      r.acl = r.acl.filter((x) => x.grantee !== "runtime_api");
+    },
+    (a) => {
+      a.relations
+        .find((r) => r.name === "diary")
+        .acl.find((x) => x.grantee === "runtime_api").grantable = true;
+    },
+    (a) => {
+      a.relations.find((r) => r.name === "diary").acl_is_default = true;
+    },
+  ];
+  for (const mutate of mutations) {
+    const { observed, principals } = selectedRuntimeAuthority();
+    mutate(observed);
+    const before = structuredClone(observed);
+    assert.throws(() => validateRestoreAuthorityEvidence(observed, expectedOwner, principals));
+    assert.deepEqual(observed, before);
+  }
+});
+test("selected runtime backup refuses unsafe role attributes and role memberships", () => {
+  const principals = { api: "runtime_api", worker: "runtime_worker" },
+    rows = Object.values(principals).map((name) => ({
+      name,
+      login: true,
+      superuser: false,
+      createDb: false,
+      createRole: false,
+      replication: false,
+      bypassRls: false,
+      inherit: false,
+      connectionLimit: 16,
+      configuration: ["search_path=public"],
+      memberships: "0",
+    }));
+  validateDevelopmentRuntimePrincipalAttributes(JSON.stringify(rows), principals, expectedOwner);
+  for (const [key, value] of [
+    ["login", false],
+    ["superuser", true],
+    ["createDb", true],
+    ["createRole", true],
+    ["replication", true],
+    ["bypassRls", true],
+    ["inherit", true],
+    ["connectionLimit", -1],
+    ["configuration", ["search_path=public,unsafe"]],
+    ["memberships", "1"],
+  ]) {
+    const changed = structuredClone(rows);
+    changed[0][key] = value;
+    assert.throws(() =>
+      validateDevelopmentRuntimePrincipalAttributes(
+        JSON.stringify(changed),
+        principals,
+        expectedOwner,
+      ),
+    );
+  }
 });
