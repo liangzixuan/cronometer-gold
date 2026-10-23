@@ -335,7 +335,7 @@ export async function runAzureBlobCredentialCanary(
     await denied(exports, exports.observerSas, download(exportName));
     await denied(exports, exports.observerSas, overwrite(exportName));
     await denied(exports, exports.observerSas, remove(exportName));
-    await denied(ledger, ledger.writerSas, overwrite(ledgerName));
+    await denied(ledger, ledger.writerSas, overwrite(ledgerName), "UnauthorizedBlobOverwrite");
     await denied(ledger, ledger.writerSas, remove(ledgerName));
     await denied(ledger, ledger.writerSas, list(ledgerName));
     await denied(ledger, ledger.restoreSas, overwrite(ledgerName));

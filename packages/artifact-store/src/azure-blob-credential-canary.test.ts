@@ -146,7 +146,8 @@ async function service(request: PipelineRequest) {
     } else result = denial(request);
   } else if (request.method === "PUT" && !["export-writer", "ledger-writer"].includes(role))
     result = denial(request);
-  else if (request.method === "PUT" && objects.has(key)) result = denial(request);
+  else if (request.method === "PUT" && objects.has(key))
+    result = denial(request, "UnauthorizedBlobOverwrite");
   else if (request.method === "PUT" && u.searchParams.get("comp") === "block") {
     staged.set(key, Buffer.from(request.body as Uint8Array));
     result = response(request, 201);
@@ -212,6 +213,7 @@ describe("executable Azure credential canary through the actual SDK", () => {
   it.each([
     [403, "AuthenticationFailed"],
     [403, "AuthorizationFailure"],
+    [403, "UnauthorizedBlobOverwrite"],
     [404, "BlobNotFound"],
     [500, "InternalError"],
     [412, "ConditionNotMet"],
