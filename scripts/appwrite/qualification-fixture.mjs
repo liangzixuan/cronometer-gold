@@ -199,9 +199,9 @@ export function fixture(target = "staging") {
       worker: { sourceRevision: REVISION, heartbeatAt: OBSERVED, queueConnected: true },
       storage: {
         credentialPrincipalSha256: isolation.storagePrincipalSha256,
-        putHttpStatus: 200,
+        putHttpStatus: 201,
         getHttpStatus: 200,
-        deleteHttpStatus: 204,
+        deleteHttpStatus: 202,
       },
     }),
   };

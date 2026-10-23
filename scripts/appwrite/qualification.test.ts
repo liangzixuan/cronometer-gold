@@ -75,6 +75,22 @@ test("backend admission rejects legacy and unknown provenance even with a valid 
     );
   }
 });
+test("Azure storage readiness rejects legacy create and delete statuses after review", () => {
+  for (const replacement of [{ putHttpStatus: 200 }, { deleteHttpStatus: 204 }]) {
+    const f = fixture();
+    const readiness = required(f.bundle.backendReports.readiness);
+    const details = readiness.details as {
+      storage: { putHttpStatus: number; deleteHttpStatus: number };
+    };
+    Object.assign(details.storage, replacement);
+    f.bundle.backend.reports.readiness = evidenceSha256(readiness);
+    f.bundle.backend = f.signRecord(f.bundle.backend);
+    assert.throws(
+      () => validateBackendAdmission(f.bundle, f.expected, f.trust),
+      /storage_readiness_invalid/,
+    );
+  }
+});
 test("checked-in reviewer trust rejects an unenrolled signed fixture", () => {
   const f = fixture();
   assert.throws(

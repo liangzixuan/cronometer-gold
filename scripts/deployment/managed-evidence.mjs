@@ -584,9 +584,9 @@ export function validateBackendAdmission(
   if (
     details.readiness.storage.credentialPrincipalSha256 !==
       backend.isolation.storagePrincipalSha256 ||
-    details.readiness.storage.putHttpStatus !== 200 ||
+    details.readiness.storage.putHttpStatus !== 201 ||
     details.readiness.storage.getHttpStatus !== 200 ||
-    details.readiness.storage.deleteHttpStatus !== 204
+    details.readiness.storage.deleteHttpStatus !== 202
   )
     fail("storage_readiness_invalid");
   return backend;
