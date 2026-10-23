@@ -60,6 +60,14 @@ LABEL org.opencontainers.image.source="https://github.com/liangzixuan/cronometer
       io.cronometer.upstream.image.digest="sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882" \
       io.cronometer.module-lock.sha256="e4a99de72a8abd1892d0a266772f3dfaaa16e35c5662fde137e2c169b5a49850" \
       io.cronometer.grpc.version="v1.85.0-dev.0.20260825072537-93e31b48545e"
-# Preserve the upstream entrypoint, companions and its drop to seaweed UID/GID 1000.
-COPY --from=build /out/weed /usr/bin/weed
+# Keep the upstream entrypoint, companions and its drop to seaweed UID/GID 1000.
+# Alpine published this compatible decoder fix on 2026-10-22, before the 24h floor.
+# Install only the pinned library through the signed repositories. The read-only
+# build mount copies the verified weed binary in the same derived runtime layer.
+RUN --mount=type=bind,from=build,source=/out/weed,target=/tmp/nourishing-weed,readonly \
+    set -eux; \
+    apk add --no-cache --upgrade 'brotli-libs=1.2.1-r0'; \
+    test "$(apk info -v brotli-libs)" = 'brotli-libs-1.2.1-r0'; \
+    cp /tmp/nourishing-weed /usr/bin/weed; \
+    chmod 0755 /usr/bin/weed
 COPY --from=build /review/NOTICES.txt /usr/share/licenses/nourishing-object-store/NOTICES.txt

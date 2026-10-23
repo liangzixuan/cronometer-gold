@@ -10,7 +10,7 @@ const dockerfile = read("object-store.Dockerfile");
 const lockText = read("object-store-modules.json");
 const lock = JSON.parse(lockText);
 const hash = (text) => createHash("sha256").update(text).digest("hex");
-test("pins original release source, approved builder and upstream runtime without installing packages", () => {
+test("pins original release source, approved builder and the exact runtime library fix", () => {
   assert.ok(dockerfile.includes(`ARG GO_IMAGE=${PATCHED_STORE.goImage}`));
   assert.doesNotMatch(dockerfile, /-trimpath/);
   assert.ok(
@@ -24,17 +24,25 @@ test("pins original release source, approved builder and upstream runtime withou
       `https://codeload.github.com/seaweedfs/seaweedfs/tar.gz/${OBJECT_STORE_IMAGE.sourceRevision}`,
     ),
   );
-  assert.doesNotMatch(
-    dockerfile,
-    /\b(?:apk add|apt-get|go mod tidy|go mod edit|go get|GOSUMDB=off)\b/,
-  );
+  assert.doesNotMatch(dockerfile, /\b(?:apt-get|go mod tidy|go mod edit|go get|GOSUMDB=off)\b/);
 });
-test("runtime preserves the entrypoint privilege drop and adds only weed and required notices", () => {
+test("runtime preserves the privilege drop and confines the decoder fix to the binary layer", () => {
   const runtime = dockerfile.split(/FROM \$\{UPSTREAM_IMAGE\} AS runtime/)[1];
   assert.ok(runtime);
-  assert.doesNotMatch(runtime, /^(?:RUN|USER|ENTRYPOINT|CMD|ENV|WORKDIR|VOLUME|EXPOSE)\s/m);
+  assert.doesNotMatch(runtime, /^(?:USER|ENTRYPOINT|CMD|ENV|WORKDIR|VOLUME|EXPOSE)\s/m);
+  assert.equal(runtime.match(/^RUN /gm)?.length, 1);
+  assert.match(
+    runtime,
+    /RUN --mount=type=bind,from=build,source=\/out\/weed,target=\/tmp\/nourishing-weed,readonly/,
+  );
+  assert.deepEqual(runtime.match(/apk add[^;]+/g), [
+    "apk add --no-cache --upgrade 'brotli-libs=1.2.1-r0'",
+  ]);
+  assert.ok(runtime.includes(`test "$(apk info -v brotli-libs)" = 'brotli-libs-1.2.1-r0'`));
+  assert.ok(runtime.includes("cp /tmp/nourishing-weed /usr/bin/weed"));
+  assert.ok(runtime.includes("chmod 0755 /usr/bin/weed"));
+  assert.doesNotMatch(runtime, /--allow-untrusted|--no-check-certificate|apk upgrade/);
   assert.deepEqual(runtime.match(/^COPY .+$/gm), [
-    "COPY --from=build /out/weed /usr/bin/weed",
     "COPY --from=build /review/NOTICES.txt /usr/share/licenses/nourishing-object-store/NOTICES.txt",
   ]);
   assert.ok(runtime.includes(`io.cronometer.module-lock.sha256="${hash(lockText)}"`));

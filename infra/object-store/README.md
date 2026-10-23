@@ -12,7 +12,12 @@ authenticated build input and the unchanged local Compose pin; it is not accepte
 for new execution. Local AMD64 qualification needs separate approval.
 
 The native ARM64 CI build uses exact SeaweedFS 4.47 source with the reviewed gRPC
-fix, preserving the upstream runtime files and replacing only `/usr/bin/weed`.
+fix, preserving the upstream runtime configuration and replacing `/usr/bin/weed`.
+Its binary layer also updates only Alpine `brotli-libs` to `1.2.1-r0` through the
+signed repositories, to resolve the demonstrated decoder scan failure. Alpine's
+ARM64 package was published October 22, 2026 at 05:01 UTC, over 24 hours before
+selection. The original runtime layers and two derived layers remain required;
+the entrypoint, environment and privilege drop remain unchanged.
 The module inputs under `infra/docker/object-store.*` are immutable build inputs.
 Go must verify their checksums and build without changing the reviewed graph.
 The separate build evidence retains the resolved graph, sums and binary identity.

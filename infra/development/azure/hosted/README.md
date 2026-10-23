@@ -21,7 +21,9 @@ blank-disk formatting, package versions, key/credential custody, network and DNS
 changes, image qualification, service operation, recovery and cleanup. The existing
 empty-host Terraform plan and its shutdown rule are not permission for these
 steps. Do not extend a consumed approval or leave the VM beyond its approved time.
-Existing release, provenance, reviewer, backup and Appwrite admission gates apply.
+Keep automated release, provenance, backup and Appwrite admission checks. One
+authorized operator records the actual observations; no human review or signature
+is required.
 
 ## First installation
 
@@ -132,8 +134,8 @@ can start. This source does not implement unattended key release.
 
 Create/configure the existing Appwrite project's staging Site through the maintained
 release path, using `https://staging-api.nourishing.app` as its HTTPS upstream and
-`https://staging.nourishing.app` as its web origin. Preserve the existing signed
-prepare/activate gates. Prove sign-in, search or creation of a food, logging, edit
+`https://staging.nourishing.app` as its web origin. Keep source-bound automated
+prepare/activate checks and software provenance. Prove sign-in, search or creation of a food, logging, edit
 and reload, then restart the backend and read the same diary through Appwrite
 while the PC is disconnected. Also finish the required cross-owner, dependency
 privacy and downloaded encrypted-backup restore checks. Until those operations
