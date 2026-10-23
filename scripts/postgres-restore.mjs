@@ -705,7 +705,7 @@ async function targetEvidence(options, signal, epoch, oid) {
       await scalar(
         session,
         "select coalesce(pg_catalog.json_agg(pg_catalog.json_build_object(" +
-          "'restore_epoch_hash',restore_epoch_hash,'database_oid',database_oid,'database_name',database_name))::text,'[]')" +
+          "'restore_epoch_hash',restore_epoch_hash,'database_oid',database_oid::text,'database_name',database_name))::text,'[]')" +
           " from public.database_restore_attestation where singleton=true",
       ),
     );

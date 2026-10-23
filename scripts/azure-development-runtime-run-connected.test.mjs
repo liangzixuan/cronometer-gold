@@ -725,6 +725,19 @@ async function fastProtectedRecovery(t, options = {}) {
   } finally {
     await database.destroy();
   }
+  if (options.recoverRuntimeGrants)
+    f.sql.tables.set("database_restore_attestation", [
+      {
+        singleton: true,
+        restore_epoch_hash: "0".repeat(64),
+        database_oid: "12345",
+        database_name: f.input.database.databaseName,
+        replayed_subject_count: "0",
+        reconciliation_digest: "1".repeat(64),
+        completed_at: new Date(),
+        updated_at: new Date(),
+      },
+    ]);
   const bundlePath = join(f.input.root, "recovery/fast-bundle.json"),
     now = new Date().toISOString();
   const args = [

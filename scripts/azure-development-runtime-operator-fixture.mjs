@@ -318,7 +318,16 @@ export async function runtimeOperatorWire(state, files, storage) {
       state.restoreCountDriftObserved = true;
       return one(String(restored.tables.nutrient.length + 1));
     }
-    if (text.includes("from public.database_restore_attestation")) return one([]);
+    if (text.includes("from public.database_restore_attestation"))
+      return one(
+        restored.tables.database_restore_attestation.map((row) => ({
+          restore_epoch_hash: row.restore_epoch_hash,
+          database_name: row.database_name,
+          database_oid: text.includes("database_oid::text")
+            ? String(row.database_oid)
+            : Number(row.database_oid),
+        })),
+      );
     if (text === "rollback") client.transaction = false;
     client.adapter ??= fromSnapshot(restored);
     client.adapter.identity.database = target.name;

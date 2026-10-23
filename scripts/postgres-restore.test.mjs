@@ -473,7 +473,13 @@ state.database = async (client, input) => {
     return one(
       state.mode === "attestation-shape"
         ? [{ database_name: {} }]
-        : [{ restore_epoch_hash: "0".repeat(64), database_oid: "123", database_name: "nutrition" }],
+        : [
+            {
+              restore_epoch_hash: "0".repeat(64),
+              database_oid: text.includes("database_oid::text") ? "123" : 123,
+              database_name: "nutrition",
+            },
+          ],
     );
   }
   if (state.mode === "count" && text.startsWith('select count(*) from public."'))
