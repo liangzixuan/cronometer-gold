@@ -208,7 +208,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           rightsManifestSha256: rightsSha,
           validationDigest: "a".repeat(64),
         }),
-      ).rejects.toThrow("without live-reviewed evidence");
+      ).rejects.toThrow("Catalogue approval authority in trusted schema public failed attestation");
       await expect(
         promoteBatch(database, {
           batchId: fixture.batchId,
@@ -502,7 +502,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         requireAtLeastOneValidRecord: false,
         requireMaterializedNutrientPerValidRecord: true,
       });
-      await approveAll(
+      await assertNoHumanApprovals(
         database,
         expiringCompletedBatch.batchId,
         expiringSummary.validationDigest,
@@ -549,7 +549,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           rightsManifestSha256: rightsSha,
           validationDigest: "a".repeat(64),
         }),
-      ).rejects.toThrow("with expired evidence");
+      ).rejects.toThrow("Catalogue approval authority in trusted schema public failed attestation");
       await expect(
         promoteBatch(database, {
           batchId: expired.batchId,
@@ -1523,14 +1523,14 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           ) volatile
         `.execute(database);
       }
-      await approveBatch(database, dataApproval);
-      await approveBatch(database, dataApproval);
+      await expect(approveBatch(database, dataApproval)).rejects.toThrow("failed attestation");
+      await expect(approveBatch(database, dataApproval)).rejects.toThrow("failed attestation");
       await expect(
         approveBatch(database, {
           ...dataApproval,
           approvalReference: `review://data/${firstBatch.batchId}/mismatch`,
         }),
-      ).rejects.toThrow(`Batch ${firstBatch.batchId} already has a different immutable approval`);
+      ).rejects.toThrow("failed attestation");
       expect(
         await database
           .selectFrom("food_import_approval")
@@ -1538,14 +1538,13 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           .where("batch_id", "=", firstBatch.batchId)
           .where("approval_role", "=", "data")
           .execute(),
-      ).toEqual([
-        {
-          approval_reference: dataApproval.approvalReference,
-          database_capability_role: null,
-          database_principal: null,
-        },
-      ]);
-      await approveAll(database, firstBatch.batchId, firstSummary.validationDigest, rightsSha);
+      ).toEqual([]);
+      await assertNoHumanApprovals(
+        database,
+        firstBatch.batchId,
+        firstSummary.validationDigest,
+        rightsSha,
+      );
 
       const firstPromotion = await promoteBatch(database, {
         batchId: firstBatch.batchId,
@@ -1645,7 +1644,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         sourceRecordCount: 1,
       });
       const staleMappingSummary = await validateBatch(database, staleMappingBatch.batchId, policy);
-      await approveAll(
+      await assertNoHumanApprovals(
         database,
         staleMappingBatch.batchId,
         staleMappingSummary.validationDigest,
@@ -1722,7 +1721,12 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         sourceRecordCount: 1,
       });
       const secondSummary = await validateBatch(database, secondBatch.batchId, policy);
-      await approveAll(database, secondBatch.batchId, secondSummary.validationDigest, rightsSha);
+      await assertNoHumanApprovals(
+        database,
+        secondBatch.batchId,
+        secondSummary.validationDigest,
+        rightsSha,
+      );
       const secondPromotion = await promoteBatch(database, {
         batchId: secondBatch.batchId,
         performedBy: "service:catalogue-promoter",
@@ -2005,7 +2009,12 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         firstBefore,
       );
 
-      await approveAll(database, firstBatch.batchId, firstSummary.validationDigest, rightsSha);
+      await assertNoHumanApprovals(
+        database,
+        firstBatch.batchId,
+        firstSummary.validationDigest,
+        rightsSha,
+      );
       const firstPromotion = await promoteBatch(database, {
         batchId: firstBatch.batchId,
         performedBy: "service:catalogue-promoter",
@@ -2422,7 +2431,12 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         stagedCount: 0,
         validCount: 0,
       });
-      await approveAll(database, emptyBatch.batchId, emptySummary.validationDigest, rightsSha);
+      await assertNoHumanApprovals(
+        database,
+        emptyBatch.batchId,
+        emptySummary.validationDigest,
+        rightsSha,
+      );
       const emptyPromotion = await promoteBatch(database, {
         batchId: emptyBatch.batchId,
         performedBy: "service:catalogue-promoter",
@@ -2552,7 +2566,7 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         baselineBatch.batchId,
         permissiveEmptyPolicy,
       );
-      await approveAll(
+      await assertNoHumanApprovals(
         database,
         baselineBatch.batchId,
         baselineSummary.validationDigest,
@@ -2977,7 +2991,12 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         sourceCode: ownerCode,
       });
       const ownerSummary = await validateBatch(database, ownerBatch.batchId);
-      await approveAll(database, ownerBatch.batchId, ownerSummary.validationDigest, rightsSha);
+      await assertNoHumanApprovals(
+        database,
+        ownerBatch.batchId,
+        ownerSummary.validationDigest,
+        rightsSha,
+      );
       const ownerPromotion = await promoteBatch(database, {
         batchId: ownerBatch.batchId,
         performedBy: "service:catalogue-promoter",
@@ -3135,7 +3154,12 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         ],
       });
 
-      await approveAll(database, targetBatch.batchId, targetSummary.validationDigest, rightsSha);
+      await assertNoHumanApprovals(
+        database,
+        targetBatch.batchId,
+        targetSummary.validationDigest,
+        rightsSha,
+      );
       const targetPromotion = await promoteBatch(database, {
         batchId: targetBatch.batchId,
         performedBy: "service:catalogue-promoter",
@@ -4023,28 +4047,31 @@ async function activeBarcodeCountForSource(
   return result.count;
 }
 
-async function approveAll(
+async function assertNoHumanApprovals(
   database: Parameters<typeof approveBatch>[0],
   batchId: string,
   validationDigest: string,
   rightsManifestSha256: string,
   trustedSchema?: string,
 ) {
-  for (const [approvalRole, principalId] of [
-    ["data", "principal:data-review"],
-    ["quality", "principal:quality-review"],
-    ["rights", "principal:rights-review"],
-  ] as const) {
-    await approveBatch(database, {
-      approvalReference: `review://${approvalRole}/${batchId}`,
-      approvalRole,
-      batchId,
-      principalId,
-      rightsManifestSha256,
-      ...(trustedSchema ? { trustedSchema } : {}),
-      validationDigest,
-    });
-  }
+  const scoped = trustedSchema ? database.withSchema(trustedSchema) : database;
+  expect(
+    await scoped
+      .selectFrom("food_import_batch")
+      .select(["validation_digest", "rights_manifest_sha256"])
+      .where("id", "=", batchId)
+      .executeTakeFirstOrThrow(),
+  ).toMatchObject({
+    validation_digest: validationDigest,
+    rights_manifest_sha256: rightsManifestSha256,
+  });
+  expect(
+    await scoped
+      .selectFrom("food_import_approval")
+      .select("id")
+      .where("batch_id", "=", batchId)
+      .execute(),
+  ).toEqual([]);
 }
 
 async function createHistoricalSnapshot(

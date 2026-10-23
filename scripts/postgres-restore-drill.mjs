@@ -38,7 +38,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "29e89da47cd176345fe045b33b2bfb0442b7c3336fa28201294c0b2c8222ecd0";
+  "28f38b102ad502f6dda5a31521d8984032d277b48fedcef6cf7b5cd5371ce5d1";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",

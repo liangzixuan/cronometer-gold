@@ -2647,7 +2647,8 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         expect(await readTriggers()).toEqual(beforeTriggers);
       }
 
-      expect(await runMigrations(database)).toEqual({
+      await writeFile(join(directory, migration.name), migration.sql, { flag: "wx" });
+      expect(await runMigrations(database, { directory })).toEqual({
         applied: [migration.name],
         alreadyApplied: migrations.slice(0, migrationIndex).map((row) => row.name),
       });
@@ -2658,9 +2659,9 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         },
       ]);
       expect(await readTriggers()).toEqual(beforeTriggers);
-      expect(await runMigrations(database)).toEqual({
+      expect(await runMigrations(database, { directory })).toEqual({
         applied: [],
-        alreadyApplied: migrations.map((row) => row.name),
+        alreadyApplied: migrations.slice(0, migrationIndex + 1).map((row) => row.name),
       });
       expect(await readTriggers()).toEqual(beforeTriggers);
     } finally {

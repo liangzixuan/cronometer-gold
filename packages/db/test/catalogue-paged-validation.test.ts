@@ -222,8 +222,11 @@ describe("paged catalogue validation V2", () => {
       /or \(item->>'portionInputCount'\)::bigint<>\(case\b[^;]+end\) then/u,
     );
   });
-  it("begins only after asserting actual independent singleton validator authority", async () => {
-    const f = fixture([PRINCIPAL, context()]);
+  it("begins only after asserting the actual authorized validator identity", async () => {
+    const f = fixture([
+      { ...PRINCIPAL, capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"] },
+      context(),
+    ]);
     await expect(
       beginCatalogueValidationV2(f.database, {
         batchId: BATCH,
@@ -240,7 +243,6 @@ describe("paged catalogue validation V2", () => {
     { privileged: true },
     { effectivePrincipal: "assumed" },
     { capabilities: ["nutrition_catalogue_stage"] },
-    { capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"] },
   ])("rejects invalid runtime identity before observing: %j", async (change) => {
     const f = fixture([{ ...PRINCIPAL, ...change }]);
     await expect(prepareCatalogueValidationPageV2(f.database, context())).rejects.toThrow();

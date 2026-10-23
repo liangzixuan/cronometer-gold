@@ -3347,7 +3347,7 @@ test("shared target boundary definitions conserve exact existing SQL and immutab
   });
   assert.equal(
     createHash("sha256").update(AUTHORITY_POLICY_SQL).digest("hex"),
-    "29e89da47cd176345fe045b33b2bfb0442b7c3336fa28201294c0b2c8222ecd0",
+    "28f38b102ad502f6dda5a31521d8984032d277b48fedcef6cf7b5cd5371ce5d1",
   );
 });
 
