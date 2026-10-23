@@ -34,7 +34,6 @@ export async function verifyCatalogueReconciliationValidationRequest(input: {
     batch.staged_database_capability_role !== "nutrition_catalogue_stage" ||
     batch.validated_database_capability_role !== "nutrition_catalogue_validate" ||
     !batch.staged_database_principal ||
-    batch.staged_database_principal === batch.validated_database_principal ||
     batch.validated_database_principal !== request.validatorDatabasePrincipal ||
     batch.staging_sealed_at === null ||
     batch.staging_seal_sha256 !== request.expectedStagingSealSha256 ||

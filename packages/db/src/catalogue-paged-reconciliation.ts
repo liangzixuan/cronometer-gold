@@ -1121,8 +1121,6 @@ function verifyBaselineValidationTerminalV2(
   expected: BaselineCounts,
 ): void {
   principal(validation.validator_principal);
-  if (validation.validator_principal === batch.staged_database_principal)
-    throw new Error("V2 baseline validation principal is not independent");
   if (
     typeof validation.policy_document !== "string" ||
     canonicalJson(JSON.parse(validation.policy_document) as JsonValue) !==

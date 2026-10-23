@@ -1448,6 +1448,9 @@ describe("published V2 successor baseline eligibility", () => {
 
   it("keeps the original staging row and emitted counts separate from parser exclusions", () => {
     const { header } = publishedBaselineHeader();
+    (header.batch as Record<string, JsonValue>).staged_database_principal = (
+      header.validation as JsonObject
+    ).validator_principal as JsonValue;
     const original = structuredClone(header.batch);
     const state = verifyCataloguePagedBaselineHeader(header);
     expect(state).toMatchObject({

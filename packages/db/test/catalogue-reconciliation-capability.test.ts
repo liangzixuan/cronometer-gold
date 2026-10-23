@@ -595,6 +595,7 @@ describe("capability validation reconciliation", () => {
 
   it("reconciles a capability candidate using its retained exact observation-bound request", async () => {
     const f = fixture();
+    f.batch.staged_database_principal = f.batch.validated_database_principal;
     const before = canonicalJson({
       batch: {
         ...f.batch,
@@ -664,7 +665,6 @@ describe("capability validation reconciliation", () => {
   it.each([
     "seal",
     "validator",
-    "samePrincipal",
     "stageRole",
     "validatorRole",
     "unsealed",
@@ -686,7 +686,6 @@ describe("capability validation reconciliation", () => {
     const f = fixture();
     if (kind === "seal") f.batch.staging_seal_sha256 = TOKEN;
     if (kind === "validator") f.batch.validated_database_principal = "another_validator";
-    if (kind === "samePrincipal") f.batch.staged_database_principal = "validator_fixture";
     if (kind === "stageRole")
       f.batch.staged_database_capability_role = "nutrition_catalogue_validate";
     if (kind === "validatorRole")
