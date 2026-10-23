@@ -173,7 +173,7 @@ const authorityFunctions = [
 }[];
 
 describeDatabase("catalogue stage and validate database authority", { timeout: 180_000 }, () => {
-  it("separates authenticated staging from validation and seals every handoff", async () => {
+  it("authenticates each staging and validation capability and seals every handoff", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     assertLoopbackDatabaseUrl(databaseUrl);
 
@@ -398,7 +398,6 @@ describeDatabase("catalogue stage and validate database authority", { timeout: 1
       const mainStageDocumentText = canonicalJson(mainStageDocument as unknown as JsonObject);
       await expectPostgresCode(stageImportBatch(unassignedClient, mainStageDocumentText), "42501");
       await expectPostgresCode(stageImportBatch(validateClient, mainStageDocumentText), "42501");
-      await expectPostgresCode(stageImportBatch(multiClient, mainStageDocumentText), "42501");
 
       const staged = await stageImportBatch(stageClient, mainStageDocumentText);
       expect(staged).toMatchObject({
@@ -601,7 +600,9 @@ describeDatabase("catalogue stage and validate database authority", { timeout: 1
       await stageParserReport(stageClient, driftStage.batchId, driftParserDocument.document);
 
       await expectPostgresCode(observeValidation(unassignedClient, staged.batchId), "42501");
-      await expectPostgresCode(observeValidation(multiClient, staged.batchId), "42501");
+      expect((await observeValidation(multiClient, staged.batchId)).observation.batch.id).toBe(
+        staged.batchId,
+      );
 
       await sql`
         revoke nutrition_catalogue_stage from ${sql.id(fixtures.stage.login)}
@@ -610,10 +611,8 @@ describeDatabase("catalogue stage and validate database authority", { timeout: 1
         grant nutrition_catalogue_validate to ${sql.id(fixtures.stage.login)}
         with admin false, inherit true, set false
       `.execute(bootstrap);
-      await expectPostgresCode(
-        observeValidation(stageClient, staged.batchId),
-        "42501",
-        "requires a distinct authenticated validator",
+      expect((await observeValidation(stageClient, staged.batchId)).observation.batch.id).toBe(
+        staged.batchId,
       );
 
       const observation = await observeValidation(validateClient, staged.batchId);
@@ -1294,7 +1293,6 @@ function buildQuarantineValidationDocument(
     maximumQuarantineFraction: 1,
     maximumQuarantinedRecords: 1,
     requireAtLeastOneValidRecord: false,
-    requireDistinctApprovalPrincipals: true,
     requireMaterializedNutrientPerValidRecord: true,
   };
   const issues: readonly never[] = [];

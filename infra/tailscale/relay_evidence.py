@@ -4,8 +4,8 @@ The module is deliberately non-collecting.  It reads reviewer-supplied files,
 validates structural and continuity contracts, and emits redacted canonical
 JSON.  It never invokes Tailscale, PowerShell, WSL, Docker, a browser, a probe,
 or an administrative command.  The production adapter registry is empty until
-an exact Windows Tailscale version and raw output corpus are independently
-reviewed.
+an exact Windows Tailscale version and raw output corpus pass automated
+adapter checks.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ NORMALIZED_CORPUS_RESULT_SCHEMA = "nutrition-tracker-tailscale-normalized-corpus
 ADAPTER_PLATFORM = "windows-host"
 TEST_ADAPTER_PREFIX = "test-"
 UNSIGNED_TRUST_BOUNDARY = (
-    "unsigned-structural-candidate-requires-independent-ed25519-manifest-review"
+    "source-and-artifact-bound-measurement"
 )
 ORIGIN_COMMITMENT_DOMAIN = "nutrition-tracker-physical-device-api-origin-v1"
 ORIGIN_COMMITMENT_VECTOR_ORIGIN = "https://relay.example.ts.net"
@@ -2348,7 +2348,7 @@ def _parser() -> argparse.ArgumentParser:
         "--acknowledge-unsigned-candidate",
         action="store_true",
         required=True,
-        help="Acknowledge that independent Ed25519 manifest review remains required",
+        help="Acknowledge that structural normalization does not execute or authenticate observations",
     )
     return parser
 
@@ -2359,7 +2359,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         normalized_output = normalize_relay_report_candidate(parsed.capture_index)
         sys.stdout.buffer.write(normalized_output)
         sys.stderr.write(
-            "Unsigned structural candidate only; independent trusted Ed25519 manifest review remains required.\n"
+            "Structural relay measurement only; actual observations and automated health-release checks remain required.\n"
         )
         return 0
     except RelayEvidenceError as error:

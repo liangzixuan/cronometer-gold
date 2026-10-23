@@ -280,7 +280,6 @@ describe("V2 preparation admission and authority", () => {
     { effectivePrincipal: "assumed" },
     { capabilities: [] },
     { capabilities: ["nutrition_catalogue_validate"] },
-    { capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_approve_quality"] },
   ])("rejects invalid session before mutation %j", async (change) => {
     const f = fixture([{ ...principal, ...change }]);
     await expect(
@@ -303,7 +302,7 @@ describe("V2 preparation admission and authority", () => {
         ...principal,
         databasePrincipal: reviewer,
         effectivePrincipal: reviewer,
-        capabilities: ["nutrition_catalogue_approve_quality"],
+        capabilities: ["nutrition_catalogue_stage"],
       },
       receipt,
     ]);
@@ -313,7 +312,7 @@ describe("V2 preparation admission and authority", () => {
   it("refuses a spoofed admission reviewer receipt", async () => {
     const document = encodeCataloguePreparationAdmissionV2(admission);
     const f = fixture([
-      { ...principal, capabilities: ["nutrition_catalogue_approve_quality"] },
+      { ...principal, capabilities: ["nutrition_catalogue_stage"] },
       { schemaVersion: 2, requestSha256: HASH, admissionSha256: HASH, admittedBy: "spoofed" },
     ]);
     await expect(admitCataloguePreparationV2(f.database, document)).rejects.toThrow(

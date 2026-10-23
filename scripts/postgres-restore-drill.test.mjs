@@ -258,13 +258,13 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migrations through recipe coverage grouping in the exact restore ledger", () => {
+test("tracks migrations through single-operator catalogue policy in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 33);
+  assert.equal(migrationLedger.length, 34);
   assert.deepEqual(migrationLedger.at(-1), {
-    name: "0033_recipe_coverage_reference_grouping.sql",
-    checksum: "a9a817a1d65283dea2469d76912052c460e28afe06239e2d8a77316607dafa4c",
+    name: "0034_single_operator_catalogue.sql",
+    checksum: "553af207369fd934a6f5da64c1af2596df7cbc29f9908509424e180e48756bee",
   });
   assert.equal(
     migrationLedger.find((entry) => entry.name === "0025_manual_activity_ledger.sql")?.name,
@@ -345,12 +345,12 @@ test("rejects PUBLIC execute and wrong fixed-purpose capability grants", () => {
     /authority function .*ACL/,
   );
 
-  const missingReviewer = validAuthorityEvidence();
-  authorityFunction(missingReviewer).acl = authorityFunction(missingReviewer).acl.filter(
-    (entry) => entry.grantee !== "nutrition_catalogue_approve_rights",
+  const retiredReviewerGrant = validAuthorityEvidence();
+  authorityFunction(retiredReviewerGrant).acl.push(
+    acl("nutrition_catalogue_approve_rights", "EXECUTE"),
   );
   assert.throws(
-    () => validateRestoreAuthorityEvidence(missingReviewer, expectedOwner),
+    () => validateRestoreAuthorityEvidence(retiredReviewerGrant, expectedOwner),
     /authority function .*ACL/,
   );
 
@@ -1287,10 +1287,11 @@ test("pins the exact versioned policy bytes", () => {
   );
 });
 
-test("pins the complete 139-row PostgreSQL constraint digest captured by the schema diagnostic", () => {
+test("pins the 138-row constraint digest after the single-operator migration", () => {
   const evidence = validAuthorityEvidence();
-  // PostgreSQL 17.6, ADR0104 schema-only diagnostic, 2026-09-21. This digest
-  // covers every name, definition, type and validated flag, in collector order.
+  // Original PostgreSQL 17.6 diagnostic plus migration 0034: remove the
+  // preparation person-separation check and preserve every other pinned field.
+  // Publication constraints are checked separately below.
   const canonicalRows = evidence.authorityConstraints
     .filter((entry) => !entry.table_name.startsWith("catalogue_publication"))
     .map((entry) => ({
@@ -1300,10 +1301,10 @@ test("pins the complete 139-row PostgreSQL constraint digest captured by the sch
       table_name: entry.table_name,
       validated: entry.validated,
     }));
-  assert.equal(canonicalRows.length, 139);
+  assert.equal(canonicalRows.length, 138);
   assert.equal(
     createHash("sha256").update(JSON.stringify(canonicalRows)).digest("hex"),
-    "b48b3ba4782856d7518260928bab8640d5524a3c7c5206d7e29f6e796a4da94a",
+    "9af867ffc45db112519bccccf8e594b504663813030217eadf6afbbfc23719e7",
   );
   assert.doesNotThrow(() => validateRestoreAuthorityEvidence(evidence, expectedOwner));
 });
@@ -3346,7 +3347,7 @@ test("shared target boundary definitions conserve exact existing SQL and immutab
   });
   assert.equal(
     createHash("sha256").update(AUTHORITY_POLICY_SQL).digest("hex"),
-    "36a171d19a95ba183dc99269694fe7c48f7b13826499850b01a82492905ec3dc",
+    "b27f3f04e607ffe7d0b7a4b155c3f9cfe4c235383ca0a6c83c50b4d87a062eb3",
   );
 });
 

@@ -1519,7 +1519,6 @@ function buildValidationDocument(
     maximumQuarantineFraction: 0,
     maximumQuarantinedRecords: 0,
     requireAtLeastOneValidRecord: true,
-    requireDistinctApprovalPrincipals: true,
     requireMaterializedNutrientPerValidRecord: true,
   };
   const validatedFoodDocument = canonicalJson(validatedFood);

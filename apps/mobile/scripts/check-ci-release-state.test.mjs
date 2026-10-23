@@ -13,7 +13,6 @@ import {
 
 const f = fixture("production");
 const confirmedDeployment = f.deployment;
-const deploymentReviewerTrustStore = f.trust;
 const deploymentRuntime = {
   gitHead: () => REVISION,
   gitStatus: () => "",
@@ -128,7 +127,6 @@ describe("CI release state", () => {
         },
         runCommand,
         deploymentRuntime,
-        deploymentReviewerTrustStore,
       ),
     ).toThrow(/required/u);
     expect(runCommand).not.toHaveBeenCalled();
@@ -146,7 +144,6 @@ describe("CI release state", () => {
         },
         runCommand,
         deploymentRuntime,
-        deploymentReviewerTrustStore,
       ),
     ).toThrow(/exactly match/u);
     expect(runCommand).not.toHaveBeenCalled();
@@ -164,7 +161,6 @@ describe("CI release state", () => {
         },
         runCommand,
         deploymentRuntime,
-        deploymentReviewerTrustStore,
       ),
     ).toEqual({ mode: "release", output: "release export" });
     expect(runCommand).toHaveBeenCalledWith("pnpm", ["build:release"]);

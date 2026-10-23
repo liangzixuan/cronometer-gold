@@ -413,7 +413,7 @@ class P0ClientSmokeTests(unittest.TestCase):
         self.assertEqual(result.stdout, raw)
         self.assertEqual(
             result.stderr,
-            b"Unsigned synthetic P0 smoke candidate only; independent trusted Ed25519 health-manifest review remains required.\n",
+            b"Structural P0 smoke measurement only; actual observations and automated health-release checks remain required.\n",
         )
 
     def test_reference_documents_every_role_flow_and_unsigned_boundary(self) -> None:
@@ -430,7 +430,7 @@ class P0ClientSmokeTests(unittest.TestCase):
             SMOKE.UNSIGNED_TRUST_BOUNDARY,
             "mode `0600`",
             "does not authenticate",
-            "independent reviewer",
+            "One operator",
         ):
             self.assertIn(phrase, reference)
 

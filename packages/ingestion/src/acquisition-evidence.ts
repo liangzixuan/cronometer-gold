@@ -869,22 +869,10 @@ function parseAuthenticatedReleaseEvidenceBundleSnapshot(
     "Retained-object policy does not cover the authority evidence validity window",
   );
 
-  const reviewerPrincipal = normalizedPrincipal(
-    authorityDecision.reviewerClaims.reviewerPrincipalId,
-  );
-  invariant(
-    !acquisitionAndStoragePrincipals.has(reviewerPrincipal),
-    "INVALID_ARTIFACT",
-    "Authority reviewer principal must differ from acquisition and storage principals",
-  );
-  const reviewerSubject = authenticatedSubjectKey(
+  normalizedPrincipal(authorityDecision.reviewerClaims.reviewerPrincipalId);
+  authenticatedSubjectKey(
     authorityDecision.reviewerClaims.issuer,
     authorityDecision.reviewerClaims.subject,
-  );
-  invariant(
-    !acquisitionAndStorageSubjects.has(reviewerSubject),
-    "INVALID_ARTIFACT",
-    "Authority reviewer identity must differ from acquisition and storage identities",
   );
 
   return deepFreeze({

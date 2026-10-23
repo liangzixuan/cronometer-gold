@@ -12,7 +12,6 @@ const DEFAULT_POLICY: BatchValidationPolicy = {
   maximumExcludedNutrientFraction: 0,
   maximumQuarantineFraction: 0.1,
   maximumQuarantinedRecords: 100_000,
-  requireDistinctApprovalPrincipals: true,
   requireAtLeastOneValidRecord: true,
   requireMaterializedNutrientPerValidRecord: true,
 };
@@ -41,7 +40,6 @@ describe("catalogue batch policy normalization", () => {
         maximumExcludedNutrientFraction: null,
         maximumQuarantineFraction: null,
         maximumQuarantinedRecords: null,
-        requireDistinctApprovalPrincipals: null,
         requireAtLeastOneValidRecord: null,
         requireMaterializedNutrientPerValidRecord: null,
       }),
@@ -53,7 +51,6 @@ describe("catalogue batch policy normalization", () => {
       maximumExcludedNutrientFraction: fraction,
       maximumQuarantineFraction: fraction,
       maximumQuarantinedRecords: 0,
-      requireDistinctApprovalPrincipals: false,
       requireAtLeastOneValidRecord: false,
       requireMaterializedNutrientPerValidRecord: false,
     };
@@ -90,13 +87,14 @@ describe("catalogue batch policy normalization", () => {
     },
   );
 
-  it.each([
-    "requireAtLeastOneValidRecord",
-    "requireMaterializedNutrientPerValidRecord",
-    "requireDistinctApprovalPrincipals",
-  ])("rejects a non-boolean %s", (key) => {
-    expect(() => normalizePolicy({ [key]: "false" })).toThrow(new Error(`${key} must be boolean`));
-  });
+  it.each(["requireAtLeastOneValidRecord", "requireMaterializedNutrientPerValidRecord"])(
+    "rejects a non-boolean %s",
+    (key) => {
+      expect(() => normalizePolicy({ [key]: "false" })).toThrow(
+        new Error(`${key} must be boolean`),
+      );
+    },
+  );
 
   it("reports the first invalid field in the existing validation order", () => {
     const policy: Record<string, JsonValue> = {
@@ -105,7 +103,6 @@ describe("catalogue batch policy normalization", () => {
       maximumQuarantinedRecords: -1,
       requireAtLeastOneValidRecord: "false",
       requireMaterializedNutrientPerValidRecord: "false",
-      requireDistinctApprovalPrincipals: "false",
     };
     const errors = [
       ["maximumExcludedNutrientFraction", "must be between 0 and 1"],
@@ -113,7 +110,6 @@ describe("catalogue batch policy normalization", () => {
       ["maximumQuarantinedRecords", "must be a non-negative safe integer"],
       ["requireAtLeastOneValidRecord", "must be boolean"],
       ["requireMaterializedNutrientPerValidRecord", "must be boolean"],
-      ["requireDistinctApprovalPrincipals", "must be boolean"],
     ];
     for (const [key, message] of errors) {
       if (key === undefined) throw new Error("Missing policy field");

@@ -26,7 +26,6 @@ const POLICY: BatchValidationPolicy = {
   maximumQuarantineFraction: 0.1,
   maximumQuarantinedRecords: 100,
   requireAtLeastOneValidRecord: true,
-  requireDistinctApprovalPrincipals: true,
   requireMaterializedNutrientPerValidRecord: true,
 };
 

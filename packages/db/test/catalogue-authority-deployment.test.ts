@@ -16,6 +16,7 @@ import {
   CATALOGUE_AUTHORITY_TRIGGER_POLICY,
   CATALOGUE_CAPABILITY_ROLES,
   CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_OPERATOR_CAPABILITIES,
   CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_REVIEWER_CAPABILITIES,
   CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
@@ -50,9 +51,7 @@ const rawPolicy = {
   effectiveLoginAllowlist: [
     "nutrition_api",
     "nutrition_app",
-    "nutrition_catalogue_data_reviewer",
-    "nutrition_catalogue_quality_reviewer",
-    "nutrition_catalogue_rights_reviewer",
+    "nutrition_catalogue_operator",
     "nutrition_catalogue_unassigned_canary",
     "nutrition_worker",
   ],
@@ -64,13 +63,9 @@ const rawPolicy = {
   observeValidationFunctionSourceSha256: CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
   policyKind: "catalogue-authority-deployment",
   promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
-  reviewerLogins: {
-    data: "nutrition_catalogue_data_reviewer",
-    quality: "nutrition_catalogue_quality_reviewer",
-    rights: "nutrition_catalogue_rights_reviewer",
-  },
+  operatorLogin: "nutrition_catalogue_operator",
   rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-  schemaVersion: 8,
+  schemaVersion: 9,
   stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
   stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
   stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -87,22 +82,17 @@ function validEvidence(
     grantor,
     privilege,
   });
-  const memberships = Object.entries(CATALOGUE_REVIEWER_CAPABILITIES).map(
-    ([reviewerClass, role]) => ({
-      adminOption: false,
-      grantor: policy.databaseOwner,
-      inheritOption: true,
-      member:
-        policy.reviewerLogins[
-          reviewerClass as keyof CatalogueAuthorityDeploymentPolicy["reviewerLogins"]
-        ],
-      role,
-      setOption: false,
-    }),
-  );
-  const reviewerLogins = Object.values(policy.reviewerLogins);
+  const memberships = CATALOGUE_OPERATOR_CAPABILITIES.map((role) => ({
+    adminOption: false,
+    grantor: policy.databaseOwner,
+    inheritOption: true,
+    member: policy.operatorLogin,
+    role,
+    setOption: false,
+  }));
+  const operatorLogins = [policy.operatorLogin];
   const nonReviewerLogins = Object.values(policy.nonReviewerLogins);
-  const verifierLogins = [policy.databaseOwner, ...reviewerLogins, ...nonReviewerLogins];
+  const verifierLogins = [policy.databaseOwner, ...operatorLogins, ...nonReviewerLogins];
   const relationAcl = [
     "DELETE",
     "INSERT",
@@ -198,7 +188,7 @@ function validEvidence(
         acl(policy.databaseOwner, policy.databaseOwner, "CONNECT"),
         acl(policy.databaseOwner, policy.databaseOwner, "CREATE"),
         acl(policy.databaseOwner, policy.databaseOwner, "TEMPORARY"),
-        ...[...reviewerLogins, ...nonReviewerLogins].map((login) =>
+        ...[...operatorLogins, ...nonReviewerLogins].map((login) =>
           acl(login, policy.databaseOwner, "CONNECT"),
         ),
       ],
@@ -212,9 +202,10 @@ function validEvidence(
           index === 0
             ? "catalogue-authority-deploy-zero-owner"
             : `catalogue-authority-deploy-zero-${
-                Object.entries({ ...policy.reviewerLogins, ...policy.nonReviewerLogins }).find(
-                  ([, candidate]) => candidate === login,
-                )?.[0]
+                Object.entries({
+                  operator: policy.operatorLogin,
+                  ...policy.nonReviewerLogins,
+                }).find(([, candidate]) => candidate === login)?.[0]
               }`,
         login,
         pid: 100 + index,
@@ -222,8 +213,8 @@ function validEvidence(
     },
     defaultAcls: [],
     logins: [
-      ...reviewerLogins.map((name) => ({
-        approvalFunctionExecute: true,
+      ...operatorLogins.map((name) => ({
+        approvalFunctionExecute: false,
         bypassRls: false,
         canCreateDatabase: false,
         canCreateRole: false,
@@ -296,7 +287,7 @@ function validEvidence(
           owner: policy.databaseOwner,
         })),
       ),
-    schemaVersion: 8,
+    schemaVersion: 9,
     types: [
       {
         acl: [
@@ -367,7 +358,7 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {
         ...validEvidence(policy),
-        schemaVersion: 7 as 8,
+        schemaVersion: 8 as 9,
       }),
     ).toThrow(/evidence identity differs/u);
   });
@@ -385,17 +376,14 @@ describe("catalogue authority deployment policy", () => {
 
   it.each([
     ["secret field", { ...rawPolicy, password: "must-not-appear" }],
-    [
-      "unsafe login",
-      { ...rawPolicy, reviewerLogins: { ...rawPolicy.reviewerLogins, data: "bad-name" } },
-    ],
+    ["unsafe login", { ...rawPolicy, operatorLogin: "bad-name" }],
     [
       "duplicate login",
       {
         ...rawPolicy,
         nonReviewerLogins: {
           ...rawPolicy.nonReviewerLogins,
-          api: rawPolicy.reviewerLogins.data,
+          api: rawPolicy.operatorLogin,
         },
       },
     ],
@@ -421,9 +409,7 @@ describe("catalogue authority deployment policy", () => {
   it("rejects membership, privilege, ACL, session, and structure drift", () => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     const base = validEvidence(policy);
-    const dataRole = base.capabilityRoles.find(
-      (role) => role.name === "nutrition_catalogue_approve_data",
-    );
+    const dataRole = base.capabilityRoles.find((role) => role.name === "nutrition_catalogue_stage");
     if (!dataRole) throw new Error("data role fixture is missing");
     const firstTrigger = base.triggers[0];
     if (!firstTrigger) throw new Error("trigger fixture is missing");
@@ -559,7 +545,7 @@ describe("catalogue authority deployment policy", () => {
           {
             columnName: "approval_role",
             grantable: false,
-            grantee: policy.reviewerLogins.data,
+            grantee: policy.operatorLogin,
             grantor: policy.databaseOwner,
             privilege: "INSERT",
             relationName: "food_import_approval",
@@ -911,16 +897,13 @@ describe("catalogue authority deployment policy", () => {
       beforeStructureSha256: structureSha256,
       policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
       results: [
-        { canary: "data-matching", sqlstate: "23503" },
-        { canary: "quality-matching", sqlstate: "23503" },
-        { canary: "rights-matching", sqlstate: "23503" },
-        { canary: "data-requesting-quality", sqlstate: "42501" },
+        { canary: "operator-validation", sqlstate: "23503" },
         { canary: "api-execute", sqlstate: "42501" },
         { canary: "unassigned-execute", sqlstate: "42501" },
         { canary: "worker-execute", sqlstate: "42501" },
-        { canary: "data-direct-dml", sqlstate: "42501" },
+        { canary: "operator-direct-dml", sqlstate: "42501" },
       ],
-      schemaVersion: 8,
+      schemaVersion: 9,
       structure,
     } as const;
 
@@ -928,7 +911,7 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityCanaryEvidence(policy, {
         ...evidence,
-        schemaVersion: 7 as 8,
+        schemaVersion: 8 as 9,
       }),
     ).toThrow(/canary evidence identity differs/u);
     expect(() =>

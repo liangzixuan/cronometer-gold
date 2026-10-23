@@ -44,7 +44,6 @@ const policy = {
   maximumQuarantineFraction: 0,
   maximumQuarantinedRecords: 0,
   requireAtLeastOneValidRecord: true,
-  requireDistinctApprovalPrincipals: true,
   requireMaterializedNutrientPerValidRecord: true,
 };
 function context(): Context {
@@ -105,8 +104,6 @@ function args(command = "validate-paged") {
     "--maximum-quarantined-records",
     "0",
     "--require-at-least-one-valid-record",
-    "true",
-    "--require-distinct-approval-principals",
     "true",
     "--require-materialized-nutrient-per-valid-record",
     "true",
@@ -272,7 +269,6 @@ describe("paged validation command recovery and cleanup", () => {
   });
   it.each([
     ["--maximum-quarantine-fraction", "1.5"],
-    ["--require-distinct-approval-principals", "false"],
     ["--staging-seal-sha256", "A".repeat(64)],
   ])("rejects invalid policy or identity %s before a connection", async (key, value) => {
     const values = args();

@@ -38,7 +38,7 @@ test("Appwrite deployment contracts and types", { timeout: 180_000 }, () => {
     assert.match(result.stdout, new RegExp(`# ${field} 0\\n`));
   assert.doesNotMatch(result.stderr, /skipping running files/);
 
-  const artifact = spawnSync("python3", ["scripts/appwrite/review-artifact.test.py"], {
+  const artifact = spawnSync("python3", ["scripts/appwrite/evidence-artifact.test.py"], {
     cwd: root,
     env,
     encoding: "utf8",

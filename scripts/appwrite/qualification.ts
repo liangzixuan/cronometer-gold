@@ -2,12 +2,11 @@ import { createHash } from "node:crypto";
 import {
   configurationSha256,
   loadManagedPolicy,
-  loadReviewerTrustStore,
   type QualificationBundle,
   QualificationEvidenceError,
   readQualificationBundle,
   validateBackendAdmission,
-  validateCaptureReview,
+  validateCaptureObservation,
   validateManagedDeployment,
   validateStagingIsolation,
 } from "../deployment/managed-evidence.mjs";
@@ -34,8 +33,6 @@ export type LiveReadinessObservation = {
 export type QualificationDependencies = {
   now?: () => number;
   fetch?: typeof globalThis.fetch;
-  // Tests may inject ephemeral public keys. CLI wiring never accepts a trust-store argument.
-  trustStore?: unknown;
   policy?: unknown;
   readBundle?: (path: string) => QualificationBundle;
 };
@@ -169,7 +166,6 @@ export function createQualificationVerifier(
 ): QualificationVerifier & { readinessObservations: () => readonly LiveReadinessObservation[] } {
   const now = dependencies.now ?? Date.now;
   const request = dependencies.fetch ?? globalThis.fetch;
-  const trust = dependencies.trustStore ?? loadReviewerTrustStore();
   const policy = dependencies.policy ?? loadManagedPolicy();
   const read = dependencies.readBundle ?? readQualificationBundle;
   const observations: LiveReadinessObservation[] = [];
@@ -188,11 +184,10 @@ export function createQualificationVerifier(
     config: TargetConfig,
     stagingProbe = false,
   ) => {
-    validateCaptureReview(bundle.captureReview, githubCapture(context, now()), trust);
+    validateCaptureObservation(bundle.captureObservation, githubCapture(context, now()));
     const admitted = validateBackendAdmission(
       bundle,
       backendContext(config, context, now()),
-      trust,
       policy,
     );
     observations.push(
@@ -226,7 +221,6 @@ export function createQualificationVerifier(
             output: context.output,
             sourceArchiveSha256: context.source.archiveSha256,
           },
-          trust,
           policy,
         );
       }),
@@ -248,7 +242,6 @@ export function createQualificationVerifier(
         const production = validateBackendAdmission(
           bundle,
           backendContext(context.config, context, now()),
-          trust,
           policy,
         );
         const staged = await backend(bundle.staging, context, staging.config, true);
@@ -263,7 +256,6 @@ export function createQualificationVerifier(
             output: staging.output,
             sourceArchiveSha256: context.source.archiveSha256,
           },
-          trust,
           policy,
         );
       }),

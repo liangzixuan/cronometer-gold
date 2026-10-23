@@ -121,7 +121,6 @@ describe("catalogue stage capability wrappers", () => {
     { effectivePrincipal: "assumed_stage" },
     { capabilities: [] },
     { capabilities: ["nutrition_catalogue_validate"] },
-    { capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"] },
     { databasePrincipal: "" },
     { databasePrincipal: "x".repeat(64), effectivePrincipal: "x".repeat(64) },
   ])("rejects invalid principal without a mutating call: %j", async (change) => {

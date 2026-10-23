@@ -14,6 +14,7 @@ const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".cts"]);
 const ignoredDirectories = new Set([
   "node_modules",
   ".git",
+  ".local-data",
   ".next",
   ".expo",
   ".turbo",

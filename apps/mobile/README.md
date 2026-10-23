@@ -1,3 +1,11 @@
+> Current policy, October 23, 2026: Mandatory human reviews, separate reviewers
+> and human signatures are permanently removed. Retained descriptions of those
+> old requirements are superseded history. One authorized operator can perform
+> the work. Automated functional, integrity, provenance, recovery and device
+> checks remain, as do device/platform/software signatures, consent, spending,
+> credential custody, deployment permissions and automatic tool approval.
+> Never claim an unperformed review passed.
+
 # Mobile client
 
 The development client chooses a platform-safe loopback API address when

@@ -1,13 +1,6 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import defaultHealthReviewerTrustStore from "../config/health-release-reviewers.json" with {
-  type: "json",
-};
-import defaultDeploymentReviewerTrustStore from "../config/release-deployment-reviewers.json" with {
-  type: "json",
-};
-
 import {
   ExpectedReleaseBlockError,
   RELEASE_EXPECTED_BLOCK_EXIT_CODE,
@@ -15,7 +8,6 @@ import {
   validateReleaseDeploymentPolicy,
 } from "./check-release-env.mjs";
 import { EAS_PROJECT_ID } from "./eas-build-contract.mjs";
-import { validateReviewerTrustStores } from "./reviewer-trust.mjs";
 
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
@@ -26,25 +18,12 @@ function assert(condition, message) {
 }
 
 export function validateEasReleaseConfig(
-  {
-    appConfig,
-    deploymentReviewerTrustStore = defaultDeploymentReviewerTrustStore,
-    easConfig,
-    healthReviewerTrustStore = defaultHealthReviewerTrustStore,
-    packageConfig,
-    releaseDeployment,
-    releaseNumbering,
-  },
+  { appConfig, easConfig, packageConfig, releaseDeployment, releaseNumbering },
   { requireConfirmedNumbering = false } = {},
 ) {
   const expo = appConfig?.expo;
   const physicalDevice = easConfig?.build?.["physical-device"];
   const production = easConfig?.build?.production;
-
-  validateReviewerTrustStores({
-    deployment: deploymentReviewerTrustStore,
-    health: healthReviewerTrustStore,
-  });
 
   assert(expo?.owner === "zixuanliang", "Expo owner must remain pinned to zixuanliang.");
   assert(
@@ -177,12 +156,12 @@ export function validateEasReleaseConfig(
   assert(
     packageConfig?.scripts?.["release:health-evidence"] ===
       `${CONTRACTS_BUILD} && node scripts/check-health-release.mjs`,
-    "The reviewer-signed four-artifact evidence verifier must not be replaced or weakened.",
+    "The four-artifact measurement verifier must not be replaced or weakened.",
   );
   assert(
     packageConfig?.scripts?.["release:submit"] ===
       `${CONTRACTS_BUILD} && node scripts/submit-reviewed-release.mjs`,
-    "Production submission must remain behind the reviewed four-artifact evidence wrapper.",
+    "Production submission must remain behind the four-artifact measurement wrapper.",
   );
   validateReleaseDeploymentPolicy(releaseDeployment);
 

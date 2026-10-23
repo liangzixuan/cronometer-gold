@@ -1,22 +1,17 @@
-import { createHash, randomBytes, verify } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import {
-  RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
-  reviewerKeyWasActiveAt,
-  validateReviewerTrustStore,
-} from "../../apps/mobile/scripts/reviewer-trust.mjs";
 import { canonicalJson } from "../../packages/contracts/dist/canonical-json.js";
 
-export const BACKEND_ADMISSION_SCHEMA = "nutrition-tracker-backend-admission-v1";
-export const MANAGED_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v8";
-export const QUALIFICATION_BUNDLE_SCHEMA = "nutrition-tracker-managed-qualification-bundle-v1";
+export const BACKEND_ADMISSION_SCHEMA = "nutrition-tracker-backend-admission-v2";
+export const MANAGED_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v9";
+export const QUALIFICATION_BUNDLE_SCHEMA = "nutrition-tracker-managed-qualification-bundle-v2";
 export const MANAGED_PROFILE = "appwrite-cloud-azure-v1";
 export const BACKEND_COMPONENTS = ["api", "worker", "migrator", "caddy", "postgres", "meilisearch"];
 export const EVIDENCE_LIMITS = Object.freeze({
   bundleBytes: 512 * 1024,
   reportBytes: 64 * 1024,
-  reviewMs: 24 * 60 * 60 * 1000,
+  recordMs: 24 * 60 * 60 * 1000,
   observationMs: 60 * 60 * 1000,
   futureSkewMs: 5 * 60 * 1000,
 });
@@ -27,12 +22,8 @@ const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@/+ -]{2,127}$/;
 const NONCE = /^[a-f0-9]{64}$/;
 const BACKEND_REPORTS = ["host", "security", "access", "restore", "readiness"];
 const RUNTIME_REPORTS = ["build", "ssr", "preview"];
-export const CAPTURE_REVIEW_SCHEMA = "nutrition-tracker-browser-capture-review-v1";
+export const CAPTURE_OBSERVATION_SCHEMA = "nutrition-tracker-browser-capture-observation-v1";
 const POLICY_URL = new URL("../appwrite/managed-runtime-policy.json", import.meta.url);
-const TRUST_URL = new URL(
-  "../../apps/mobile/config/release-deployment-reviewers.json",
-  import.meta.url,
-);
 
 export class QualificationEvidenceError extends Error {
   constructor(code) {
@@ -84,9 +75,6 @@ function fresh(value, now, age, code) {
   if (time > now + EVIDENCE_LIMITS.futureSkewMs || now - time > age) fail(code);
   return time;
 }
-export function loadReviewerTrustStore() {
-  return JSON.parse(readFileSync(TRUST_URL, "utf8"));
-}
 export function loadManagedPolicy() {
   const policy = JSON.parse(readFileSync(POLICY_URL, "utf8"));
   if (
@@ -99,54 +87,10 @@ export function loadManagedPolicy() {
 export function policySha256(policy = loadManagedPolicy()) {
   return evidenceSha256(policy);
 }
-function signed(recordValue, keys, trustStore, now) {
-  record(
-    recordValue,
-    [...keys, "deployedBy", "reviewedBy", "reviewedAt", "reviewerAttestation"],
-    "signed_evidence_shape_invalid",
-  );
-  identifier(recordValue.deployedBy, "deployment_operator_invalid");
-  identifier(recordValue.reviewedBy, "deployment_reviewer_invalid");
-  if (recordValue.deployedBy.toLowerCase() === recordValue.reviewedBy.toLowerCase())
-    fail("independent_reviewer_required");
-  const reviewedAt = fresh(recordValue.reviewedAt, now, EVIDENCE_LIMITS.reviewMs, "review_stale");
-  const attestation = record(
-    recordValue.reviewerAttestation,
-    ["keyId", "algorithm", "signatureBase64"],
-    "reviewer_attestation_invalid",
-  );
-  if (
-    attestation.algorithm !== "Ed25519" ||
-    typeof attestation.signatureBase64 !== "string" ||
-    !/^[A-Za-z0-9+/]{86}==$/.test(attestation.signatureBase64)
-  )
-    fail("reviewer_attestation_invalid");
-  const signature = Buffer.from(attestation.signatureBase64, "base64");
-  if (signature.length !== 64 || signature.toString("base64") !== attestation.signatureBase64)
-    fail("reviewer_attestation_invalid");
-  let reviewers;
-  try {
-    reviewers = validateReviewerTrustStore(trustStore, {
-      expectedSchema: RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
-      label: "deployment reviewer trust store",
-    });
-  } catch {
-    fail("reviewer_trust_invalid");
-  }
-  const trusted = reviewers.find(
-    (key) =>
-      key.keyId === attestation.keyId &&
-      key.principal === recordValue.reviewedBy &&
-      reviewerKeyWasActiveAt(key, reviewedAt),
-  );
-  if (!trusted) fail("reviewer_key_not_trusted");
-  const payload = {
-    ...recordValue,
-    reviewerAttestation: { keyId: attestation.keyId, algorithm: attestation.algorithm },
-  };
-  if (!verify(null, Buffer.from(canonicalEvidence(payload)), trusted.publicKey, signature))
-    fail("reviewer_signature_invalid");
-  return reviewedAt;
+function recorded(value, keys, now) {
+  record(value, [...keys, "deployedBy", "recordedAt"], "evidence_record_shape_invalid");
+  identifier(value.deployedBy, "deployment_operator_invalid");
+  return fresh(value.recordedAt, now, EVIDENCE_LIMITS.recordMs, "record_stale");
 }
 function common(value, expected, policy) {
   if (
@@ -185,7 +129,7 @@ function reportSet(reports, names, digests) {
       fail("qualification_report_mismatch");
   }
 }
-function observed(report, kind, backend, reviewedAt, now) {
+function observed(report, kind, backend, recordedAt, now) {
   record(
     report,
     [
@@ -218,17 +162,12 @@ function observed(report, kind, backend, reviewedAt, now) {
     EVIDENCE_LIMITS.observationMs,
     "observation_stale",
   );
-  if (observedAt > reviewedAt) fail("observation_after_review");
+  if (observedAt > recordedAt) fail("observation_after_record");
   return report.details;
 }
-export function validateBackendAdmission(
-  bundle,
-  expected,
-  trustStore = loadReviewerTrustStore(),
-  policy = loadManagedPolicy(),
-) {
+export function validateBackendAdmission(bundle, expected, policy = loadManagedPolicy()) {
   const backend = bundle.backend;
-  const reviewedAt = signed(
+  const recordedAt = recorded(
     backend,
     [
       "schemaVersion",
@@ -243,7 +182,6 @@ export function validateBackendAdmission(
       "isolation",
       "reports",
     ],
-    trustStore,
     expected.now,
   );
   if (backend.schemaVersion !== BACKEND_ADMISSION_SCHEMA) fail("backend_schema_invalid");
@@ -277,7 +215,7 @@ export function validateBackendAdmission(
   const details = Object.fromEntries(
     BACKEND_REPORTS.map((name) => [
       name,
-      observed(bundle.backendReports[name], name, backend, reviewedAt, expected.now),
+      observed(bundle.backendReports[name], name, backend, recordedAt, expected.now),
     ]),
   );
   record(details.host, ["host", "images", "containers"], "host_observation_invalid");
@@ -416,7 +354,7 @@ export function validateBackendAdmission(
     fresh(
       check.scan.databaseUpdatedAt,
       expected.now,
-      EVIDENCE_LIMITS.reviewMs,
+      EVIDENCE_LIMITS.recordMs,
       "scan_database_stale",
     );
     for (const vulnerability of check.scan.vulnerabilities) {
@@ -537,10 +475,10 @@ export function validateBackendAdmission(
     details.restore.backup.encryption !== "AES-256-GCM"
   )
     fail("backup_encryption_invalid");
-  fresh(details.restore.backup.createdAt, expected.now, EVIDENCE_LIMITS.reviewMs, "backup_stale");
+  fresh(details.restore.backup.createdAt, expected.now, EVIDENCE_LIMITS.recordMs, "backup_stale");
   hash(details.restore.restoredDatabaseSha256, "restored_database_unbound");
   hash(details.restore.restoreEpochSha256, "restore_epoch_unbound");
-  fresh(details.restore.completedAt, expected.now, EVIDENCE_LIMITS.reviewMs, "restore_stale");
+  fresh(details.restore.completedAt, expected.now, EVIDENCE_LIMITS.recordMs, "restore_stale");
   record(
     details.readiness,
     ["postgres", "search", "worker", "storage"],
@@ -591,15 +529,10 @@ export function validateBackendAdmission(
     fail("storage_readiness_invalid");
   return backend;
 }
-export function validateManagedDeployment(
-  bundle,
-  expected,
-  trustStore = loadReviewerTrustStore(),
-  policy = loadManagedPolicy(),
-) {
-  const backend = validateBackendAdmission(bundle, expected, trustStore, policy);
+export function validateManagedDeployment(bundle, expected, policy = loadManagedPolicy()) {
+  const backend = validateBackendAdmission(bundle, expected, policy);
   const deployment = bundle.deployment;
-  const reviewedAt = signed(
+  const recordedAt = recorded(
     deployment,
     [
       "schemaVersion",
@@ -610,11 +543,10 @@ export function validateManagedDeployment(
       "configurationSha256",
       "policySha256",
       "backendAdmissionSha256",
-      "captureReviewSha256",
+      "captureObservationSha256",
       "web",
       "reports",
     ],
-    trustStore,
     expected.now,
   );
   if (deployment.schemaVersion !== MANAGED_DEPLOYMENT_SCHEMA)
@@ -622,8 +554,8 @@ export function validateManagedDeployment(
   common(deployment, expected, policy);
   if (deployment.backendAdmissionSha256 !== evidenceSha256(backend))
     fail("backend_admission_mismatch");
-  if (deployment.captureReviewSha256 !== evidenceSha256(bundle.captureReview))
-    fail("capture_review_binding_mismatch");
+  if (deployment.captureObservationSha256 !== evidenceSha256(bundle.captureObservation))
+    fail("capture_observation_binding_mismatch");
   record(
     deployment.web,
     [
@@ -676,7 +608,7 @@ export function validateManagedDeployment(
     hash(web.output[key], "managed_output_invalid");
   reportSet(bundle.runtimeReports, RUNTIME_REPORTS, deployment.reports);
   for (const name of ["build", "ssr"]) {
-    const runtime = observed(bundle.runtimeReports[name], name, backend, reviewedAt, expected.now);
+    const runtime = observed(bundle.runtimeReports[name], name, backend, recordedAt, expected.now);
     record(
       runtime,
       [
@@ -740,7 +672,7 @@ export function validateManagedDeployment(
     bundle.runtimeReports.preview,
     "preview",
     backend,
-    reviewedAt,
+    recordedAt,
     expected.now,
   );
   record(
@@ -759,8 +691,8 @@ export function validateManagedDeployment(
     fail("preview_not_qualified");
   return deployment;
 }
-export function validateCaptureReview(capture, expected, trustStore = loadReviewerTrustStore()) {
-  signed(
+export function validateCaptureObservation(capture, expected) {
+  recorded(
     capture,
     [
       "schemaVersion",
@@ -772,18 +704,17 @@ export function validateCaptureReview(capture, expected, trustStore = loadReview
       "observedAt",
       "observations",
     ],
-    trustStore,
     expected.now,
   );
   if (
-    capture.schemaVersion !== CAPTURE_REVIEW_SCHEMA ||
+    capture.schemaVersion !== CAPTURE_OBSERVATION_SCHEMA ||
     capture.sourceRevision !== expected.sourceRevision ||
     capture.summarySha256 !== expected.summarySha256 ||
     capture.sessionId !== expected.sessionId ||
     capture.runId !== expected.runId ||
     capture.attempt !== expected.attempt
   )
-    fail("capture_review_context_mismatch");
+    fail("capture_observation_context_mismatch");
   hash(capture.summarySha256, "capture_summary_invalid");
   if (
     !Number.isSafeInteger(capture.runId) ||
@@ -793,14 +724,14 @@ export function validateCaptureReview(capture, expected, trustStore = loadReview
     typeof capture.sessionId !== "string" ||
     !/^[A-Za-z0-9-]{1,100}$/.test(capture.sessionId)
   )
-    fail("capture_review_context_invalid");
+    fail("capture_observation_context_invalid");
   const observedAt = fresh(
     capture.observedAt,
     expected.now,
-    EVIDENCE_LIMITS.reviewMs,
-    "capture_review_stale",
+    EVIDENCE_LIMITS.recordMs,
+    "capture_observation_stale",
   );
-  if (observedAt > Date.parse(capture.reviewedAt)) fail("capture_observation_after_review");
+  if (observedAt > Date.parse(capture.recordedAt)) fail("capture_observation_after_record");
   equal(
     capture.observations,
     {
@@ -845,7 +776,7 @@ export function parseQualificationBundle(raw) {
       "backendReports",
       "deployment",
       "runtimeReports",
-      "captureReview",
+      "captureObservation",
       "staging",
     ],
     "qualification_bundle_invalid",
@@ -860,7 +791,7 @@ export function parseQualificationBundle(raw) {
         "backendReports",
         "deployment",
         "runtimeReports",
-        "captureReview",
+        "captureObservation",
         "staging",
       ],
       "staging_bundle_invalid",
@@ -921,13 +852,9 @@ export function qualificationNonce() {
 }
 export const managedPolicyPath = fileURLToPath(POLICY_URL);
 
-export const MANAGED_ACTIVATION_SCHEMA = "nutrition-tracker-managed-activation-v1";
-export function validateManagedActivation(
-  activation,
-  expected,
-  trustStore = loadReviewerTrustStore(),
-) {
-  const reviewedAt = signed(
+export const MANAGED_ACTIVATION_SCHEMA = "nutrition-tracker-managed-activation-v2";
+export function validateManagedActivation(activation, expected) {
+  const recordedAt = recorded(
     activation,
     [
       "schemaVersion",
@@ -939,7 +866,6 @@ export function validateManagedActivation(
       "observedAt",
       "provider",
     ],
-    trustStore,
     expected.now,
   );
   if (
@@ -958,7 +884,7 @@ export function validateManagedActivation(
     EVIDENCE_LIMITS.observationMs,
     "activation_observation_stale",
   );
-  if (observedAt > reviewedAt) fail("activation_observation_after_review");
+  if (observedAt > recordedAt) fail("activation_observation_after_record");
   const provider = record(
     activation.provider,
     ["endpoint", "projectId", "site", "deployment"],

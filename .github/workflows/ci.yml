@@ -250,6 +250,16 @@ jobs:
           pnpm --filter @nutrition-tracker/db db:migrate
           pnpm --filter @nutrition-tracker/db db:migrate
 
+      - name: Exercise single-operator catalogue publication without human approvals
+        env:
+          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+          CATALOGUE_PAGED_PUBLICATION_INTEGRATION: "1"
+          CATALOGUE_PAGED_PUBLICATION_RECORDS: "251"
+          CATALOGUE_PAGED_PUBLICATION_EVIDENCE_ROOT: ${{ runner.temp }}/nourishing-single-operator
+        run: |
+          install -d -m 700 "$CATALOGUE_PAGED_PUBLICATION_EVIDENCE_ROOT"
+          pnpm --filter @nutrition-tracker/ingest exec vitest run test/catalogue-paged-publication.integration.test.ts
+
       - name: Exercise database integration invariants
         env:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker

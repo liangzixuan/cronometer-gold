@@ -25,7 +25,6 @@ export function checkCiReleaseState(
       maxBuffer: 20_000_000,
     }),
   deploymentRuntime,
-  deploymentReviewerTrustStore,
 ) {
   const expectedBlocker =
     releaseNumbering?.identifierHistoryConfirmed !== true
@@ -54,12 +53,7 @@ export function checkCiReleaseState(
     return { mode: "expected-block", output: "" };
   }
 
-  validateReleaseDeployment(
-    environment,
-    releaseDeployment,
-    deploymentRuntime,
-    deploymentReviewerTrustStore,
-  );
+  validateReleaseDeployment(environment, releaseDeployment, deploymentRuntime);
   const result = runCommand("pnpm", ["build:release"]);
   if (result.error) throw result.error;
   if (result.status !== 0) {

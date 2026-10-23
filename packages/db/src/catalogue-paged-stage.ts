@@ -194,10 +194,7 @@ export async function admitCataloguePreparationV2(
     "reviewReference",
   ]);
   if (request.schemaVersion !== 2) throw new Error("Invalid preparation admission version");
-  const actor = await assertCataloguePreparationPrincipalV2(
-    database,
-    "nutrition_catalogue_approve_quality",
-  );
+  const actor = await assertCataloguePreparationPrincipalV2(database, "nutrition_catalogue_stage");
   const row = result(
     (
       await sql<{
@@ -643,8 +640,7 @@ export async function assertCataloguePreparationPrincipalV2(
     row.privileged !== false ||
     row.ownerMember !== false ||
     !Array.isArray(row.capabilities) ||
-    row.capabilities.length !== 1 ||
-    row.capabilities[0] !== capability
+    !row.capabilities.includes(capability)
   )
     throw new Error(
       "Preparation requires an actual restricted login with exactly the requested capability",

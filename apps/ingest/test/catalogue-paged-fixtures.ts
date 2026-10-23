@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { expect } from "vitest";
 import type { BatchValidationPolicy } from "../../../packages/db/src/catalogue-batch-policy.js";
-import { submitCatalogueApproval } from "../../../packages/db/src/catalogue-capability-approval.js";
 import {
   prepareCatalogueValidation,
   submitCatalogueValidation,
@@ -35,7 +34,6 @@ export const POLICY: BatchValidationPolicy = {
   maximumQuarantineFraction: 0,
   maximumQuarantinedRecords: 0,
   requireAtLeastOneValidRecord: true,
-  requireDistinctApprovalPrincipals: true,
   requireMaterializedNutrientPerValidRecord: true,
 };
 export const MAPPING = {
@@ -210,15 +208,6 @@ export async function createBaseline(input: {
   });
   const result = await submitCatalogueValidation(input.client("validate"), request);
   expect(result.promotionEligible).toBe(true);
-  for (const approvalRole of ["data", "quality", "rights"] as const)
-    await submitCatalogueApproval(input.client(approvalRole), {
-      batchId: batch.batchId,
-      approvalRole,
-      rightsManifestSha256: HASH,
-      validationDigest: request.validationDigest,
-      principalId: input.actor(approvalRole),
-      approvalReference: `urn:test:paged:baseline:${approvalRole}`,
-    });
   const promoted = await sql<{
     result: { activatedReleaseId: string };
   }>`select public.catalogue_promote_import_batch(

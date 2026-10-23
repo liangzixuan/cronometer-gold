@@ -19,6 +19,15 @@ import {
 const sha256 = "a".repeat(64);
 
 describe("authenticated acquisition evidence v1", () => {
+  it("accepts the authenticated acquisition operator as the release authority", () => {
+    const value = structuredClone(
+      releaseEvidenceFixture("live-reviewed").bundle,
+    ) as unknown as Record<string, unknown>;
+    reviewerClaims(value).reviewerPrincipalId = "operator.one";
+    reviewerClaims(value).subject = "operator:operator.one";
+    expect(() => parseAuthenticatedReleaseEvidenceBundle(value)).not.toThrow();
+  });
+
   it("binds a fresh HTTPS observation to verified runner claims", () => {
     const input = acquisition("operator.one", "run-1", "11111111-1111-4111-8111-111111111111");
     const parsed = parseAuthenticatedAcquisitionSidecar(input);
@@ -647,14 +656,6 @@ describe("authenticated release evidence bundle v1", () => {
       },
       (value) => {
         authorityScope(value).objectVersionId = "version=other";
-      },
-      (value) => {
-        reviewerClaims(value).reviewerPrincipalId = "operator.one";
-        reviewerClaims(value).subject = "operator:operator.one";
-      },
-      (value) => {
-        reviewerClaims(value).issuer = "https://identity.example.test/";
-        reviewerClaims(value).subject = "workload:artifact-retainer";
       },
       (value) => {
         authorityDecision(value).unexpected = true;

@@ -129,11 +129,9 @@ export async function submitCataloguePublicationRequestV2(
     `.execute(transaction);
     await assertCataloguePreparationPrincipalV2(
       transaction,
-      operation === "admit"
-        ? "nutrition_catalogue_approve_quality"
-        : operation === "rollback"
-          ? "nutrition_catalogue_rollback"
-          : "nutrition_catalogue_promote_activate",
+      operation === "rollback"
+        ? "nutrition_catalogue_rollback"
+        : "nutrition_catalogue_promote_activate",
     );
     // Cancellation before mutation is definite; after dispatch, the retained request
     // remains the recovery authority for an uncertain database outcome.

@@ -12,7 +12,7 @@ import {
   P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT,
   P0_CLIENT_SMOKE_REPORT_SCHEMA,
   validateHealthReleaseEvidence,
-  validateUnsignedP0ClientSmokeCandidateStructureForReview,
+  validateP0ClientSmokeMeasurement,
 } from "./check-health-release.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -47,7 +47,7 @@ function normalizeCandidate(indexPath) {
 }
 
 function validateCandidate(report) {
-  return validateUnsignedP0ClientSmokeCandidateStructureForReview(
+  return validateP0ClientSmokeMeasurement(
     report,
     { apiOrigin: report.apiOrigin },
     report.gitCommit,
@@ -203,9 +203,7 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
         expect(ids).toHaveLength(role === "browser" ? 21 : 22);
         expect(ids.filter((flowId) => historicalIds.includes(flowId))).toEqual(historicalIds);
       }
-      expect(report.trustBoundary).toBe(
-        "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",
-      );
+      expect(report.trustBoundary).toBe("source-and-artifact-bound-measurement");
       expect(report.dataClassification).toBe("synthetic-only");
       expect(report.sourceCaptureBundleSha256).toMatch(/^[0-9a-f]{64}$/u);
       for (const role of ["browser", "ios", "android"]) {
@@ -214,7 +212,7 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
         );
       }
       expect(
-        validateUnsignedP0ClientSmokeCandidateStructureForReview(
+        validateP0ClientSmokeMeasurement(
           report,
           { apiOrigin: report.apiOrigin },
           report.gitCommit,
@@ -231,7 +229,7 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
 
       for (const version of [1, 2]) {
         expect(() =>
-          validateUnsignedP0ClientSmokeCandidateStructureForReview(
+          validateP0ClientSmokeMeasurement(
             { ...report, schemaVersion: `nutrition-tracker-p0-client-smoke-report-v${version}` },
             { apiOrigin: report.apiOrigin },
             report.gitCommit,
@@ -252,7 +250,7 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
           NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64: Buffer.from(reportBytes).toString("base64"),
         }),
       ).rejects.toThrow(
-        "Signed-device health release evidence is absent. Supply a cryptographically reviewed physical-device manifest.",
+        "Physical-device health release evidence is absent. Supply actual physical-device measurements.",
       );
     } finally {
       rmSync(directory, { recursive: true, force: true });

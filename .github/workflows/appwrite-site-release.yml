@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       operation:
-        description: Prepare an inactive candidate or activate an independently reviewed candidate
+        description: Prepare an inactive candidate or activate a measured candidate
         type: choice
         options: [prepare, activate]
         required: true
@@ -15,12 +15,12 @@ on:
         options: [staging, production]
         required: true
         default: staging
-      review_artifact_id:
-        description: Same-revision artifact containing signed qualification and comparison receipts
+      evidence_artifact_id:
+        description: Same-revision artifact containing measured qualification and comparison receipts
         type: string
         required: true
       promote:
-        description: Explicitly authorize this production preparation or activation after environment review
+        description: Explicitly authorize this production preparation or activation within the approved environment scope
         type: boolean
         required: true
         default: false
@@ -54,18 +54,18 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Build the checked-in shared evidence serializer
         run: pnpm --filter @nutrition-tracker/contracts build
-      - name: Read only bounded inert review evidence for this exact revision
+      - name: Read only bounded inert measurement evidence for this exact revision
         env:
           GH_TOKEN: ${{ github.token }}
-          REVIEW_ARTIFACT_ID: ${{ inputs.review_artifact_id }}
+          EVIDENCE_ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
           RELEASE_OPERATION: ${{ inputs.operation }}
           RELEASE_TARGET: ${{ inputs.target }}
         run: >-
-          python3 scripts/appwrite/review-artifact.py
-          --artifact-id "$REVIEW_ARTIFACT_ID" --revision "$GITHUB_SHA"
+          python3 scripts/appwrite/evidence-artifact.py
+          --artifact-id "$EVIDENCE_ARTIFACT_ID" --revision "$GITHUB_SHA"
           --operation "$RELEASE_OPERATION" --target "$RELEASE_TARGET"
-          --out "$RUNNER_TEMP/appwrite-review"
-      - name: Admit actual current source, jobs, browser run and environment review
+          --out "$RUNNER_TEMP/appwrite-evidence"
+      - name: Admit actual current source, jobs, browser run and environment configuration
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TARGET: ${{ inputs.target }}
@@ -96,17 +96,17 @@ jobs:
           args=("$RELEASE_OPERATION" --target "$RELEASE_TARGET"
             --artifact "$RUNNER_TEMP/appwrite-source"
             --github-evidence "$RUNNER_TEMP/release-github-evidence.json"
-            --qualification "$RUNNER_TEMP/appwrite-review/qualification.json"
+            --qualification "$RUNNER_TEMP/appwrite-evidence/qualification.json"
             --receipt "$RUNNER_TEMP/release-receipt.json")
           if [[ "$RELEASE_OPERATION" == "activate" ]]; then
-            args+=(--candidate-receipt "$RUNNER_TEMP/appwrite-review/candidate-receipt.json")
+            args+=(--candidate-receipt "$RUNNER_TEMP/appwrite-evidence/candidate-receipt.json")
           fi
           if [[ "$RELEASE_TARGET" == "production" ]]; then
-            args+=(--staging-config "$RUNNER_TEMP/appwrite-review/staging-config.json"
-              --staging-receipt "$RUNNER_TEMP/appwrite-review/staging-receipt.json")
+            args+=(--staging-config "$RUNNER_TEMP/appwrite-evidence/staging-config.json"
+              --staging-receipt "$RUNNER_TEMP/appwrite-evidence/staging-receipt.json")
           fi
           pnpm exec tsx scripts/appwrite/site-release.ts "${args[@]}"
-      - name: Retain bounded phase receipt for independent review or reconciliation
+      - name: Retain bounded phase receipt for reconciliation
         if: always() && steps.release.outcome != 'skipped' && steps.release.outcome != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

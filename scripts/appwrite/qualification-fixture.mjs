@@ -1,10 +1,10 @@
-// Synthetic test fixture only. All signing keys are ephemeral and never persisted.
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+// Synthetic automated-measurement fixture only. No reviewer or signing key.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   BACKEND_ADMISSION_SCHEMA,
   BACKEND_COMPONENTS,
-  CAPTURE_REVIEW_SCHEMA,
+  CAPTURE_OBSERVATION_SCHEMA,
   canonicalEvidence,
   configurationSha256,
   evidenceSha256,
@@ -18,27 +18,10 @@ import {
 
 export const NOW = Date.parse("2026-09-29T20:00:00.000Z");
 export const OBSERVED = "2026-09-29T19:45:00.000Z";
-export const REVIEWED = "2026-09-29T19:50:00.000Z";
+export const RECORDED = "2026-09-29T19:50:00.000Z";
 export const SHA = "1".repeat(64);
 export const REVISION = "1".repeat(40);
 export function fixture(target = "staging") {
-  // Ephemeral test-only trust. Never saved or supplied by the production CLI.
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const trust = {
-    schemaVersion: "nutrition-tracker-release-deployment-reviewer-trust-v1",
-    reviewers: [
-      {
-        algorithm: "Ed25519",
-        keyId: "fixture-key",
-        principal: "fixture-reviewer",
-        publicKeySpkiDerBase64: publicKey
-          .export({ type: "spki", format: "der" })
-          .toString("base64"),
-        validFrom: "2026-09-28T00:00:00.000Z",
-        validUntil: "2026-10-01T00:00:00.000Z",
-      },
-    ],
-  };
   const policy = loadManagedPolicy();
   const config = {
     target,
@@ -51,24 +34,11 @@ export function fixture(target = "staging") {
     buildSpecification: "s-1vcpu-512mb",
     runtimeSpecification: "s-1vcpu-512mb",
   };
-  const signRecord = (input) => {
-    const value = {
-      ...input,
-      deployedBy: "fixture-operator",
-      reviewedBy: "fixture-reviewer",
-      reviewedAt: REVIEWED,
-      reviewerAttestation: { keyId: "fixture-key", algorithm: "Ed25519" },
-    };
-    return {
-      ...value,
-      reviewerAttestation: {
-        ...value.reviewerAttestation,
-        signatureBase64: sign(null, Buffer.from(canonicalEvidence(value)), privateKey).toString(
-          "base64",
-        ),
-      },
-    };
-  };
+  const recordEvidence = (input) => ({
+    ...input,
+    deployedBy: "fixture-operator",
+    recordedAt: RECORDED,
+  });
   const images = Object.fromEntries(
     BACKEND_COMPONENTS.map((component) => [
       component,
@@ -205,7 +175,7 @@ export function fixture(target = "staging") {
       },
     }),
   };
-  const backend = signRecord({
+  const backend = recordEvidence({
     schemaVersion: BACKEND_ADMISSION_SCHEMA,
     profile: MANAGED_PROFILE,
     target,
@@ -266,7 +236,7 @@ export function fixture(target = "staging") {
       expectedOutput: "passed",
     }),
   };
-  let deployment = signRecord({
+  let deployment = recordEvidence({
     schemaVersion: MANAGED_DEPLOYMENT_SCHEMA,
     profile: MANAGED_PROFILE,
     target,
@@ -275,14 +245,14 @@ export function fixture(target = "staging") {
     configurationSha256: configurationSha256(config),
     policySha256: policySha256(policy),
     backendAdmissionSha256: evidenceSha256(backend),
-    captureReviewSha256: "",
+    captureObservationSha256: "",
     web,
     reports: Object.fromEntries(
       Object.entries(runtimeReports).map(([key, value]) => [key, evidenceSha256(value)]),
     ),
   });
-  const captureReview = signRecord({
-    schemaVersion: CAPTURE_REVIEW_SCHEMA,
+  const captureObservation = recordEvidence({
+    schemaVersion: CAPTURE_OBSERVATION_SCHEMA,
     sourceRevision: REVISION,
     summarySha256: SHA,
     sessionId: "fixture-session",
@@ -298,14 +268,17 @@ export function fixture(target = "staging") {
       credentialMasking: "observed-redacted",
     },
   });
-  deployment = signRecord({ ...deployment, captureReviewSha256: evidenceSha256(captureReview) });
+  deployment = recordEvidence({
+    ...deployment,
+    captureObservationSha256: evidenceSha256(captureObservation),
+  });
   const bundle = {
     schemaVersion: QUALIFICATION_BUNDLE_SCHEMA,
     backend,
     backendReports,
     deployment,
     runtimeReports,
-    captureReview,
+    captureObservation,
     staging: null,
   };
   const expected = {
@@ -330,7 +303,7 @@ export function fixture(target = "staging") {
       requiredRuns: [{ workflow: "browserstack-web.yml", run: { id: 123, run_attempt: 1 } }],
     },
   };
-  const activation = signRecord({
+  const activation = recordEvidence({
     schemaVersion: MANAGED_ACTIVATION_SCHEMA,
     profile: MANAGED_PROFILE,
     target: "production",
@@ -352,16 +325,15 @@ export function fixture(target = "staging") {
   });
   return {
     activation,
-    trust,
     policy,
     config,
-    signRecord,
+    recordEvidence,
     observe,
     backendReports,
     backend,
     deployment,
     runtimeReports,
-    captureReview,
+    captureObservation,
     bundle,
     expected,
     context,

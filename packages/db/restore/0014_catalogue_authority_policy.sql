@@ -309,7 +309,7 @@ begin
         (
           'food_import_batch',
           'food_import_batch_stage_validate_database_authority_check',
-          $constraint$CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)$constraint$
+          $constraint$CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text)) IS TRUE)$constraint$
         ),
         (
           'food_import_batch',
@@ -750,7 +750,6 @@ END) IS TRUE)$constraint$
       ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_admission_sha256_check', 'c', 'CHECK ((admission_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
       ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_admitted_by_check', 'c', 'CHECK (((octet_length(admitted_by) >= 1) AND (octet_length(admitted_by) <= 63)))'),
       ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_artifact_sha256_check', 'c', 'CHECK ((artifact_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
-      ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_check', 'c', 'CHECK ((stage_principal <> admitted_by))'),
       ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_export_bytes_check', 'c', 'CHECK ((export_bytes > 0))'),
       ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_export_sha256_check', 'c', 'CHECK ((export_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
       ('catalogue_preparation_admission_v2', 'catalogue_preparation_admission_v2_manifest_sha256_check', 'c', 'CHECK ((manifest_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
@@ -820,7 +819,6 @@ END) IS TRUE)$constraint$
       ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_admission_sha256_uq', 'u', 'UNIQUE (admission_sha256)'),
       ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_batch_id_fk', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_preparation_v2(batch_id)'),
       ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_batch_id_pk', 'p', 'PRIMARY KEY (batch_id)'),
-      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_check_1', 'c', 'CHECK ((publisher_principal <> admitted_by))'),
       ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_cutover_barcode_rows_check', 'c', 'CHECK ((max_cutover_barcode_rows > 0))'),
       ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_cutover_bytes_check', 'c', 'CHECK ((max_cutover_bytes > 0))'),
       ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_cutover_food_rows_check', 'c', 'CHECK ((max_cutover_food_rows > 0))'),
@@ -1247,13 +1245,13 @@ where food.kind in ('generic', 'branded')
       values
         ('guard_nutrient_ontology_update', '', '47bad1ed4fa257d351c565baf0a7acd53299dddeaa331440733a41b98bc1c9f5', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_source_nutrient_map_update', '', 'c6e8ae4ac0193362d52adf37af7adb8229b23c62777a692c89630893216d4a0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('catalogue_admit_preparation_v2', 'p_document text', '186afb6bae243ba6d53966399ac26218cc46458a674988fce999aef3db307c41', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_admit_preparation_v2', 'p_document text', '6101c101a83927e4e3f340fa3781c60f4579a4c01b5b6a81f7ca806d14a0ffb0', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_advance_validation_generation_v2', '', '84e0fdf15075edda2f1a4e8bc7eee794f4c836bf10ffdcdce1a9aee235c26fff', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_assert_validation_context_v2', 'p_batch_id uuid', 'f5d3c29268bca5e17fef9a5064b6cbceaf345df77cb2baf714ac66096660e254', 'void', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_begin_preparation_seal_v2', 'p_batch_id uuid, p_document text', 'ef9b35f1ca864abed5f1a73df437f8797b6882ada3318cb7c4eb37fee86c431f', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_begin_preparation_v2', 'p_admission_sha256 text, p_stage_document text', '780c91e2ae3d06d5903da649829e35d8aea16a41ca527db811ef0f8f3b666d8a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_begin_reconciliation_v2', 'p_batch_id uuid, p_terminal text, p_baseline uuid, p_context text', 'e3625afe37c7976f9d8696b2f8346095099e0f2cf449d0e92682779a802e3f27', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_begin_validation_v2', 'p_batch_id uuid, p_staging_seal_sha256 text, p_policy_document text', 'c9e6e03fede89ffabf900d5237190688bdb1be0afb220a17b2d1cb89e1193a7c', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_begin_validation_v2', 'p_batch_id uuid, p_staging_seal_sha256 text, p_policy_document text', '86753e48446c62db0ed07df3f6eae218e67226339304388536ba3f84a46d2448', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_charge_preparation_budget_v2', 'p_batch_id uuid, p_intermediate_delta bigint, p_validation_delta bigint, p_reconciliation_delta bigint', '2e152411c6ceac8e55ee762ea6e6cd5cc496166b26c358a1d9aea203ebf32016', 'void', 'plpgsql', 'v', false, false, 'u', false),
         ('catalogue_compute_record_nutrition_semantics_v2', 'p_record_id bigint, p_batch_id uuid', '9cef56f57959f3a2d5cc531afd881ee4d92eb40111c41e89bcfb9e6a7be47e6a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_finish_preparation_seal_v2', 'p_batch_id uuid, p_document text', '4168a104846e8f72100b552b454b29b2fe3eaa6f9a877d1e00ce63494526d948', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
@@ -1262,10 +1260,10 @@ where food.kind in ('generic', 'branded')
         ('catalogue_frame_sha256_v2', 'p_domain text, p_fields text[]', '786cd3683fdb6c9794365f6a841ee63e27b3c335b53f3b89df0070cc1f0ca6e1', 'text', 'plpgsql', 'i', false, false, 'u', false),
         ('catalogue_guard_legacy_batch_preparation_v2', '', '2323e930b55486bf9c9c7e0cf65858670cdaaa22a5ae9101755f3c3b59712e75', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('catalogue_guard_legacy_record_preparation_v2', '', '068696ad0ab7a4ff6a145eb3dd95ec62832f69d3e924a9d5768b692f802aa8fc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('catalogue_guard_preparation_evidence_insert_v2', '', '87129394a8edb35f750a730d56b07d40edac99492609838eb113912e0033a04b', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('catalogue_guard_preparation_evidence_insert_v2', '', '5003aa66280b33a8d800932dac22185585e6589bbeb90307ee45e8d24f2604c9', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('catalogue_guard_preparation_source_insert_v2', '', '5132b4105d934fd88b560df535f841731c6330dc6dea2bbbec2ac6c1021ae03c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('catalogue_guard_preparation_v2', '', '466ee7633cffcec06195d3beff8479bc221eced092665965aef7eb059c2b84a2', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('catalogue_guard_validation_context_v2', '', '5b67d69a31c82a3ed6900ab465babeb55801ed06c0a581ed8a75f83deec49215', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_guard_preparation_v2', '', '67d4b8df431259afd572ab0e81c39bb21a19419b48d634f37fcc652fdee11dd1', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('catalogue_guard_validation_context_v2', '', '5fe9d3cc0d0a75d8b8eb7a4d529fbe725e66f1f75e6845e9fca27474d7006ed2', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_guard_validation_evidence_v2', '', 'a47d0255bc5b9697f2e5eb7d9ac16328c042710c5dc5ce8dd465439248d511fa', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_guard_validation_generation_v2', '', '36b6eeacd97107fe02b0b9285c78b476a2bd3075282d40a17b02d61705fe1379', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('catalogue_mapping_digest_for_validation_v2', 'p_source_id bigint', '3368e302ca95d612f19a5407309917c51a2716a7c5e9a4a9066d779d21e3a13b', 'text', 'plpgsql', 'v', false, false, 'u', true),
@@ -1275,8 +1273,8 @@ where food.kind in ('generic', 'branded')
         ('catalogue_preparation_uint_v2', 'p_value jsonb', 'ed8877d47a0c6a92b0c5ebdc1d6e36086bf0287650de0cd3c335f29db75b69ae', 'bigint', 'plpgsql', 'i', false, false, 'u', false),
         ('catalogue_prepare_reconciliation_page_v2', 'p_batch_id uuid, p_context text, p_page bigint', 'ada1304ce7e766b63d829d9af0b68504e5b56ef8bc15a595e4a25cbc09da25cc', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_read_preparation_admission_v2', 'p_admission_sha256 text', 'b31733d1ed923863fc38688834f7fba65681c9e8c1576bb9c83beeccb62e529c', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_read_reconciliation_page_v2', 'p_batch_id uuid, p_report text, p_page bigint, p_role text, p_principal text', '561cf06b1a8324ba8ce552fe6c0fe75169e95311ab03401dcf6c4e063cd71cf5', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_reconciliation_baseline_header_v2', 'p_batch_id uuid', '955240cc42ddb8daa2a4420334f4517b4bbb99cd8f51233dfeb43dd3a1843a53', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_read_reconciliation_page_v2', 'p_batch_id uuid, p_report text, p_page bigint, p_role text, p_principal text', 'f5048c85e166b3e2577238defc8acb140667dbaadd6916da4ebdf14c2236a717', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_reconciliation_baseline_header_v2', 'p_batch_id uuid', 'fff36dac9cfee472cb04468a27d0528461a679765e56f47ab06dc4cb44dd27c2', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_reconciliation_baseline_record_v2', 'p_record_id bigint, p_release_id uuid', 'd8032d71e259aa56ba70e4c060937e3d69b3e01ddaf151ec4a9a4e52034cccf4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_reconciliation_detail_v2', 'p_before jsonb, p_after jsonb', '89de7f9c6dc97e4e6b89bc1f8d506803368ed1b6a63377adea0de32d015ced7d', 'jsonb', 'sql', 's', false, false, 'u', true),
         ('catalogue_reconciliation_input_v2', 'p_batch_id uuid, p_validation_terminal_sha256 text', '3d70e181d4597ae6d2be0d011bb40c6a3699af996a1ca76772f53cac46c4d278', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
@@ -1286,7 +1284,7 @@ where food.kind in ('generic', 'branded')
         ('catalogue_reject_legacy_record_v2', 'p_record_id bigint', '304f46808cea837f3bdd1211af5edac27a9e4625cbae8ae808f2b9e7a3c8cf69', 'void', 'plpgsql', 's', false, false, 'u', true),
         ('catalogue_reject_legacy_release_v2', 'p_release_id uuid', '48e36b25e9c16f670385041811610564220bfe52f3313c142c7e25c9e5d65f3a', 'void', 'plpgsql', 's', false, false, 'u', true),
         ('catalogue_reject_legacy_stage_document_v2', 'p_document text', '943d76ce5ad93805cfc937eea2544a1a84a75d87232e7fcdc4a8af498f2fd131', 'void', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_require_preparation_role_v2', 'p_role text', '7a1284c7da1e999e2ac0c72eef8171f029c88986c423f2a1edb6b300260d38a1', 'text', 'plpgsql', 's', false, false, 'u', false),
+        ('catalogue_require_preparation_role_v2', 'p_role text', '85ddcd4c7882280045d10830d4dc04d153f2dc0e33d80609043579e38a8eec81', 'text', 'plpgsql', 's', false, false, 'u', false),
         ('catalogue_stage_preparation_page_v2', 'p_batch_id uuid, p_document text', '1a7ccde35c3c4427b4dbdefc3a5f76cbf91a3cd0715d949f72d0674adedc5f02', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_submit_validation_page_v2', 'p_batch_id uuid, p_request_document text', '18c0861fa16d9036c60b9bcc912f4548adb85827d54066d7c018f35bc569c91d', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_utf16_sort_key_v2', 'p_value text', '04570b922d4a23ee14eddc6180f4b52b9ef66774200ddc18dd124544ee097370', 'text', 'sql', 'i', true, false, 's', false),
@@ -1299,8 +1297,8 @@ where food.kind in ('generic', 'branded')
         ('catalogue_publication_timeouts_v2', '', 'cd372d03caf870d722715f04a953bdb3320b844fcc257228fa145eed7ac91810', 'void', 'plpgsql', 's', false, false, 'u', false),
         ('catalogue_publication_progress_v2', 'p_batch_id uuid', '5c8c0c2830f3874b0c801cbf8b3cf4f58b7f21f8cb51ab621da6ccae7ce89aff', 'jsonb', 'sql', 's', false, false, 'u', true),
         ('catalogue_lock_publication_v2', 'p_batch_id uuid, p_actor text, p_require_live boolean', 'ceaeb9c5c29629485e12e40f8754fb325cc6f265039e65b7529d97c55a712abd', 'void', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_assert_publication_approvals_v2', 'p_batch_id uuid, p_context text, p_terminal text, p_report text, p_actor text', '0cc9ca58fd5951e5a7891768452e8aac54eeb04658d30b906633146c1df37eb8', 'void', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_admit_publication_v2', 'p_document text', 'f6f98257e2605be175f65c2a63634dd1b23c9f616c479e5bd7e14f3cb3656945', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_assert_publication_approvals_v2', 'p_batch_id uuid, p_context text, p_terminal text, p_report text, p_actor text', '23e06a59ffa4be8f1594cb7bb743779b764489bdc3d141ec835f4bd6cea70050', 'void', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_admit_publication_v2', 'p_document text', 'b4d6679fe957735095d4ebe58c2f3748b0919a1123976f0ebbe77e3be98198bc', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_begin_publication_v2', 'p_document text', '620deb405daa84cd700eb090500cbeddf36706ccf4bc7643d50b9c24024776f4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_materialize_publication_record_v2', 'p_batch_id uuid, p_sequence bigint', 'e274f7f186ab341c94c6a81810da4a6e5353a55dd4d64dbaaa6676d71a14100c', 'bigint', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_verify_publication_record_v2', 'p_batch_id uuid, p_sequence bigint', '189de2455deb548fb923cfb5b67d0cffadbc78d16dbeaa895881f65f7c7f65a7', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
@@ -1315,26 +1313,26 @@ where food.kind in ('generic', 'branded')
         ('catalogue_cutover_publication_v2', 'p_source_id bigint, p_target uuid, p_operation text, p_batch uuid, p_actor text, p_reason text', '7b38fcbd65c1ad33b77f9177deea63b3e851febcaac085d38fb32ae59708f35b', 'bigint', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_activate_publication_v2', 'p_document text', 'ccb20f7259ef33f04b3d0d39a33da941576f1ccb6fd46ca0a7cef5de5f04b937', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_rollback_publication_v2', 'p_document text', '6c5320dae7452747738fc52eb6d44716c60e68740e8695d727f42465976abe71', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_guard_publication_v2', '', '649b36ed52f65e1888d1ba52dd8228f4fe671b0f4037d438891dabf89d8955e9', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_guard_publication_v2', '', '51603fa2fe8f126b701429c8db38d9cfa775e6e81a7bf73bac924ae2163e82e7', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
         ('catalogue_attest_import_nutrition_semantics', 'p_batch_id uuid', '3b6b5d6de655e09c4935379fbaa356429961dedb39264cb25913e16c3a2c2e59', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_canonical_decimal_product', 'p_left text, p_right text', '299a2c88226123f167fe2d7001fdaf6a2e02425007f2426c8def9d0bb83a46c0', 'text', 'plpgsql', 'i', true, false, 's', false),
         ('catalogue_compute_import_staging_seal', 'p_batch_id uuid', 'e7dbe4dc44ca8cef1183b966384000a3a252e4f92cc644091d46281e04d91822', 'text', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_compute_record_nutrition_semantics', 'p_record_id bigint', 'b0e547a757ad01f0a2c2360beea10607b5bfec9770fbbeb571598db7cf9ead69', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
-        ('catalogue_observe_import_validation', 'p_batch_id uuid', '84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_observe_import_validation', 'p_batch_id uuid', 'e20221d5b0840248f0c8f97f56ff92f3d4a8a72aaddb8834a6258d92ce183aed', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', 'feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_promote_import_batch_v1', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_promote_import_batch_v1', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '95960c2b7a1a534fc006c07166638f98d5f558d0fa715662361f19bfda17b2b7', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval_v1', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '57a131aea73ba58d76f8d7cd867ea2cb2485567f65dc4c28c5a9ffe8963ca198', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', 'b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_rollback_source_release_v1', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_stage_import_batch', 'p_stage_document text', 'e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_stage_import_parser_report', 'p_batch_id uuid, p_parser_report_document text', '111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_stage_import_record_chunk', 'p_batch_id uuid, p_expected_next_offset bigint, p_records_document text', 'd8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_stage_import_batch', 'p_stage_document text', '59f39588711cb8c97d8178ad0d6992b531a12be8a9101924687e5718b282c806', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_stage_import_parser_report', 'p_batch_id uuid, p_parser_report_document text', '53771f5e5417fb1efc5fd42d2696def09a6fdb5e1540b93b80a38a42f2caeb6b', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_stage_import_record_chunk', 'p_batch_id uuid, p_expected_next_offset bigint, p_records_document text', '70a9be43d627d15d456a5ba7c2af3da9527d6251c70089ac89ae419b5812e0c7', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_utf16_length', 'p_value text', '3a1759986b190b3ccac086e5da943ada91f3cc8c3a94ce6942657faae389ef39', 'bigint', 'sql', 'i', true, false, 's', false),
         ('catalogue_validate_import_batch', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', 'e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_validate_import_batch_v1', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', '0c14bff909d45e0fc0082962484db94af8853761d82e7654dc4494fc78f0d294', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_validate_import_batch_v1', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', '2a063eec6e102d0f69931b6f8a26d7179071e19fdd145e9039150a6ed35e6532', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('enqueue_food_search_barcode_insert', '', '4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_barcode_update', '', '9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_food_eligibility_change', '', '85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -1347,7 +1345,7 @@ where food.kind in ('generic', 'branded')
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_nutrition_semantics', '', '298b898cd252f08aa9a5f212e85750aeba79cc41616c71afcd3f129471a6cf5c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('guard_food_import_batch_stage_validate_authority', '', 'f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_batch_stage_validate_authority', '', 'd9e807d9655adec93c649c5c9ee896de182c76a8d6ade0f7d9f01d1cf9b148bb', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_update', '', '8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_validation_digest', '', 'c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_record_insert_before_staging_seal', '', '2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -1357,7 +1355,7 @@ where food.kind in ('generic', 'branded')
         ('guard_imported_food_version_child_delete', '', '4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_active_release_authority', '', '306eec1771a7bbf7961bd6d46ba752801fe98f07d27fbf96291a1c454750cd11', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_initial_active_release', '', 'e3cbc51f28aafd274ea2bc3b71b824d51180d8e741dbcfd22d0af9e21849be43', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('guard_food_source_release_activation_authority', '', '54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_source_release_activation_authority', '', '8bdfb048a53a741ed7967c19c65669107753d66d1e5174bde7aeff32110ea599', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_initial_state', '', '797445724ddd8d37cdbcc1891c724e9bd8af543548d322db5cf9c3d22ac13b3d', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_legacy_promotion_grandfather', '', '22340dfcbb5f98e1d0504703b0fb37830b31a4ecde5cbe81e55844968b86f214', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_update', '', '191701f20750b6e98b8acf290a1df2417bf17bd9c3a4e5e87a7ac7ef56453726', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -1964,7 +1962,7 @@ where food.kind in ('generic', 'branded')
     select *
     from (
       values
-        ('catalogue_admit_preparation_v2(text)', 'quality'),
+        ('catalogue_admit_preparation_v2(text)', 'stage'),
         ('catalogue_advance_validation_generation_v2()', 'owner'),
         ('catalogue_assert_validation_context_v2(uuid)', 'owner'),
         ('catalogue_begin_preparation_seal_v2(uuid,text)', 'stage'),
@@ -1992,13 +1990,13 @@ where food.kind in ('generic', 'branded')
         ('catalogue_preparation_uint_v2(jsonb)', 'owner'),
         ('catalogue_prepare_reconciliation_page_v2(uuid,text,bigint)', 'validate'),
         ('catalogue_read_preparation_admission_v2(text)', 'stage'),
-        ('catalogue_read_reconciliation_page_v2(uuid,text,bigint,text,text)', 'reviewers'),
+        ('catalogue_read_reconciliation_page_v2(uuid,text,bigint,text,text)', 'validate'),
         ('catalogue_reconciliation_baseline_header_v2(uuid)', 'owner'),
         ('catalogue_reconciliation_baseline_record_v2(bigint,uuid)', 'owner'),
         ('catalogue_reconciliation_detail_v2(jsonb,jsonb)', 'owner'),
         ('catalogue_reconciliation_input_v2(uuid,text)', 'validate'),
         ('catalogue_reconciliation_validation_page_v2(uuid,text,bigint)', 'validate'),
-        ('catalogue_record_paged_approval_v2(uuid,text,text,text,text,text,text,text)', 'reviewers'),
+        ('catalogue_record_paged_approval_v2(uuid,text,text,text,text,text,text,text)', 'owner'),
         ('catalogue_reject_legacy_batch_v2(uuid)', 'owner'),
         ('catalogue_reject_legacy_record_v2(bigint)', 'owner'),
         ('catalogue_reject_legacy_release_v2(uuid)', 'owner'),
@@ -2017,7 +2015,7 @@ where food.kind in ('generic', 'branded')
         ('catalogue_publication_progress_v2(uuid)', 'owner'),
         ('catalogue_lock_publication_v2(uuid,text,boolean)', 'owner'),
         ('catalogue_assert_publication_approvals_v2(uuid,text,text,text,text)', 'owner'),
-        ('catalogue_admit_publication_v2(text)', 'quality'),
+        ('catalogue_admit_publication_v2(text)', 'promote'),
         ('catalogue_begin_publication_v2(text)', 'promote'),
         ('catalogue_materialize_publication_record_v2(uuid,bigint)', 'owner'),
         ('catalogue_verify_publication_record_v2(uuid,bigint)', 'owner'),
@@ -2177,7 +2175,6 @@ where food.kind in ('generic', 'branded')
   execute 'grant usage on schema public to nutrition_catalogue_stage, nutrition_catalogue_validate';
 
   execute 'revoke all on function public.catalogue_record_import_approval(uuid,text,text,text,text,text) from public';
-  execute 'grant execute on function public.catalogue_record_import_approval(uuid,text,text,text,text,text) to nutrition_catalogue_approve_data, nutrition_catalogue_approve_quality, nutrition_catalogue_approve_rights';
   execute 'grant usage on schema public to nutrition_catalogue_approve_data, nutrition_catalogue_approve_quality, nutrition_catalogue_approve_rights';
 
   execute 'revoke all on function public.catalogue_promote_import_batch(uuid,text,text) from public';
@@ -2239,19 +2236,14 @@ where food.kind in ('generic', 'branded')
       and acl.privilege_type = 'EXECUTE'
       and acl.grantor = expected_owner_oid
       and not acl.is_grantable
-      and coalesce(grantee.rolname, 'PUBLIC') = any (array[
-        expected_owner,
-        'nutrition_catalogue_approve_data',
-        'nutrition_catalogue_approve_quality',
-        'nutrition_catalogue_approve_rights'
-      ])
-  ) <> 4 or (
+      and grantee.rolname = expected_owner
+  ) <> 1 or (
     select pg_catalog.count(*)
     from pg_catalog.pg_proc as procedure_row
     cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as acl
     where procedure_row.oid = approval_function
-  ) <> 4 then
-    raise exception 'catalogue approval function ACL is not the exact four-principal policy'
+  ) <> 1 then
+    raise exception 'historical approval writer ACL is not owner-only'
       using errcode = '55000';
   end if;
 

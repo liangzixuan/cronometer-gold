@@ -1,3 +1,12 @@
+> Current policy, October 23, 2026: Mandatory third-person reviews, independent
+> reviewers, reviewer approvals, different-person rules and human signatures are
+> permanently removed. Any such requirement in retained text below is superseded
+> history. Optional reviews never block development, tests, commits or deployment.
+> Keep actual automated functional, integrity, provenance, recovery and device
+> checks. Device/platform/software signatures, consent, spending, credential
+> custody, deployment permissions and automatic tool approval still apply.
+> Never claim an unperformed review passed.
+
 # Platform-health and reminder release
 
 The initial platform scope is read-only body weight from Apple HealthKit and

@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { canonicalJson } from "@nutrition-tracker/contracts";
 
@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   HEALTH_RELEASE_EVIDENCE_SCHEMA,
-  HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
   P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT,
   P0_CLIENT_SMOKE_REPORT_SCHEMA,
   PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
@@ -43,10 +42,6 @@ const matrix = {
   largeExportArtifactDownload: "passed",
 };
 
-const reviewerKeys = generateKeyPairSync("ed25519");
-const wrongKeys = generateKeyPairSync("ed25519");
-const reviewerPrincipal = "independent.reviewer@example.test";
-const reviewerKeyId = "release-reviewer-2026-01";
 const gitCommit = "a".repeat(40);
 const physicalDeviceApiOrigin = "https://nutrition-api.tail1234.ts.net";
 const supportedRelayVersionAdapter = Object.freeze({
@@ -189,7 +184,7 @@ function physicalDeviceRelayReport() {
   const teardownEnvironmentSha256 = captureDigest(13);
   return {
     schemaVersion: PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
-    trustBoundary: "unsigned-structural-candidate-requires-independent-ed25519-manifest-review",
+    trustBoundary: "source-and-artifact-bound-measurement",
     sourceCaptureBundleSha256: captureDigest(1),
     apiOriginCommitmentSha256: "edc56416dfbb4d570d7eae27b291115365d2e274e06c48fed792a48294f4b87c",
     sourceCommit: gitCommit,
@@ -366,8 +361,7 @@ function p0ClientSmokeReport() {
   }
   return {
     schemaVersion: P0_CLIENT_SMOKE_REPORT_SCHEMA,
-    trustBoundary:
-      "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",
+    trustBoundary: "source-and-artifact-bound-measurement",
     dataClassification: "synthetic-only",
     sourceCaptureBundleSha256: sourceCaptureBundleDigest.digest("hex"),
     gitCommit,
@@ -387,26 +381,7 @@ function p0ClientSmokeReportDigest(report = p0ClientSmokeReport()) {
   return createHash("sha256").update(p0ClientSmokeReportBytes(report)).digest("hex");
 }
 
-const trustStore = {
-  schemaVersion: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
-  reviewers: [
-    {
-      keyId: reviewerKeyId,
-      principal: reviewerPrincipal,
-      algorithm: "Ed25519",
-      publicKeySpkiDerBase64: reviewerKeys.publicKey
-        .export({ format: "der", type: "spki" })
-        .toString("base64"),
-      validFrom: "2026-01-01T00:00:00.000Z",
-      validUntil: "2027-01-01T00:00:00.000Z",
-    },
-  ],
-};
-const checkedInTrustStore = JSON.parse(
-  readFileSync(new URL("../config/health-release-reviewers.json", import.meta.url), "utf8"),
-);
-
-function reviewedArtifact({ artifactType, buildProfile, digest, easBuildId, platform }) {
+function measuredArtifact({ artifactType, buildProfile, digest, easBuildId, platform }) {
   return {
     platform,
     buildProfile,
@@ -419,7 +394,7 @@ function reviewedArtifact({ artifactType, buildProfile, digest, easBuildId, plat
   };
 }
 
-function unsignedManifest(
+function measurementManifest(
   report = physicalDeviceRelayReport(),
   smokeReport = p0ClientSmokeReport(),
 ) {
@@ -429,18 +404,17 @@ function unsignedManifest(
     gitCommit,
     executedBy: "release.operator@example.test",
     executedAt: "2026-08-16T08:00:00.000Z",
-    reviewedBy: reviewerPrincipal,
-    reviewedAt: "2026-08-16T09:00:00.000Z",
+    recordedAt: "2026-08-16T09:00:00.000Z",
     artifacts: {
       physicalDevice: {
-        ios: reviewedArtifact({
+        ios: measuredArtifact({
           artifactType: "ipa",
           buildProfile: "physical-device",
           digest: artifactDigests.physicalDevice.ios,
           easBuildId: buildIds.physicalDevice.ios,
           platform: "ios",
         }),
-        android: reviewedArtifact({
+        android: measuredArtifact({
           artifactType: "apk",
           buildProfile: "physical-device",
           digest: artifactDigests.physicalDevice.android,
@@ -449,14 +423,14 @@ function unsignedManifest(
         }),
       },
       production: {
-        ios: reviewedArtifact({
+        ios: measuredArtifact({
           artifactType: "ipa",
           buildProfile: "production",
           digest: artifactDigests.production.ios,
           easBuildId: buildIds.production.ios,
           platform: "ios",
         }),
-        android: reviewedArtifact({
+        android: measuredArtifact({
           artifactType: "aab",
           buildProfile: "production",
           digest: artifactDigests.production.android,
@@ -520,27 +494,12 @@ function unsignedManifest(
   };
 }
 
-function attest(unsigned = unsignedManifest(), privateKey = reviewerKeys.privateKey) {
-  const signedAttestation = {
-    keyId: reviewerKeyId,
-    algorithm: "Ed25519",
-  };
-  const signature = sign(
-    null,
-    Buffer.from(canonicalJson({ ...unsigned, reviewerAttestation: signedAttestation }), "utf8"),
-    privateKey,
-  );
-  return {
-    ...unsigned,
-    reviewerAttestation: {
-      ...signedAttestation,
-      signatureBase64: signature.toString("base64"),
-    },
-  };
+function recordMeasurement(value = measurementManifest()) {
+  return value;
 }
 
 function environmentFor(
-  manifest = attest(),
+  manifest = recordMeasurement(),
   report = physicalDeviceRelayReport(),
   smokeReport = p0ClientSmokeReport(),
 ) {
@@ -595,27 +554,15 @@ const releaseRuntime = {
 };
 
 describe("native health release evidence", () => {
-  it("fails closed without externally signed evidence", async () => {
-    await expect(
-      validateHealthReleaseEvidence({}, checkTime, trustStore, releaseRuntime),
-    ).rejects.toThrow(/absent/u);
+  it("fails closed without physical-device measurements", async () => {
+    await expect(validateHealthReleaseEvidence({}, checkTime, releaseRuntime)).rejects.toThrow(
+      /absent/u,
+    );
   });
 
-  it("keeps the checked-in trust root blocked until an independent reviewer is onboarded", async () => {
-    expect(checkedInTrustStore.reviewers).toEqual([]);
+  it("accepts four role-specific artifacts with physical-device measurements", async () => {
     await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(),
-        checkTime,
-        checkedInTrustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/trusted key/u);
-  });
-
-  it("accepts four role-specific artifacts with trusted physical-device evidence", async () => {
-    await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, releaseRuntime),
+      validateHealthReleaseEvidence(environmentFor(), checkTime, releaseRuntime),
     ).resolves.toEqual({
       manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
       gitCommit,
@@ -628,59 +575,54 @@ describe("native health release evidence", () => {
         apiOrigin: physicalDeviceApiOrigin,
         reportSha256: p0ClientSmokeReportDigest(),
       },
-      reviewerKeyId,
     });
   });
 
-  it("requires signed v6 relay and P0 smoke evidence with exact keys", async () => {
+  it("requires v7 relay and P0 smoke evidence with exact keys", async () => {
     for (const version of [4, 5]) {
-      const legacy = unsignedManifest();
+      const legacy = measurementManifest();
       legacy.schemaVersion = `nutrition-tracker-health-release-evidence-v${version}`;
       await expect(
         validateHealthReleaseEvidence(
-          environmentFor(attest(legacy)),
+          environmentFor(recordMeasurement(legacy)),
           checkTime,
-          trustStore,
           releaseRuntime,
         ),
-      ).rejects.toThrow(/health-release-evidence-v6/u);
+      ).rejects.toThrow(/health-release-evidence-v7/u);
     }
 
-    const missing = unsignedManifest();
+    const missing = measurementManifest();
     delete missing.physicalDeviceApiRelay;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(missing)),
+        environmentFor(recordMeasurement(missing)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/physicalDeviceApiRelay/u);
 
-    const extra = unsignedManifest();
+    const extra = measurementManifest();
     extra.physicalDeviceApiRelay.provider = "tailscale-serve";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(extra)),
+        environmentFor(recordMeasurement(extra)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/manifest\.physicalDeviceApiRelay must contain exactly/u);
 
-    const missingSmoke = unsignedManifest();
+    const missingSmoke = measurementManifest();
     delete missingSmoke.p0ClientSmoke;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(missingSmoke)),
+        environmentFor(recordMeasurement(missingSmoke)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/p0ClientSmoke/u);
   });
 
-  it("binds the signed origin to the v4 commitment and exact canonical report bytes", async () => {
+  it("binds the recorded origin to the v4 commitment and exact canonical report bytes", async () => {
     expect(physicalDeviceApiOriginCommitmentSha256("https://relay.example.ts.net")).toBe(
       "324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e",
     );
@@ -692,7 +634,6 @@ describe("native health release evidence", () => {
           NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: "https://other.tail1234.ts.net",
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/exactly pin/u);
@@ -701,9 +642,11 @@ describe("native health release evidence", () => {
     wrongOriginReport.apiOriginCommitmentSha256 = captureDigest(999);
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(wrongOriginReport)), wrongOriginReport),
+        environmentFor(
+          recordMeasurement(measurementManifest(wrongOriginReport)),
+          wrongOriginReport,
+        ),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/API-origin commitment must match/u);
@@ -712,24 +655,22 @@ describe("native health release evidence", () => {
     rawOriginReport.apiOrigin = physicalDeviceApiOrigin;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(rawOriginReport)), rawOriginReport),
+        environmentFor(recordMeasurement(measurementManifest(rawOriginReport)), rawOriginReport),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/must contain exactly/u);
 
-    const unsafeOriginManifest = unsignedManifest();
+    const unsafeOriginManifest = measurementManifest();
     unsafeOriginManifest.physicalDeviceApiRelay.apiOrigin = "https://api.github.com";
     await expect(
       validateHealthReleaseEvidence(
         {
-          ...environmentFor(attest(unsafeOriginManifest)),
+          ...environmentFor(recordMeasurement(unsafeOriginManifest)),
           NUTRITION_PHYSICAL_DEVICE_API_ORIGIN:
             unsafeOriginManifest.physicalDeviceApiRelay.apiOrigin,
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/machine.*tailnet.*ts\.net/u);
@@ -738,9 +679,8 @@ describe("native health release evidence", () => {
     changedReport.teardown.boundaryRestored = "failed";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(), changedReport),
+        environmentFor(recordMeasurement(), changedReport),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/SHA-256/u);
@@ -748,7 +688,7 @@ describe("native health release evidence", () => {
 
   it("accepts v5 plus relay v4 and rejects legacy v2/v3 before exact-key parsing", async () => {
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, releaseRuntime),
+      validateHealthReleaseEvidence(environmentFor(), checkTime, releaseRuntime),
     ).resolves.toMatchObject({
       physicalDeviceApiRelay: { apiOrigin: physicalDeviceApiOrigin },
     });
@@ -764,16 +704,15 @@ describe("native health release evidence", () => {
       };
       await expect(
         validateHealthReleaseEvidence(
-          environmentFor(attest(unsignedManifest(legacyReport)), legacyReport),
+          environmentFor(recordMeasurement(measurementManifest(legacyReport)), legacyReport),
           checkTime,
-          trustStore,
           releaseRuntime,
         ),
       ).rejects.toThrow(/Legacy physical-device relay report v2\/v3 is rejected/u);
     }
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         relayVersionAdapters: [],
       }),
@@ -820,7 +759,7 @@ describe("native health release evidence", () => {
       ],
     ]) {
       await expect(
-        validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        validateHealthReleaseEvidence(environmentFor(), checkTime, {
           ...releaseRuntime,
           relayVersionAdapters,
         }),
@@ -838,9 +777,8 @@ describe("native health release evidence", () => {
     Object.assign(report.versionAdapter, testAdapter);
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(report)), report),
+        environmentFor(recordMeasurement(measurementManifest(report)), report),
         checkTime,
-        trustStore,
         {
           ...releaseRuntime,
           relayVersionAdapters: [testAdapter],
@@ -854,20 +792,18 @@ describe("native health release evidence", () => {
     wrongBoundary.trustBoundary = "trusted";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(wrongBoundary)), wrongBoundary),
+        environmentFor(recordMeasurement(measurementManifest(wrongBoundary)), wrongBoundary),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/unsigned structural candidate/u);
+    ).rejects.toThrow(/source-and-artifact-bound measurement/u);
 
     const missingDigest = physicalDeviceRelayReport();
     delete missingDigest.sourceCaptureBundleSha256;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(missingDigest)), missingDigest),
+        environmentFor(recordMeasurement(measurementManifest(missingDigest)), missingDigest),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/must contain exactly/u);
@@ -876,9 +812,8 @@ describe("native health release evidence", () => {
     malformedDigest.sourceCaptureBundleSha256 = "not-a-digest";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(malformedDigest)), malformedDigest),
+        environmentFor(recordMeasurement(measurementManifest(malformedDigest)), malformedDigest),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/sourceCaptureBundleSha256/u);
@@ -888,9 +823,9 @@ describe("native health release evidence", () => {
     const base = environmentFor();
     const absent = { ...base };
     delete absent.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64;
-    await expect(
-      validateHealthReleaseEvidence(absent, checkTime, trustStore, releaseRuntime),
-    ).rejects.toThrow(/exactly one/u);
+    await expect(validateHealthReleaseEvidence(absent, checkTime, releaseRuntime)).rejects.toThrow(
+      /exactly one/u,
+    );
 
     await expect(
       validateHealthReleaseEvidence(
@@ -899,7 +834,6 @@ describe("native health release evidence", () => {
           NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH: "/tmp/relay-report.json",
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/exactly one/u);
@@ -911,31 +845,29 @@ describe("native health release evidence", () => {
           NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64: "A".repeat(87_388),
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/canonical padded standard base64/u);
 
     const report = physicalDeviceRelayReport();
     const noncanonical = Buffer.from(JSON.stringify(report), "utf8");
-    const noncanonicalManifest = unsignedManifest(report);
+    const noncanonicalManifest = measurementManifest(report);
     noncanonicalManifest.physicalDeviceApiRelay.reportSha256 = createHash("sha256")
       .update(noncanonical)
       .digest("hex");
     await expect(
       validateHealthReleaseEvidence(
         {
-          ...environmentFor(attest(noncanonicalManifest), report),
+          ...environmentFor(recordMeasurement(noncanonicalManifest), report),
           NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64: noncanonical.toString("base64"),
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/canonical field order/u);
   });
 
-  it("binds an unsigned synthetic P0 smoke candidate through the signed v6 manifest", async () => {
+  it("binds an unsigned synthetic P0 smoke candidate through the v7 manifest", async () => {
     const mutations = [
       [
         "legacy v1 report schema",
@@ -943,14 +875,14 @@ describe("native health release evidence", () => {
         /p0-client-smoke-report-v3/u,
       ],
       [
-        "legacy v2 report in a newly signed v6 manifest",
+        "legacy v2 report in a newly v7 manifest",
         (report) => (report.schemaVersion = "nutrition-tracker-p0-client-smoke-report-v2"),
         /p0-client-smoke-report-v3/u,
       ],
       [
         "wrong trust marker",
         (report) => (report.trustBoundary = "trusted"),
-        /unsigned structural candidate/u,
+        /source-and-artifact-bound measurement/u,
       ],
       [
         "wrong classification",
@@ -1002,7 +934,7 @@ describe("native health release evidence", () => {
       [
         "execution drift",
         (report) => (report.executedAt = "2026-08-16T07:59:00.000Z"),
-        /exactly bind signed execution/u,
+        /exactly bind recorded execution/u,
       ],
       [
         "duplicate raw capture hash",
@@ -1013,12 +945,13 @@ describe("native health release evidence", () => {
     for (const [label, mutate, expected] of mutations) {
       const smokeReport = p0ClientSmokeReport();
       mutate(smokeReport);
-      const manifest = attest(unsignedManifest(physicalDeviceRelayReport(), smokeReport));
+      const manifest = recordMeasurement(
+        measurementManifest(physicalDeviceRelayReport(), smokeReport),
+      );
       await expect(
         validateHealthReleaseEvidence(
           environmentFor(manifest, physicalDeviceRelayReport(), smokeReport),
           checkTime,
-          trustStore,
           releaseRuntime,
         ),
         label,
@@ -1100,12 +1033,13 @@ describe("native health release evidence", () => {
     for (const [label, mutate] of cases) {
       const smokeReport = p0ClientSmokeReport();
       mutate(smokeReport);
-      const manifest = attest(unsignedManifest(physicalDeviceRelayReport(), smokeReport));
+      const manifest = recordMeasurement(
+        measurementManifest(physicalDeviceRelayReport(), smokeReport),
+      );
       await expect(
         validateHealthReleaseEvidence(
           environmentFor(manifest, physicalDeviceRelayReport(), smokeReport),
           checkTime,
-          trustStore,
           releaseRuntime,
         ),
         label,
@@ -1115,22 +1049,21 @@ describe("native health release evidence", () => {
     }
   });
 
-  it("requires P0 smoke completion to precede manifest review strictly", async () => {
+  it("requires P0 smoke completion to precede manifest recording strictly", async () => {
     const smokeReport = p0ClientSmokeReport();
     const relayReport = physicalDeviceRelayReport();
-    const reviewedAt = unsignedManifest(relayReport, smokeReport).reviewedAt;
-    smokeReport.completedAt = reviewedAt;
-    const manifest = unsignedManifest(relayReport, smokeReport);
-    expect(smokeReport.completedAt).toBe(manifest.reviewedAt);
+    const recordedAt = measurementManifest(relayReport, smokeReport).recordedAt;
+    smokeReport.completedAt = recordedAt;
+    const manifest = measurementManifest(relayReport, smokeReport);
+    expect(smokeReport.completedAt).toBe(manifest.recordedAt);
 
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(manifest), relayReport, smokeReport),
+        environmentFor(recordMeasurement(manifest), relayReport, smokeReport),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/finish before review/u);
+    ).rejects.toThrow(/finish before the measurement record/u);
   });
 
   it("rejects malformed P0 smoke source binding and forbidden identifiers", async () => {
@@ -1142,12 +1075,13 @@ describe("native health release evidence", () => {
     ]) {
       const smokeReport = p0ClientSmokeReport();
       mutate(smokeReport);
-      const manifest = attest(unsignedManifest(physicalDeviceRelayReport(), smokeReport));
+      const manifest = recordMeasurement(
+        measurementManifest(physicalDeviceRelayReport(), smokeReport),
+      );
       await expect(
         validateHealthReleaseEvidence(
           environmentFor(manifest, physicalDeviceRelayReport(), smokeReport),
           checkTime,
-          trustStore,
           releaseRuntime,
         ),
       ).rejects.toThrow(/sourceCaptureBundleSha256|must not contain/u);
@@ -1158,38 +1092,36 @@ describe("native health release evidence", () => {
     const base = environmentFor();
     const absent = { ...base };
     delete absent.NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64;
-    await expect(
-      validateHealthReleaseEvidence(absent, checkTime, trustStore, releaseRuntime),
-    ).rejects.toThrow(/exactly one/u);
+    await expect(validateHealthReleaseEvidence(absent, checkTime, releaseRuntime)).rejects.toThrow(
+      /exactly one/u,
+    );
 
     await expect(
       validateHealthReleaseEvidence(
         { ...base, NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH: "/tmp/p0-client-smoke.json" },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/exactly one/u);
 
     const smokeReport = p0ClientSmokeReport();
     const noncanonical = Buffer.from(JSON.stringify(smokeReport), "utf8");
-    const manifest = unsignedManifest(physicalDeviceRelayReport(), smokeReport);
+    const manifest = measurementManifest(physicalDeviceRelayReport(), smokeReport);
     manifest.p0ClientSmoke.reportSha256 = createHash("sha256").update(noncanonical).digest("hex");
     await expect(
       validateHealthReleaseEvidence(
         {
-          ...environmentFor(attest(manifest), physicalDeviceRelayReport(), smokeReport),
+          ...environmentFor(recordMeasurement(manifest), physicalDeviceRelayReport(), smokeReport),
           NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64: noncanonical.toString("base64"),
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/canonical field order/u);
   });
 
-  it("requires the signed v6 manifest itself to use canonical unambiguous JSON", async () => {
-    const manifest = attest();
+  it("requires the v7 manifest itself to use canonical unambiguous JSON", async () => {
+    const manifest = recordMeasurement();
     const noncanonical = JSON.stringify(manifest);
     await expect(
       validateHealthReleaseEvidence(
@@ -1201,7 +1133,6 @@ describe("native health release evidence", () => {
             .digest("hex"),
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/canonical field order/u);
@@ -1218,7 +1149,6 @@ describe("native health release evidence", () => {
             .digest("hex"),
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/canonical field order/u);
@@ -1239,7 +1169,7 @@ describe("native health release evidence", () => {
       uid: typeof process.getuid === "function" ? process.getuid() : undefined,
     };
     await expect(
-      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+      validateHealthReleaseEvidence(environment, checkTime, {
         ...releaseRuntime,
         readRelayReport: () => ({ after: stableStat, before: stableStat, bytes }),
       }),
@@ -1254,7 +1184,7 @@ describe("native health release evidence", () => {
       ["oversize", { ...stableStat, size: 65_537 }],
     ]) {
       await expect(
-        validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+        validateHealthReleaseEvidence(environment, checkTime, {
           ...releaseRuntime,
           readRelayReport: () => ({ after: stat, before: stat, bytes }),
         }),
@@ -1263,7 +1193,7 @@ describe("native health release evidence", () => {
     }
 
     await expect(
-      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+      validateHealthReleaseEvidence(environment, checkTime, {
         ...releaseRuntime,
         readRelayReport: () => ({
           before: stableStat,
@@ -1289,7 +1219,7 @@ describe("native health release evidence", () => {
       uid: typeof process.getuid === "function" ? process.getuid() : undefined,
     };
     await expect(
-      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+      validateHealthReleaseEvidence(environment, checkTime, {
         ...releaseRuntime,
         readP0ClientSmokeReport: () => ({ after: stableStat, before: stableStat, bytes }),
       }),
@@ -1304,7 +1234,7 @@ describe("native health release evidence", () => {
       { ...stableStat, size: 262_145 },
     ]) {
       await expect(
-        validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+        validateHealthReleaseEvidence(environment, checkTime, {
           ...releaseRuntime,
           readP0ClientSmokeReport: () => ({ after: stat, before: stat, bytes }),
         }),
@@ -1312,7 +1242,7 @@ describe("native health release evidence", () => {
     }
 
     await expect(
-      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+      validateHealthReleaseEvidence(environment, checkTime, {
         ...releaseRuntime,
         readP0ClientSmokeReport: () => ({
           before: stableStat,
@@ -1333,7 +1263,7 @@ describe("native health release evidence", () => {
       [
         "source commit mismatch",
         (report) => (report.sourceCommit = "b".repeat(40)),
-        /sourceCommit must equal the signed manifest\.gitCommit/u,
+        /sourceCommit must equal the measurement manifest\.gitCommit/u,
       ],
       [
         "unsupported adapter ID",
@@ -1686,9 +1616,9 @@ describe("native health release evidence", () => {
         /Restart readiness and probe observations must be strictly ordered/u,
       ],
       [
-        "restart probe equals signed execution",
+        "restart probe equals recorded execution",
         (report) => (report.restart.deviceProbes.lan.observedAt = report.executedAt),
-        /Restart probes must finish before signed relay execution/u,
+        /Restart probes must finish before recorded relay execution/u,
       ],
       [
         "report build mismatch",
@@ -1726,9 +1656,8 @@ describe("native health release evidence", () => {
       mutate(report);
       await expect(
         validateHealthReleaseEvidence(
-          environmentFor(attest(unsignedManifest(report)), report),
+          environmentFor(recordMeasurement(measurementManifest(report)), report),
           checkTime,
-          trustStore,
           releaseRuntime,
         ),
         label,
@@ -1736,38 +1665,36 @@ describe("native health release evidence", () => {
     }
   });
 
-  it("requires relay completion to follow signed execution strictly", async () => {
+  it("requires relay completion to follow recorded execution strictly", async () => {
     const equalExecutionAndCompletion = physicalDeviceRelayReport();
     equalExecutionAndCompletion.completedAt = equalExecutionAndCompletion.executedAt;
 
     await expect(
       validateHealthReleaseEvidence(
         environmentFor(
-          attest(unsignedManifest(equalExecutionAndCompletion)),
+          recordMeasurement(measurementManifest(equalExecutionAndCompletion)),
           equalExecutionAndCompletion,
         ),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/exactly bind signed execution/u);
+    ).rejects.toThrow(/exactly bind recorded execution/u);
   });
 
-  it("requires relay completion to precede manifest review strictly", async () => {
+  it("requires relay completion to precede manifest recording strictly", async () => {
     const report = physicalDeviceRelayReport();
-    const reviewedAt = unsignedManifest(report).reviewedAt;
-    report.completedAt = reviewedAt;
-    const manifest = unsignedManifest(report);
-    expect(report.completedAt).toBe(manifest.reviewedAt);
+    const recordedAt = measurementManifest(report).recordedAt;
+    report.completedAt = recordedAt;
+    const manifest = measurementManifest(report);
+    expect(report.completedAt).toBe(manifest.recordedAt);
 
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(manifest), report),
+        environmentFor(recordMeasurement(manifest), report),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/finish before review/u);
+    ).rejects.toThrow(/finish before the measurement record/u);
   });
 
   it("requires a fresh relay capture and rejects forbidden report payload keys", async () => {
@@ -1775,9 +1702,8 @@ describe("native health release evidence", () => {
     staleCapture.startedAt = "2026-08-14T07:30:00.000Z";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(staleCapture)), staleCapture),
+        environmentFor(recordMeasurement(measurementManifest(staleCapture)), staleCapture),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/span at most 24 hours/u);
@@ -1786,31 +1712,34 @@ describe("native health release evidence", () => {
     teardownBeforeExecution.completedAt = "2026-08-16T07:59:59.000Z";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(teardownBeforeExecution)), teardownBeforeExecution),
+        environmentFor(
+          recordMeasurement(measurementManifest(teardownBeforeExecution)),
+          teardownBeforeExecution,
+        ),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/exactly bind signed execution/u);
+    ).rejects.toThrow(/exactly bind recorded execution/u);
 
     const mismatchedExecution = physicalDeviceRelayReport();
     mismatchedExecution.executedAt = "2026-08-16T08:00:01.000Z";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(mismatchedExecution)), mismatchedExecution),
+        environmentFor(
+          recordMeasurement(measurementManifest(mismatchedExecution)),
+          mismatchedExecution,
+        ),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/exactly bind signed execution/u);
+    ).rejects.toThrow(/exactly bind recorded execution/u);
 
     const leaked = physicalDeviceRelayReport();
     leaked.policy.token = "must-not-be-recorded";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(leaked)), leaked),
+        environmentFor(recordMeasurement(measurementManifest(leaked)), leaked),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/must not contain/u);
@@ -1824,9 +1753,8 @@ describe("native health release evidence", () => {
     let failure;
     try {
       await validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(report)), report),
+        environmentFor(recordMeasurement(measurementManifest(report)), report),
         checkTime,
-        trustStore,
         releaseRuntime,
       );
     } catch (error) {
@@ -1842,7 +1770,7 @@ describe("native health release evidence", () => {
 
   it("hashes each physical-device and production artifact independently", async () => {
     const hashArtifact = vi.fn(releaseRuntime.hashArtifact);
-    await validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+    await validateHealthReleaseEvidence(environmentFor(), checkTime, {
       ...releaseRuntime,
       hashArtifact,
     });
@@ -1854,7 +1782,7 @@ describe("native health release evidence", () => {
     ]);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         hashArtifact: async (path) =>
           path === artifactPaths.production.android
@@ -1864,180 +1792,102 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/production Android AAB digest/u);
   });
 
-  it("rejects a claimed reviewer identity signed by the wrong or an untrusted key", async () => {
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(), wrongKeys.privateKey)),
-        checkTime,
-        trustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/signature verification/u);
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(),
-        checkTime,
-        { ...trustStore, reviewers: [] },
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/trusted key/u);
-
-    const relabeled = attest();
-    relabeled.reviewerAttestation.keyId = "release-reviewer-2026-02";
-    const sameKeyAlternateIdTrustStore = {
-      ...trustStore,
-      reviewers: [
-        ...trustStore.reviewers,
-        {
-          ...trustStore.reviewers[0],
-          keyId: "release-reviewer-2026-02",
-          publicKeySpkiDerBase64: wrongKeys.publicKey
-            .export({ format: "der", type: "spki" })
-            .toString("base64"),
-        },
-      ],
-    };
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(relabeled),
-        checkTime,
-        sameKeyAlternateIdTrustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/signature verification/u);
-
-    const malformedInactiveTrustStore = {
-      ...trustStore,
-      reviewers: [
-        ...trustStore.reviewers,
-        {
-          ...trustStore.reviewers[0],
-          keyId: "future-release-reviewer-2027",
-          publicKeySpkiDerBase64: Buffer.from("not-a-public-key").toString("base64"),
-          validFrom: "2027-01-01T00:00:00.000Z",
-          validUntil: "2028-01-01T00:00:00.000Z",
-        },
-      ],
-    };
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(),
-        checkTime,
-        malformedInactiveTrustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/valid SPKI public key/u);
-  });
-
   it("rejects tampering even when the caller recomputes the JSON checksum", async () => {
-    const tampered = attest();
+    const tampered = recordMeasurement();
     tampered.devices.android.matrix.deletedWeightReconciliation = "passed-but-not-run";
     await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(tampered),
-        checkTime,
-        trustStore,
-        releaseRuntime,
-      ),
+      validateHealthReleaseEvidence(environmentFor(tampered), checkTime, releaseRuntime),
     ).rejects.toThrow(/deletedWeightReconciliation|signature/u);
   });
 
   it("binds device results only to physical-device IPA/APK builds", async () => {
-    const wrongArtifactType = unsignedManifest();
+    const wrongArtifactType = measurementManifest();
     wrongArtifactType.artifacts.physicalDevice.android.artifactType = "aab";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(wrongArtifactType)),
+        environmentFor(recordMeasurement(wrongArtifactType)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/physical-device android apk artifact/u);
 
-    const productionBuildClaim = unsignedManifest();
+    const productionBuildClaim = measurementManifest();
     productionBuildClaim.devices.android.testedEasBuildId = buildIds.production.android;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(productionBuildClaim)),
+        environmentFor(recordMeasurement(productionBuildClaim)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/bind the physical-device artifact/u);
   });
 
   it("binds every artifact to a distinct EAS build, commit, native version, and signer", async () => {
-    const wrongCommit = unsignedManifest();
+    const wrongCommit = measurementManifest();
     wrongCommit.artifacts.production.ios.sourceCommit = "f".repeat(40);
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(wrongCommit)),
+        environmentFor(recordMeasurement(wrongCommit)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/sourceCommit must equal/u);
 
-    const duplicateBuild = unsignedManifest();
+    const duplicateBuild = measurementManifest();
     duplicateBuild.artifacts.production.ios.easBuildId = buildIds.physicalDevice.ios;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(duplicateBuild)),
+        environmentFor(recordMeasurement(duplicateBuild)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/distinct exact EAS build ID/u);
 
-    const mismatchedVersion = unsignedManifest();
+    const mismatchedVersion = measurementManifest();
     mismatchedVersion.artifacts.production.android.nativeBuildVersion = 2;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(mismatchedVersion)),
+        environmentFor(recordMeasurement(mismatchedVersion)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/same source-controlled native build version/u);
 
-    const invalidSigner = unsignedManifest();
+    const invalidSigner = measurementManifest();
     invalidSigner.artifacts.production.android.signingIdentitySha256 = "not-a-fingerprint";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(invalidSigner)),
+        environmentFor(recordMeasurement(invalidSigner)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/signingIdentitySha256/u);
 
-    const duplicateDigest = unsignedManifest();
+    const duplicateDigest = measurementManifest();
     duplicateDigest.artifacts.production.ios.artifactSha256 =
       duplicateDigest.artifacts.physicalDevice.ios.artifactSha256;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(duplicateDigest)),
+        environmentFor(recordMeasurement(duplicateDigest)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/distinct exact SHA-256 digest/u);
   });
 
-  it("binds signed app and native versions to confirmed source-controlled release metadata", async () => {
-    const wrongAppVersion = unsignedManifest();
+  it("binds recorded app and native versions to confirmed source-controlled release metadata", async () => {
+    const wrongAppVersion = measurementManifest();
     wrongAppVersion.appVersion = "0.2.0";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(wrongAppVersion)),
+        environmentFor(recordMeasurement(wrongAppVersion)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/exact source-controlled app version/u);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         readReleaseMetadata: () => ({
           appConfig: {
@@ -2057,32 +1907,30 @@ describe("native health release evidence", () => {
       }),
     ).rejects.toThrow(/must be confirmed/u);
 
-    const wrongIosBuild = unsignedManifest();
+    const wrongIosBuild = measurementManifest();
     wrongIosBuild.artifacts.physicalDevice.ios.nativeBuildVersion = "2";
     wrongIosBuild.artifacts.production.ios.nativeBuildVersion = "2";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(wrongIosBuild)),
+        environmentFor(recordMeasurement(wrongIosBuild)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/confirmed source-controlled iOS build number/u);
 
-    const wrongAndroidBuild = unsignedManifest();
+    const wrongAndroidBuild = measurementManifest();
     wrongAndroidBuild.artifacts.physicalDevice.android.nativeBuildVersion = 2;
     wrongAndroidBuild.artifacts.production.android.nativeBuildVersion = 2;
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(wrongAndroidBuild)),
+        environmentFor(recordMeasurement(wrongAndroidBuild)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/confirmed source-controlled Android version code/u);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         readReleaseMetadata: () => {
           const metadata = structuredClone(confirmedReleaseMetadata);
@@ -2093,7 +1941,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/app config and release-numbering record.*iOS build number/u);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         readReleaseMetadata: () => {
           const metadata = structuredClone(confirmedReleaseMetadata);
@@ -2113,13 +1961,12 @@ describe("native health release evidence", () => {
           NUTRITION_IOS_PRODUCTION_ARTIFACT_PATH: artifactPaths.physicalDevice.ios,
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/distinct normalized absolute path/u);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         statArtifact: (path) => ({
           ...releaseRuntime.statArtifact(path),
@@ -2132,7 +1979,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/distinct filesystem file/u);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         statArtifact: (path) => ({
           ...releaseRuntime.statArtifact(path),
@@ -2143,7 +1990,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/bounded regular signed-binary file/u);
 
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         hashArtifact: async (path) =>
           path === artifactPaths.production.ios
@@ -2161,7 +2008,6 @@ describe("native health release evidence", () => {
           NUTRITION_ANDROID_PHYSICAL_DEVICE_ARTIFACT_PATH: "/tmp/not-the-tested-build.aab",
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/absolute \.apk path/u);
@@ -2173,7 +2019,6 @@ describe("native health release evidence", () => {
           NUTRITION_IOS_PRODUCTION_ARTIFACT_PATH: "/tmp/../tmp/reviewed-production.ipa",
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/normalized absolute \.ipa path/u);
@@ -2185,63 +2030,49 @@ describe("native health release evidence", () => {
           NUTRITION_IOS_PRODUCTION_BUILD_ID: buildIds.physicalDevice.ios,
         },
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/production iOS IPA EAS build ID/u);
   });
 
-  it("rejects stale evidence, self-review, and health payload fields", async () => {
-    const staleUnsigned = unsignedManifest();
+  it("rejects stale evidence and health payload fields", async () => {
+    const staleUnsigned = measurementManifest();
     staleUnsigned.executedAt = "2026-06-01T08:00:00.000Z";
-    staleUnsigned.reviewedAt = "2026-06-01T09:00:00.000Z";
+    staleUnsigned.recordedAt = "2026-06-01T09:00:00.000Z";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(staleUnsigned)),
+        environmentFor(recordMeasurement(staleUnsigned)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/older/u);
 
-    const revivedOldExecution = unsignedManifest();
+    const revivedOldExecution = measurementManifest();
     revivedOldExecution.executedAt = "2026-06-01T08:00:00.000Z";
     await expect(
       validateHealthReleaseEvidence(
-        environmentFor(attest(revivedOldExecution)),
+        environmentFor(recordMeasurement(revivedOldExecution)),
         checkTime,
-        trustStore,
         releaseRuntime,
       ),
     ).rejects.toThrow(/execution is older/u);
 
-    const selfUnsigned = unsignedManifest();
-    selfUnsigned.reviewedBy = selfUnsigned.executedBy;
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(attest(selfUnsigned)),
-        checkTime,
-        trustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/independent reviewer/u);
-
-    const leaked = attest();
+    const leaked = recordMeasurement();
     leaked.devices.ios.matrix.token = "do-not-store-this";
     await expect(
-      validateHealthReleaseEvidence(environmentFor(leaked), checkTime, trustStore, releaseRuntime),
+      validateHealthReleaseEvidence(environmentFor(leaked), checkTime, releaseRuntime),
     ).rejects.toThrow(/must not contain/u);
   });
 
   it("binds evidence to the actual clean Git tree", async () => {
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         gitHead: () => "d".repeat(40),
       }),
     ).rejects.toThrow(/actual Git HEAD/u);
     await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      validateHealthReleaseEvidence(environmentFor(), checkTime, {
         ...releaseRuntime,
         gitStatus: () => " M apps/mobile/App.tsx\n",
       }),

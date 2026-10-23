@@ -33,7 +33,6 @@ const POLICY: BatchValidationPolicy = {
   maximumQuarantineFraction: 0,
   maximumQuarantinedRecords: 0,
   requireAtLeastOneValidRecord: true,
-  requireDistinctApprovalPrincipals: true,
   requireMaterializedNutrientPerValidRecord: true,
 };
 const PRINCIPAL = {
@@ -185,7 +184,7 @@ function observation(values = [payload()]) {
         rightsManifestSha256: HASH,
         rightsManifestUri: "s3://fixture/manifest.json",
         stagedCount: values.length,
-        stagedDatabasePrincipal: "stage_fixture",
+        stagedDatabasePrincipal: "validate_fixture",
         stagingSealSha256: HASH,
         stagingSealedAt: "2026-09-20T00:01:00+00:00",
         status: "staging",
@@ -303,7 +302,6 @@ describe("bounded validate-only catalogue consumer", () => {
     { effectivePrincipal: "assumed" },
     { capabilities: [] },
     { capabilities: ["nutrition_catalogue_stage"] },
-    { capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"] },
     { extra: true },
   ])("rejects authority before observation: %j", async (change) => {
     const f = fixture([{ ...PRINCIPAL, ...change }]);
@@ -316,7 +314,6 @@ describe("bounded validate-only catalogue consumer", () => {
     { maximumExcludedNutrientFraction: Infinity },
     { maximumQuarantineFraction: 1.1 },
     { maximumQuarantinedRecords: 0.5 },
-    { requireDistinctApprovalPrincipals: false },
     { requireAtLeastOneValidRecord: false },
     { requireMaterializedNutrientPerValidRecord: false },
     { extra: 1 },
@@ -357,7 +354,6 @@ describe("bounded validate-only catalogue consumer", () => {
   it.each([
     "source",
     "seal",
-    "stager",
     "state",
     "checkpoint",
     "payload",
@@ -376,7 +372,6 @@ describe("bounded validate-only catalogue consumer", () => {
     const parser = o.parserReport;
     if (variant === "source") o.sourceCode = "HEALTH_CANADA_CNF";
     if (variant === "seal") o.batch.stagingSealSha256 = TOKEN;
-    if (variant === "stager") o.batch.stagedDatabasePrincipal = "validate_fixture";
     if (variant === "state") o.batch.status = "ready";
     if (variant === "checkpoint") o.stageCheckpoint.cursor.nextOffset = 0;
     if (variant === "payload") required(o.records[0]).canonicalPayloadSha256 = TOKEN;

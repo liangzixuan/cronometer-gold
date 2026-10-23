@@ -31,7 +31,6 @@ const POLICY_OPTIONS = [
   "maximum-excluded-nutrient-fraction",
   "maximum-quarantine-fraction",
   "maximum-quarantined-records",
-  "require-distinct-approval-principals",
   "require-at-least-one-valid-record",
   "require-materialized-nutrient-per-valid-record",
 ] as const;
@@ -97,10 +96,6 @@ export async function runCataloguePagedCommand(
       maximumQuarantinedRecords: count(
         requiredOption(options, "maximum-quarantined-records"),
         false,
-      ),
-      requireDistinctApprovalPrincipals: explicitTrue(
-        options,
-        "require-distinct-approval-principals",
       ),
       requireAtLeastOneValidRecord: explicitTrue(options, "require-at-least-one-valid-record"),
       requireMaterializedNutrientPerValidRecord: explicitTrue(

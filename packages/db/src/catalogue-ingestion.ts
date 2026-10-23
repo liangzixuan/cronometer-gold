@@ -2614,12 +2614,7 @@ async function assertBaselineReleaseProvenance(
     .selectAll()
     .where("batch_id", "=", batch.id)
     .execute();
-  const roles = new Set(approvals.map((approval) => approval.approval_role));
   if (
-    approvals.length !== 3 ||
-    !roles.has("data") ||
-    !roles.has("quality") ||
-    !roles.has("rights") ||
     approvals.some(
       (approval) =>
         approval.validation_digest !== validationDigest ||
@@ -2627,15 +2622,8 @@ async function assertBaselineReleaseProvenance(
     )
   ) {
     throw new Error(
-      "Current release does not have one matching immutable approval per required role",
+      "Historical approval differs from the current release validation or rights digest",
     );
-  }
-  const policy = normalizePolicy(batch.validation_policy);
-  if (
-    policy.requireDistinctApprovalPrincipals &&
-    new Set(approvals.map((approval) => approval.principal_id)).size !== approvals.length
-  ) {
-    throw new Error("Current release approvals do not have distinct principals");
   }
   return nutrientMappingRevisionIds;
 }

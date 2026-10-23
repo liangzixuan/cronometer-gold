@@ -29,11 +29,7 @@ export interface CatalogueAuthorityCanaryConnections {
     readonly worker: Kysely<Database>;
   };
   readonly owner: Kysely<Database>;
-  readonly reviewers: {
-    readonly data: Kysely<Database>;
-    readonly quality: Kysely<Database>;
-    readonly rights: Kysely<Database>;
-  };
+  readonly operator: Kysely<Database>;
 }
 
 interface RoleRow {
@@ -111,7 +107,6 @@ interface DefaultAclIdentityRow {
   readonly schema_name: string;
 }
 
-const REVIEWER_CLASSES = ["data", "quality", "rights"] as const;
 const NON_REVIEWER_CLASSES = ["api", "unassigned", "worker"] as const;
 const _TABLE_PRIVILEGES = [
   "DELETE",
@@ -725,7 +720,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
 
   const protectedNames = [
     ...CATALOGUE_CAPABILITY_ROLES,
-    ...REVIEWER_CLASSES.map((role) => policy.reviewerLogins[role]),
+    policy.operatorLogin,
     ...NON_REVIEWER_CLASSES.map((role) => policy.nonReviewerLogins[role]),
   ];
   const protectedSql = sql.join(protectedNames.map((name) => sql`${name}`));
@@ -792,9 +787,9 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     `.execute(database)
   ).rows;
 
-  const reviewerLoginNames = REVIEWER_CLASSES.map((role) => policy.reviewerLogins[role]);
+  const operatorLoginNames = [policy.operatorLogin];
   const nonReviewerLoginNames = NON_REVIEWER_CLASSES.map((role) => policy.nonReviewerLogins[role]);
-  const loginNames = [...reviewerLoginNames, ...nonReviewerLoginNames].sort();
+  const loginNames = [...operatorLoginNames, ...nonReviewerLoginNames].sort();
   const loginSql = sql.join(loginNames.map((name) => sql`${name}`));
 
   const tablePrivileges = (
@@ -1133,13 +1128,13 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     nonSystemSchemas,
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations,
-    schemaVersion: 8,
+    schemaVersion: 9,
     triggers,
     types,
   };
 }
 
-export async function runCatalogueReviewerCanaries(
+export async function runCatalogueAuthorityCanaries(
   connections: CatalogueAuthorityCanaryConnections,
   policy: CatalogueAuthorityDeploymentPolicy,
 ): Promise<CatalogueAuthorityCanaryEvidence> {
@@ -1170,35 +1165,21 @@ export async function runCatalogueReviewerCanaries(
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }> = [];
-  for (const reviewerClass of REVIEWER_CLASSES) {
-    results.push(
-      await approvalCanary(
-        `${reviewerClass}-matching` as CatalogueAuthorityCanaryName,
-        connections.reviewers[reviewerClass],
-        policy.applicationSchema,
-        reviewerClass,
-        batchId,
-        "23503",
-      ),
-    );
-  }
   results.push(
-    await approvalCanary(
-      "data-requesting-quality",
-      connections.reviewers.data,
+    await validationCanary(
+      "operator-validation",
+      connections.operator,
       policy.applicationSchema,
-      "quality",
       batchId,
-      "42501",
+      "23503",
     ),
   );
   for (const nonReviewerClass of NON_REVIEWER_CLASSES) {
     results.push(
-      await approvalCanary(
+      await validationCanary(
         `${nonReviewerClass}-execute` as CatalogueAuthorityCanaryName,
         connections.nonReviewers[nonReviewerClass],
         policy.applicationSchema,
-        "data",
         batchId,
         "42501",
       ),
@@ -1206,7 +1187,7 @@ export async function runCatalogueReviewerCanaries(
   }
   results.push(
     await expectSqlstate(
-      "data-direct-dml",
+      "operator-direct-dml",
       sql`
         explain (costs false)
         insert into ${sql.id(policy.applicationSchema, "food_import_approval")} (
@@ -1224,7 +1205,7 @@ export async function runCatalogueReviewerCanaries(
           ${"b".repeat(64)},
           ${"d".repeat(64)}
         )
-      `.execute(connections.reviewers.data),
+      `.execute(connections.operator),
       "42501",
     ),
   );
@@ -1244,18 +1225,17 @@ export async function runCatalogueReviewerCanaries(
     beforeStructureSha256: catalogueAuthorityDeploymentStructureSha256(before),
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     results,
-    schemaVersion: 8,
+    schemaVersion: 9,
     structure,
   };
   assertCatalogueAuthorityCanaryEvidence(policy, evidence);
   return evidence;
 }
 
-async function approvalCanary(
+async function validationCanary(
   canary: CatalogueAuthorityCanaryName,
   database: Kysely<Database>,
   schema: string,
-  approvalRole: "data" | "quality" | "rights",
   batchId: string,
   expectedSqlstate: "23503" | "42501",
 ): Promise<{
@@ -1265,15 +1245,8 @@ async function approvalCanary(
   return expectSqlstate(
     canary,
     sql`
-      select ${sql.id(schema, "catalogue_record_import_approval")}(
-        p_batch_id => ${batchId}::uuid,
-        p_requested_approval_role => ${approvalRole}::text,
-        p_validation_digest => ${"d".repeat(64)}::text,
-        p_rights_digest => ${"b".repeat(64)}::text,
-        p_external_principal_id => 'canary:catalogue-authority'::text,
-        p_approval_reference => 'canary://catalogue-authority/zero-write'::text
-      )
-    `.execute(database),
+    select ${sql.id(schema, "catalogue_observe_import_validation")}(${batchId}::uuid)
+  `.execute(database),
     expectedSqlstate,
   );
 }
@@ -1313,14 +1286,11 @@ async function assertSessionIdentities(
       database: connections.owner,
       expectedLogin: policy.databaseOwner,
     },
-    ...REVIEWER_CLASSES.map(
-      (role) =>
-        ({
-          applicationName: `catalogue-authority-deploy-zero-${role}`,
-          database: connections.reviewers[role],
-          expectedLogin: policy.reviewerLogins[role],
-        }) as const,
-    ),
+    {
+      applicationName: "catalogue-authority-deploy-zero-operator",
+      database: connections.operator,
+      expectedLogin: policy.operatorLogin,
+    },
     ...NON_REVIEWER_CLASSES.map(
       (role) =>
         ({

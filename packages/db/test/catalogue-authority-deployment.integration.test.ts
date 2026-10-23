@@ -24,7 +24,7 @@ import {
   createDatabase,
   type Database,
   parseCatalogueAuthorityDeploymentPolicy,
-  runCatalogueReviewerCanaries,
+  runCatalogueAuthorityCanaries,
   runMigrations,
 } from "../src/index.js";
 
@@ -32,18 +32,14 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
 
 interface LoginFixture {
-  readonly capability:
-    | "nutrition_catalogue_approve_data"
-    | "nutrition_catalogue_approve_quality"
-    | "nutrition_catalogue_approve_rights"
-    | null;
+  readonly capabilities: readonly string[];
   readonly login: string;
   readonly password: string;
-  readonly roleClass: "api" | "data" | "quality" | "rights" | "unassigned" | "worker";
+  readonly roleClass: "api" | "operator" | "unassigned" | "worker";
 }
 
 describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }, () => {
-  it("fails closed through six isolated real logins without changing protected state", async () => {
+  it("fails closed through four isolated restricted logins without changing protected state", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     assertLoopbackDatabaseUrl(databaseUrl);
 
@@ -54,11 +50,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
     });
     const token = randomBytes(6).toString("hex");
     const ephemeralDatabaseName = `catalogue_authority_deploy_${token}`;
-    const reviewerLogins = {
-      data: `cat_dep_data_${token}`,
-      quality: `cat_dep_quality_${token}`,
-      rights: `cat_dep_rights_${token}`,
-    } as const;
+    const operatorLogin = `cat_dep_operator_${token}`;
     const nonReviewerLogins = {
       api: `cat_dep_api_${token}`,
       unassigned: `cat_dep_unassigned_${token}`,
@@ -66,37 +58,30 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
     } as const;
     const fixtures: LoginFixture[] = [
       {
-        capability: "nutrition_catalogue_approve_data",
-        login: reviewerLogins.data,
+        capabilities: [
+          "nutrition_catalogue_stage",
+          "nutrition_catalogue_validate",
+          "nutrition_catalogue_promote_activate",
+          "nutrition_catalogue_rollback",
+        ],
+        login: operatorLogin,
         password: randomBytes(24).toString("hex"),
-        roleClass: "data",
+        roleClass: "operator",
       },
       {
-        capability: "nutrition_catalogue_approve_quality",
-        login: reviewerLogins.quality,
-        password: randomBytes(24).toString("hex"),
-        roleClass: "quality",
-      },
-      {
-        capability: "nutrition_catalogue_approve_rights",
-        login: reviewerLogins.rights,
-        password: randomBytes(24).toString("hex"),
-        roleClass: "rights",
-      },
-      {
-        capability: null,
+        capabilities: [],
         login: nonReviewerLogins.api,
         password: randomBytes(24).toString("hex"),
         roleClass: "api",
       },
       {
-        capability: null,
+        capabilities: [],
         login: nonReviewerLogins.unassigned,
         password: randomBytes(24).toString("hex"),
         roleClass: "unassigned",
       },
       {
-        capability: null,
+        capabilities: [],
         login: nonReviewerLogins.worker,
         password: randomBytes(24).toString("hex"),
         roleClass: "worker",
@@ -218,9 +203,9 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         await sql`
           grant connect on database ${sql.id(ephemeralDatabaseName)} to ${sql.id(fixture.login)}
         `.execute(bootstrap);
-        if (fixture.capability) {
+        for (const capability of fixture.capabilities) {
           await sql`
-            grant ${sql.id(fixture.capability)} to ${sql.id(fixture.login)}
+            grant ${sql.id(capability)} to ${sql.id(fixture.login)}
             with admin false, inherit true, set false
           `.execute(bootstrap);
         }
@@ -252,9 +237,9 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         observeValidationFunctionSourceSha256: CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
         policyKind: "catalogue-authority-deployment",
         promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
-        reviewerLogins,
+        operatorLogin,
         rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-        schemaVersion: 8,
+        schemaVersion: 9,
         stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
         stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
         stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -283,7 +268,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
       if (!verifierOwner) throw new Error("Catalogue authority owner client is unavailable");
 
       const runCanaries = () =>
-        runCatalogueReviewerCanaries(
+        runCatalogueAuthorityCanaries(
           {
             nonReviewers: {
               api: requireClient(nonReviewerLogins.api),
@@ -291,11 +276,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
               worker: requireClient(nonReviewerLogins.worker),
             },
             owner: verifierOwner,
-            reviewers: {
-              data: requireClient(reviewerLogins.data),
-              quality: requireClient(reviewerLogins.quality),
-              rights: requireClient(reviewerLogins.rights),
-            },
+            operator: requireClient(operatorLogin),
           },
           policy,
         );
@@ -310,14 +291,11 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
       expect(evidence.afterApprovalRowCount).toBe(evidence.beforeApprovalRowCount);
       expect(evidence.afterStructureSha256).toBe(evidence.beforeStructureSha256);
       expect(evidence.results).toEqual([
-        { canary: "data-matching", sqlstate: "23503" },
-        { canary: "quality-matching", sqlstate: "23503" },
-        { canary: "rights-matching", sqlstate: "23503" },
-        { canary: "data-requesting-quality", sqlstate: "42501" },
+        { canary: "operator-validation", sqlstate: "23503" },
         { canary: "api-execute", sqlstate: "42501" },
         { canary: "unassigned-execute", sqlstate: "42501" },
         { canary: "worker-execute", sqlstate: "42501" },
-        { canary: "data-direct-dml", sqlstate: "42501" },
+        { canary: "operator-direct-dml", sqlstate: "42501" },
       ]);
       const observedTriggerNames = evidence.structure.triggers.map((trigger) => trigger.name);
       expect([...observedTriggerNames].sort()).toEqual(
@@ -566,7 +544,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
       `.execute(owner);
       await sql`
         grant usage on schema ${sql.id(backdoorSchema)}
-        to ${sql.id(reviewerLogins.data)}
+        to ${sql.id(operatorLogin)}
       `.execute(owner);
       const backdoorCallable = (
         await sql<{
@@ -575,12 +553,12 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         }>`
           select
             pg_catalog.has_schema_privilege(
-              ${reviewerLogins.data},
+              ${operatorLogin},
               ${backdoorSchema},
               'USAGE'
             ) as schema_usage,
             pg_catalog.has_function_privilege(
-              ${reviewerLogins.data},
+              ${operatorLogin},
               pg_catalog.to_regprocedure(
                 ${`${backdoorSchema}.${backdoorFunction}()`}
               ),

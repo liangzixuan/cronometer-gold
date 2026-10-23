@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash, verify } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   closeSync,
   createReadStream,
@@ -16,14 +16,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "@nutrition-tracker/contracts";
 
 import { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
-import {
-  HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
-  reviewerKeyWasActiveAt,
-  validateReviewerTrustStore,
-} from "./reviewer-trust.mjs";
 
-export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v6";
-export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
+export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v7";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
   "nutrition-tracker-physical-device-relay-report-v4";
 const LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMAS = new Set([
@@ -37,10 +31,8 @@ const PHYSICAL_DEVICE_RELAY_TEST_ADAPTER_PREFIX = "test-";
 const PHYSICAL_DEVICE_API_ORIGIN_COMMITMENT_DOMAIN =
   "nutrition-tracker-physical-device-api-origin-v1";
 export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v3";
-const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY =
-  "unsigned-structural-candidate-requires-independent-ed25519-manifest-review";
-const P0_CLIENT_SMOKE_TRUST_BOUNDARY =
-  "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review";
+const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY = "source-and-artifact-bound-measurement";
+const P0_CLIENT_SMOKE_TRUST_BOUNDARY = "source-and-artifact-bound-measurement";
 const P0_CLIENT_SMOKE_DATA_CLASSIFICATION = "synthetic-only";
 const P0_CLIENT_SMOKE_SOURCE_CAPTURE_BUNDLE_SCHEMA =
   "nutrition-tracker-p0-client-smoke-source-capture-bundle-v3";
@@ -89,7 +81,6 @@ const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const GIT_COMMIT = /^[0-9a-f]{40}$/u;
 const EAS_BUILD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@/+ -]{2,127}$/u;
-const SAFE_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/u;
 const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
 const RELAY_ADAPTER_ID = /^[a-z0-9][a-z0-9._-]{2,63}$/u;
 const RELAY_VERSION = /^[A-Za-z0-9][A-Za-z0-9._+()-]{0,63}$/u;
@@ -795,7 +786,7 @@ function validatePhysicalDeviceRelayReport(
   manifestCommit,
   artifacts,
   executedAt,
-  reviewedAt,
+  recordedAt,
   supportedAdapters,
   allowTestAdapters = false,
 ) {
@@ -835,7 +826,7 @@ function validatePhysicalDeviceRelayReport(
   );
   if (report.trustBoundary !== PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY) {
     throw new TypeError(
-      "physical-device relay report must remain an unsigned structural candidate until independent Ed25519 manifest review.",
+      "physical-device relay report must use the source-and-artifact-bound measurement contract.",
     );
   }
   assertSha256(
@@ -845,7 +836,7 @@ function validatePhysicalDeviceRelayReport(
   assertSha256(report.sessionLedgerSha256, "physical-device relay report.sessionLedgerSha256");
   if (!GIT_COMMIT.test(report.sourceCommit) || report.sourceCommit !== manifestCommit) {
     throw new TypeError(
-      "Physical-device relay report.sourceCommit must equal the signed manifest.gitCommit.",
+      "Physical-device relay report.sourceCommit must equal the measurement manifest.gitCommit.",
     );
   }
   assertSha256(
@@ -856,7 +847,7 @@ function validatePhysicalDeviceRelayReport(
     report.apiOriginCommitmentSha256 !== physicalDeviceApiOriginCommitmentSha256(relay.apiOrigin)
   ) {
     throw new TypeError(
-      "Physical-device relay report API-origin commitment must match signed evidence.",
+      "Physical-device relay report API-origin commitment must match measurement evidence.",
     );
   }
   const startedAt = parseInstant(report.startedAt, "physical-device relay report.startedAt");
@@ -869,11 +860,11 @@ function validatePhysicalDeviceRelayReport(
     startedAt > executedAt ||
     reportExecutedAt !== executedAt ||
     executedAt >= completedAt ||
-    completedAt >= reviewedAt ||
+    completedAt >= recordedAt ||
     completedAt - startedAt > MAX_RELAY_SESSION_MS
   ) {
     throw new TypeError(
-      "Physical-device relay timing must exactly bind signed execution, finish before review, and span at most 24 hours.",
+      "Physical-device relay timing must exactly bind recorded execution, finish before the measurement record, and span at most 24 hours.",
     );
   }
   const times = [startedAt, executedAt];
@@ -1030,7 +1021,7 @@ function validatePhysicalDeviceRelayReport(
     throw new TypeError("Active probes must finish before post-restart local readiness evidence.");
   }
   if (restartObservations[restartObservations.length - 1].observedAt >= executedAt) {
-    throw new TypeError("Restart probes must finish before signed relay execution.");
+    throw new TypeError("Restart probes must finish before recorded relay execution.");
   }
 
   const teardownName = "physical-device relay report.teardown";
@@ -1150,16 +1141,16 @@ function validatePhysicalDeviceRelayReport(
 }
 
 /**
- * Structural review aid only. This does not authenticate a relay candidate or
+ * Validate relay measurements. This does not authenticate a relay candidate or
  * replace validateHealthReleaseEvidence's trusted Ed25519 manifest gate.
  */
-export function validateUnsignedRelayCandidateStructureForReview(
+export function validateRelayMeasurement(
   candidate,
   relay,
   manifestCommit,
   artifacts,
   executedAt,
-  reviewedAt,
+  recordedAt,
   supportedAdapters = PRODUCTION_RELAY_VERSION_ADAPTERS,
 ) {
   return validatePhysicalDeviceRelayReport(
@@ -1168,7 +1159,7 @@ export function validateUnsignedRelayCandidateStructureForReview(
     manifestCommit,
     artifacts,
     executedAt,
-    reviewedAt,
+    recordedAt,
     supportedAdapters,
     true,
   );
@@ -1180,7 +1171,7 @@ function validateP0ClientSmokeReport(
   manifestCommit,
   artifacts,
   executedAt,
-  reviewedAt,
+  recordedAt,
 ) {
   assertExactKeys(
     report,
@@ -1205,7 +1196,7 @@ function validateP0ClientSmokeReport(
   }
   if (report.trustBoundary !== P0_CLIENT_SMOKE_TRUST_BOUNDARY) {
     throw new TypeError(
-      "P0 client-smoke report must remain an unsigned structural candidate until independent Ed25519 health-manifest review.",
+      "P0 client-smoke report must use the source-and-artifact-bound measurement contract.",
     );
   }
   if (report.dataClassification !== P0_CLIENT_SMOKE_DATA_CLASSIFICATION) {
@@ -1220,7 +1211,7 @@ function validateP0ClientSmokeReport(
   }
   const reportOrigin = validatePhysicalDeviceApiUrl(report.apiOrigin);
   if (report.apiOrigin !== reportOrigin.origin || report.apiOrigin !== smoke.apiOrigin) {
-    throw new TypeError("P0 client-smoke report API origin must match signed evidence.");
+    throw new TypeError("P0 client-smoke report API origin must match measurement evidence.");
   }
   const startedAt = parseInstant(report.startedAt, "P0 client-smoke report.startedAt");
   const reportExecutedAt = parseInstant(report.executedAt, "P0 client-smoke report.executedAt");
@@ -1229,11 +1220,11 @@ function validateP0ClientSmokeReport(
     startedAt > executedAt ||
     reportExecutedAt !== executedAt ||
     executedAt > completedAt ||
-    completedAt >= reviewedAt ||
+    completedAt >= recordedAt ||
     completedAt - startedAt > MAX_RELAY_SESSION_MS
   ) {
     throw new TypeError(
-      "P0 client-smoke timing must exactly bind signed execution, finish before review, and span at most 24 hours.",
+      "P0 client-smoke timing must exactly bind recorded execution, finish before the measurement record, and span at most 24 hours.",
     );
   }
 
@@ -1290,16 +1281,16 @@ function validateP0ClientSmokeReport(
 }
 
 /**
- * Structural review aid only. This does not authenticate a smoke candidate or
+ * Validate smoke measurements. This does not authenticate a smoke candidate or
  * replace validateHealthReleaseEvidence's trusted Ed25519 manifest gate.
  */
-export function validateUnsignedP0ClientSmokeCandidateStructureForReview(
+export function validateP0ClientSmokeMeasurement(
   candidate,
   smoke,
   manifestCommit,
   artifacts,
   executedAt,
-  reviewedAt,
+  recordedAt,
 ) {
   rejectHealthPayloadEvidence(candidate);
   return validateP0ClientSmokeReport(
@@ -1308,7 +1299,7 @@ export function validateUnsignedP0ClientSmokeCandidateStructureForReview(
     manifestCommit,
     artifacts,
     executedAt,
-    reviewedAt,
+    recordedAt,
   );
 }
 
@@ -1385,11 +1376,11 @@ function assertArtifacts(artifacts, manifestCommit) {
       manifestCommit,
     );
     if (buildIds.has(artifact.easBuildId)) {
-      throw new TypeError("Every reviewed artifact must have a distinct exact EAS build ID.");
+      throw new TypeError("Every recorded artifact must have a distinct exact EAS build ID.");
     }
     buildIds.add(artifact.easBuildId);
     if (artifactDigests.has(artifact.artifactSha256)) {
-      throw new TypeError("Every reviewed artifact must have a distinct exact SHA-256 digest.");
+      throw new TypeError("Every recorded artifact must have a distinct exact SHA-256 digest.");
     }
     artifactDigests.add(artifact.artifactSha256);
   }
@@ -1478,55 +1469,6 @@ function assertDevice(device, platform, testedArtifact) {
       `manifest.devices.${platform}.healthJournalBenchmark must record the bounded 10,000-revision/100-record physical round trip.`,
     );
   }
-}
-
-function verifyReviewerAttestation(manifest, trustStore, reviewedAt) {
-  assertExactKeys(
-    manifest.reviewerAttestation,
-    ["keyId", "algorithm", "signatureBase64"],
-    "manifest.reviewerAttestation",
-  );
-  if (
-    typeof manifest.reviewerAttestation.keyId !== "string" ||
-    !SAFE_KEY_ID.test(manifest.reviewerAttestation.keyId) ||
-    manifest.reviewerAttestation.algorithm !== "Ed25519"
-  ) {
-    throw new TypeError("Reviewer attestation algorithm or key ID was invalid.");
-  }
-  const signature = decodeStandardBase64(
-    manifest.reviewerAttestation.signatureBase64,
-    "manifest.reviewerAttestation.signatureBase64",
-    128,
-  );
-  if (signature.length !== 64) throw new TypeError("Reviewer attestation signature was invalid.");
-  const reviewers = validateReviewerTrustStore(trustStore, {
-    expectedSchema: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
-    label: "health reviewer trust store",
-  });
-  const trusted = reviewers.find(
-    (reviewer) =>
-      reviewer.keyId === manifest.reviewerAttestation.keyId &&
-      reviewerKeyWasActiveAt(reviewer, reviewedAt),
-  );
-  if (!trusted?.publicKey || trusted.principal !== manifest.reviewedBy) {
-    throw new TypeError("Reviewer attestation does not match an active checked-in trusted key.");
-  }
-  const { signatureBase64: _signature, ...signedAttestation } = manifest.reviewerAttestation;
-  const signedManifest = { ...manifest, reviewerAttestation: signedAttestation };
-  if (
-    !verify(null, Buffer.from(canonicalJson(signedManifest), "utf8"), trusted.publicKey, signature)
-  ) {
-    throw new TypeError("Reviewer attestation signature verification failed.");
-  }
-}
-
-function defaultTrustStore() {
-  return JSON.parse(
-    readFileSync(
-      fileURLToPath(new URL("../config/health-release-reviewers.json", import.meta.url)),
-      "utf8",
-    ),
-  );
 }
 
 function defaultReleaseMetadata() {
@@ -1759,7 +1701,7 @@ function validateRelayReportReadResult(value) {
     before.mode !== after.mode ||
     (before.mtimeMs !== null && after.mtimeMs !== before.mtimeMs)
   ) {
-    throw new TypeError("Physical-device relay report changed while it was being reviewed.");
+    throw new TypeError("Physical-device relay report changed while it was being read.");
   }
   return bytes;
 }
@@ -1770,7 +1712,7 @@ function readPhysicalDeviceRelayReport(
   manifestCommit,
   artifacts,
   executedAt,
-  reviewedAt,
+  recordedAt,
   runtime,
 ) {
   const inline = environment.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64;
@@ -1797,7 +1739,9 @@ function readPhysicalDeviceRelayReport(
 
   const actualDigest = createHash("sha256").update(bytes).digest("hex");
   if (actualDigest !== relay.reportSha256) {
-    throw new TypeError("Physical-device relay report SHA-256 does not match signed evidence.");
+    throw new TypeError(
+      "Physical-device relay report SHA-256 does not match measurement evidence.",
+    );
   }
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) {
@@ -1823,7 +1767,7 @@ function readPhysicalDeviceRelayReport(
       manifestCommit,
       artifacts,
       executedAt,
-      reviewedAt,
+      recordedAt,
       runtime.relayVersionAdapters,
     ),
     reportSha256: actualDigest,
@@ -1926,7 +1870,7 @@ function validateP0ClientSmokeReadResult(value) {
     before.mode !== after.mode ||
     (before.mtimeMs !== null && after.mtimeMs !== before.mtimeMs)
   ) {
-    throw new TypeError("P0 client-smoke report changed while it was being reviewed.");
+    throw new TypeError("P0 client-smoke report changed while it was being read.");
   }
   return bytes;
 }
@@ -1937,7 +1881,7 @@ function readP0ClientSmokeReport(
   manifestCommit,
   artifacts,
   executedAt,
-  reviewedAt,
+  recordedAt,
   runtime,
 ) {
   const inline = environment.NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64;
@@ -1963,7 +1907,7 @@ function readP0ClientSmokeReport(
   }
   const actualDigest = createHash("sha256").update(bytes).digest("hex");
   if (actualDigest !== smoke.reportSha256) {
-    throw new TypeError("P0 client-smoke report SHA-256 does not match signed evidence.");
+    throw new TypeError("P0 client-smoke report SHA-256 does not match measurement evidence.");
   }
   const text = bytes.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(bytes)) {
@@ -1987,7 +1931,7 @@ function readP0ClientSmokeReport(
       manifestCommit,
       artifacts,
       executedAt,
-      reviewedAt,
+      recordedAt,
     ),
     reportSha256: actualDigest,
   };
@@ -2016,17 +1960,16 @@ function defaultReleaseRuntime() {
   };
 }
 
-/** Ordinary CI must never construct this externally reviewed physical-device evidence. */
+/** Ordinary CI must never construct this physical-device measurements without actually executing the device checks. */
 export async function validateHealthReleaseEvidence(
   environment,
   now = new Date(),
-  trustStore = defaultTrustStore(),
   runtime = defaultReleaseRuntime(),
 ) {
   const raw = environment.NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON;
   if (typeof raw !== "string" || raw.length === 0) {
     throw new TypeError(
-      "Signed-device health release evidence is absent. Supply a cryptographically reviewed physical-device manifest.",
+      "Physical-device health release evidence is absent. Supply actual physical-device measurements.",
     );
   }
   if (Buffer.byteLength(raw, "utf8") > MAX_MANIFEST_BYTES) {
@@ -2062,13 +2005,11 @@ export async function validateHealthReleaseEvidence(
       "gitCommit",
       "executedBy",
       "executedAt",
-      "reviewedBy",
-      "reviewedAt",
+      "recordedAt",
       "artifacts",
       "devices",
       "physicalDeviceApiRelay",
       "p0ClientSmoke",
-      "reviewerAttestation",
     ],
     "manifest",
   );
@@ -2082,19 +2023,17 @@ export async function validateHealthReleaseEvidence(
     throw new TypeError("manifest.gitCommit must be a full lowercase Git commit.");
   }
   assertSafeIdentifier(manifest.executedBy, "manifest.executedBy");
-  assertSafeIdentifier(manifest.reviewedBy, "manifest.reviewedBy");
-  if (manifest.executedBy.toLowerCase() === manifest.reviewedBy.toLowerCase()) {
-    throw new TypeError("Physical-device evidence requires an independent reviewer principal.");
-  }
   const executedAt = parseInstant(manifest.executedAt, "manifest.executedAt");
-  const reviewedAt = parseInstant(manifest.reviewedAt, "manifest.reviewedAt");
+  const recordedAt = parseInstant(manifest.recordedAt, "manifest.recordedAt");
   const nowTime = now.getTime();
   if (!Number.isFinite(nowTime)) throw new TypeError("Release-check time is invalid.");
-  if (reviewedAt < executedAt || reviewedAt > nowTime + MAX_CLOCK_SKEW_MS) {
-    throw new TypeError("Evidence review time must follow execution and cannot be in the future.");
+  if (recordedAt < executedAt || recordedAt > nowTime + MAX_CLOCK_SKEW_MS) {
+    throw new TypeError("Evidence record time must follow execution and cannot be in the future.");
   }
-  if (nowTime - reviewedAt > MAX_EVIDENCE_AGE_MS) {
-    throw new TypeError("Signed-device evidence is older than 30 days and must be rerun.");
+  if (nowTime - recordedAt > MAX_EVIDENCE_AGE_MS) {
+    throw new TypeError(
+      "Physical-device measurement record is older than 30 days and must be rerun.",
+    );
   }
   if (nowTime - executedAt > MAX_EVIDENCE_AGE_MS) {
     throw new TypeError("Physical-device execution is older than 30 days and must be rerun.");
@@ -2111,7 +2050,6 @@ export async function validateHealthReleaseEvidence(
       "manifest.p0ClientSmoke.apiOrigin must equal manifest.physicalDeviceApiRelay.apiOrigin.",
     );
   }
-  verifyReviewerAttestation(manifest, trustStore, reviewedAt);
 
   if (typeof runtime.readReleaseMetadata !== "function") {
     throw new TypeError("Source-controlled release metadata reader is unavailable.");
@@ -2120,10 +2058,10 @@ export async function validateHealthReleaseEvidence(
 
   const actualGitHead = runtime.gitHead();
   if (!GIT_COMMIT.test(actualGitHead) || actualGitHead !== manifest.gitCommit) {
-    throw new TypeError("Reviewed health evidence does not match the actual Git HEAD.");
+    throw new TypeError("Health measurements does not match the actual Git HEAD.");
   }
   if (runtime.gitStatus().trim() !== "") {
-    throw new TypeError("Signed-device health release verification requires a clean Git tree.");
+    throw new TypeError("Physical-device health release verification requires a clean Git tree.");
   }
   const relayEvidence = readPhysicalDeviceRelayReport(
     environment,
@@ -2131,7 +2069,7 @@ export async function validateHealthReleaseEvidence(
     manifest.gitCommit,
     manifest.artifacts,
     executedAt,
-    reviewedAt,
+    recordedAt,
     runtime,
   );
   const p0ClientSmokeEvidence = readP0ClientSmokeReport(
@@ -2140,7 +2078,7 @@ export async function validateHealthReleaseEvidence(
     manifest.gitCommit,
     manifest.artifacts,
     executedAt,
-    reviewedAt,
+    recordedAt,
     runtime,
   );
   const checkedArtifacts = artifactSpecifications.map((specification) => {
@@ -2153,26 +2091,26 @@ export async function validateHealthReleaseEvidence(
     );
     if (environment[specification.buildIdEnvironment] !== artifact.easBuildId) {
       throw new TypeError(
-        `The ${specification.label} EAS build ID does not match reviewed evidence.`,
+        `The ${specification.label} EAS build ID does not match recorded evidence.`,
       );
     }
     return { artifact, ...checkedPath, specification };
   });
   const artifactPaths = checkedArtifacts.map(({ path }) => path);
   if (new Set(artifactPaths).size !== artifactPaths.length) {
-    throw new TypeError("Every reviewed artifact must use a distinct normalized absolute path.");
+    throw new TypeError("Every recorded artifact must use a distinct normalized absolute path.");
   }
   const filesystemIdentities = checkedArtifacts
     .map(({ filesystemIdentity }) => filesystemIdentity)
     .filter((identity) => identity !== null);
   if (new Set(filesystemIdentities).size !== filesystemIdentities.length) {
-    throw new TypeError("Every reviewed artifact must identify a distinct filesystem file.");
+    throw new TypeError("Every recorded artifact must identify a distinct filesystem file.");
   }
   const actualDigests = await Promise.all(
     checkedArtifacts.map(({ path }) => runtime.hashArtifact(path)),
   );
   if (new Set(actualDigests).size !== actualDigests.length) {
-    throw new TypeError("Every reviewed artifact file must have a distinct actual SHA-256 digest.");
+    throw new TypeError("Every recorded artifact file must have a distinct actual SHA-256 digest.");
   }
   for (const [index, actualDigest] of actualDigests.entries()) {
     const { artifact, specification } = checkedArtifacts[index];
@@ -2181,7 +2119,7 @@ export async function validateHealthReleaseEvidence(
     }
     if (actualDigest !== artifact.artifactSha256) {
       throw new TypeError(
-        `The actual ${specification.label} digest does not match reviewed evidence.`,
+        `The actual ${specification.label} digest does not match recorded evidence.`,
       );
     }
   }
@@ -2206,7 +2144,6 @@ export async function validateHealthReleaseEvidence(
       apiOrigin: p0ClientSmoke.apiOrigin,
       reportSha256: p0ClientSmokeEvidence.reportSha256,
     },
-    reviewerKeyId: manifest.reviewerAttestation.keyId,
   };
 }
 
@@ -2215,7 +2152,7 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
   try {
     const evidence = await validateHealthReleaseEvidence(process.env);
     process.stdout.write(
-      `Trusted reviewer attestation ${evidence.reviewerKeyId} verified for evidence ${evidence.manifestSha256}.\n`,
+      `Physical-device and artifact measurements verified for evidence ${evidence.manifestSha256}.\n`,
     );
   } catch (error) {
     process.stderr.write(

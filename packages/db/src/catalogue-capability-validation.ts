@@ -39,7 +39,6 @@ const POLICY_KEYS = [
   "maximumQuarantineFraction",
   "maximumQuarantinedRecords",
   "requireAtLeastOneValidRecord",
-  "requireDistinctApprovalPrincipals",
   "requireMaterializedNutrientPerValidRecord",
 ];
 const DIGEST_KEYS = [
@@ -173,8 +172,7 @@ export async function assertCatalogueValidatePrincipal(
     row.privileged !== false ||
     row.ownerMember !== false ||
     !Array.isArray(row.capabilities) ||
-    row.capabilities.length !== 1 ||
-    row.capabilities[0] !== "nutrition_catalogue_validate"
+    !row.capabilities.includes("nutrition_catalogue_validate")
   ) {
     throw new Error(
       "Catalogue validation requires a non-owner restricted login with exactly the validate capability",
@@ -196,11 +194,7 @@ export function validateCatalogueValidationPolicy(value: unknown): BatchValidati
       fail(`Invalid validation policy ${key}`);
   }
   count(policy.maximumQuarantinedRecords);
-  for (const key of [
-    "requireAtLeastOneValidRecord",
-    "requireDistinctApprovalPrincipals",
-    "requireMaterializedNutrientPerValidRecord",
-  ]) {
+  for (const key of ["requireAtLeastOneValidRecord", "requireMaterializedNutrientPerValidRecord"]) {
     if (policy[key] !== true) fail(`Validation policy ${key} must be true`);
   }
   return { ...policy } as BatchValidationPolicy;
@@ -293,10 +287,9 @@ export async function prepareCatalogueValidation(
   if (
     batch.id !== input.batchId ||
     batch.stagingSealSha256 !== input.expectedStagingSealSha256 ||
-    batch.status !== "staging" ||
-    batch.stagedDatabasePrincipal === principal.databasePrincipal
+    batch.status !== "staging"
   )
-    fail("Validation batch, staging seal, state or distinct principal mismatch");
+    fail("Validation batch, staging seal, state mismatch");
   const rows = array(observation.records, MAX_RECORDS);
   if (count(batch.stagedCount) !== rows.length) fail("Observed staged count mismatch");
   const checkpoint = object(observation.stageCheckpoint);

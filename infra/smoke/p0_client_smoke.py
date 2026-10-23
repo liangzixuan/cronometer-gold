@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Normalize reviewer-prepared P0 smoke captures into an unsigned candidate.
+"""Normalize operator-recorded P0 smoke captures into a measured candidate.
 
 The program is deliberately read-only. It does not run a browser, invoke a
 device, authenticate a user, or claim that operator-supplied observations are
-authentic. Only the independent Ed25519 signature on the outer health-release
-manifest can turn the candidate's exact digest into release evidence.
+authentic. The automated health-release checks bind the exact candidate digest
+to the source revision, tested builds and measured device results.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ REVIEW_PACKAGE_SCHEMA = "nutrition-tracker-p0-client-smoke-review-package-v3"
 CAPTURE_SCHEMA = "nutrition-tracker-p0-client-smoke-capture-v3"
 SOURCE_BUNDLE_SCHEMA = "nutrition-tracker-p0-client-smoke-source-capture-bundle-v3"
 UNSIGNED_TRUST_BOUNDARY = (
-    "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review"
+    "source-and-artifact-bound-measurement"
 )
 DATA_CLASSIFICATION = "synthetic-only"
 CLIENT_ROLES = ("browser", "ios", "android")
@@ -371,7 +371,7 @@ def _parser() -> argparse.ArgumentParser:
         "--acknowledge-unsigned-candidate",
         action="store_true",
         required=True,
-        help="Acknowledge that independent Ed25519 health-manifest review is still required",
+        help="Acknowledge that structural normalization does not execute or authenticate observations",
     )
     return parser
 
@@ -381,7 +381,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         parsed = _parser().parse_args(arguments)
         sys.stdout.buffer.write(normalize_candidate(parsed.capture_index))
         sys.stderr.write(
-            "Unsigned synthetic P0 smoke candidate only; independent trusted Ed25519 health-manifest review remains required.\n"
+            "Structural P0 smoke measurement only; actual observations and automated health-release checks remain required.\n"
         )
         return 0
     except P0SmokeError as error:

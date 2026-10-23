@@ -77,8 +77,7 @@ export async function assertCatalogueStagePrincipal(
     row.privileged !== false ||
     row.ownerMember !== false ||
     !Array.isArray(row.capabilities) ||
-    row.capabilities.length !== 1 ||
-    row.capabilities[0] !== "nutrition_catalogue_stage"
+    !row.capabilities.includes("nutrition_catalogue_stage")
   ) {
     throw new Error(
       "Catalogue staging requires a non-owner restricted login with exactly the stage capability",

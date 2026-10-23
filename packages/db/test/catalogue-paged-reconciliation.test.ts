@@ -801,44 +801,45 @@ describe("bounded legacy baseline eligibility", () => {
       valid: 0,
     });
   });
+  it("accepts validated legacy and V2 baselines with zero human approval rows", () => {
+    for (const header of [baselineHeader(), publishedBaselineHeader().header]) {
+      (header as Record<string, JsonValue>).approvals = [];
+      expect(() => verifyCataloguePagedBaselineHeader(header)).not.toThrow();
+    }
+  });
   it("accepts no baseline", () => {
     expect(verifyCataloguePagedBaselineHeader(null)).toBeNull();
   });
-  it.each([
-    "precontract",
-    "release-digest",
-    "mapping-digest",
-    "parser-digest",
-    "approval",
-    "counts",
-  ])("rejects %s before preparation", async (kind) => {
-    const header = baselineHeader();
-    const batch = header.batch as JsonObject,
-      release = header.release as JsonObject;
-    if (kind === "precontract")
-      (batch as Record<string, JsonValue>).validated_food_contract_version = null;
-    if (kind === "release-digest")
-      (release.validation_summary as JsonObject as Record<string, JsonValue>).validationDigest =
-        CONTEXT;
-    if (kind === "mapping-digest")
-      (batch as Record<string, JsonValue>).nutrient_mapping_digest = CONTEXT;
-    if (kind === "parser-digest")
-      (header.parser as JsonObject as Record<string, JsonValue>).report_sha256 = CONTEXT;
-    if (kind === "approval") (header as Record<string, JsonValue>).approvals = [];
-    if (kind === "counts")
-      (release.record_counts as JsonObject as Record<string, JsonValue>).staged = 2;
-    expect(() => verifyCataloguePagedBaselineHeader(header)).toThrow();
-    const data = setup(),
-      f = fixture([{ ...data.input, baselineReleaseId: RELEASE, baselineEvidence: header }]);
-    await expect(
-      reconcileCataloguePagedBatch(
-        f.database,
-        { ...INPUT, expectedCurrentReleaseId: RELEASE },
-        { validationPages: retained([data.page]), consumePage: async () => {} },
-      ),
-    ).rejects.toThrow();
-    expect(f.queries).toHaveLength(1);
-  });
+  it.each(["precontract", "release-digest", "mapping-digest", "parser-digest", "counts"])(
+    "rejects %s before preparation",
+    async (kind) => {
+      const header = baselineHeader();
+      const batch = header.batch as JsonObject,
+        release = header.release as JsonObject;
+      if (kind === "precontract")
+        (batch as Record<string, JsonValue>).validated_food_contract_version = null;
+      if (kind === "release-digest")
+        (release.validation_summary as JsonObject as Record<string, JsonValue>).validationDigest =
+          CONTEXT;
+      if (kind === "mapping-digest")
+        (batch as Record<string, JsonValue>).nutrient_mapping_digest = CONTEXT;
+      if (kind === "parser-digest")
+        (header.parser as JsonObject as Record<string, JsonValue>).report_sha256 = CONTEXT;
+      if (kind === "counts")
+        (release.record_counts as JsonObject as Record<string, JsonValue>).staged = 2;
+      expect(() => verifyCataloguePagedBaselineHeader(header)).toThrow();
+      const data = setup(),
+        f = fixture([{ ...data.input, baselineReleaseId: RELEASE, baselineEvidence: header }]);
+      await expect(
+        reconcileCataloguePagedBatch(
+          f.database,
+          { ...INPUT, expectedCurrentReleaseId: RELEASE },
+          { validationPages: retained([data.page]), consumePage: async () => {} },
+        ),
+      ).rejects.toThrow();
+      expect(f.queries).toHaveLength(1);
+    },
+  );
   it.each(["valid", "payload", "issues", "food", "missing-record"])(
     "streams and independently rechecks legacy baseline %s",
     async (kind) => {
@@ -1429,7 +1430,7 @@ describe("published V2 successor baseline eligibility", () => {
     expect(() => verifyCataloguePagedBaselineHeader(other)).toThrow();
   });
   it.each(["validator_principal", "publisher_principal", "staged_database_principal"])(
-    "rejects approval by %s",
+    "accepts historical approval by the same %s",
     (field) => {
       const { header } = publishedBaselineHeader();
       const owner =
@@ -1441,7 +1442,7 @@ describe("published V2 successor baseline eligibility", () => {
       (
         (header.approvals as Record<string, JsonValue>[])[0] as Record<string, JsonValue>
       ).database_principal = (owner as JsonObject)[field] as JsonValue;
-      expect(() => verifyCataloguePagedBaselineHeader(header)).toThrow();
+      expect(() => verifyCataloguePagedBaselineHeader(header)).not.toThrow();
     },
   );
 
@@ -1539,7 +1540,6 @@ describe("published V2 successor baseline eligibility", () => {
     "summary",
     "legacy-counts",
     "parser-exclusions",
-    "approvals",
     "mapping",
   ])("rejects changed %s evidence", (kind) => {
     const { header } = publishedBaselineHeader();
@@ -1554,11 +1554,6 @@ describe("published V2 successor baseline eligibility", () => {
       ((header.release as JsonObject).record_counts as Record<string, JsonValue>).staged = 2;
     if (kind === "parser-exclusions")
       ((header.release as JsonObject).record_counts as Record<string, JsonValue>).quarantined = "3";
-    if (kind === "approvals") {
-      const approvals = header.approvals as Record<string, JsonValue>[];
-      (approvals[1] as Record<string, JsonValue>).database_principal = (approvals[0] as JsonObject)
-        .database_principal as string;
-    }
     if (kind === "mapping")
       (
         (header.mappings as Record<string, JsonValue>[])[0] as Record<string, JsonValue>

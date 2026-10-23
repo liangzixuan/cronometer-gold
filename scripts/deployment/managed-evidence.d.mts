@@ -1,13 +1,13 @@
-export declare const BACKEND_ADMISSION_SCHEMA: "nutrition-tracker-backend-admission-v1";
-export declare const MANAGED_DEPLOYMENT_SCHEMA: "nutrition-tracker-release-deployment-v8";
-export declare const QUALIFICATION_BUNDLE_SCHEMA: "nutrition-tracker-managed-qualification-bundle-v1";
-export declare const CAPTURE_REVIEW_SCHEMA: "nutrition-tracker-browser-capture-review-v1";
+export declare const BACKEND_ADMISSION_SCHEMA: "nutrition-tracker-backend-admission-v2";
+export declare const MANAGED_DEPLOYMENT_SCHEMA: "nutrition-tracker-release-deployment-v9";
+export declare const QUALIFICATION_BUNDLE_SCHEMA: "nutrition-tracker-managed-qualification-bundle-v2";
+export declare const CAPTURE_OBSERVATION_SCHEMA: "nutrition-tracker-browser-capture-observation-v1";
 export declare const MANAGED_PROFILE: "appwrite-cloud-azure-v1";
 export declare const BACKEND_COMPONENTS: readonly string[];
 export declare const EVIDENCE_LIMITS: Readonly<{
   bundleBytes: number;
   reportBytes: number;
-  reviewMs: number;
+  recordMs: number;
   observationMs: number;
   futureSkewMs: number;
 }>;
@@ -49,7 +49,7 @@ export type QualificationBundle = {
   backendReports: Record<string, JsonRecord>;
   deployment: ManagedDeployment | null;
   runtimeReports: Record<string, JsonRecord> | null;
-  captureReview: JsonRecord;
+  captureObservation: JsonRecord;
   staging: QualificationBundle | null;
 };
 export type BackendContext = {
@@ -73,11 +73,9 @@ export class QualificationEvidenceError extends Error {
 export function canonicalEvidence(value: unknown): string;
 export function evidenceSha256(value: unknown): string;
 export function configurationSha256(value: unknown): string;
-export function loadReviewerTrustStore(): unknown;
 export type ManagedPolicy = {
   schemaVersion: string;
   profile: string;
-  approvedReviewSha256: string;
   endpoint: string;
   projectId: string;
   infrastructureTrust: string;
@@ -87,7 +85,7 @@ export type ManagedPolicy = {
     opensslFixCommit: string;
     architectures: string[];
   };
-  reviewMaximumAgeHours: number;
+  recordMaximumAgeHours: number;
   observationMaximumAgeMinutes: number;
   applicationAccess: string;
   backendComponents: string[];
@@ -97,16 +95,14 @@ export function policySha256(policy?: unknown): string;
 export function validateBackendAdmission(
   bundle: QualificationBundle,
   expected: BackendContext,
-  trustStore?: unknown,
   policy?: unknown,
 ): BackendAdmission;
 export function validateManagedDeployment(
   bundle: QualificationBundle,
   expected: ManagedContext,
-  trustStore?: unknown,
   policy?: unknown,
 ): ManagedDeployment;
-export function validateCaptureReview(
+export function validateCaptureObservation(
   capture: unknown,
   expected: {
     sourceRevision: string;
@@ -116,7 +112,6 @@ export function validateCaptureReview(
     attempt: number;
     now: number;
   },
-  trustStore?: unknown,
 ): unknown;
 export function validateStagingIsolation(
   productionBackend: BackendAdmission,
@@ -127,7 +122,7 @@ export function readQualificationBundle(path: string): QualificationBundle;
 export function qualificationNonce(): string;
 export declare const managedPolicyPath: string;
 
-export declare const MANAGED_ACTIVATION_SCHEMA: "nutrition-tracker-managed-activation-v1";
+export declare const MANAGED_ACTIVATION_SCHEMA: "nutrition-tracker-managed-activation-v2";
 export function validateManagedActivation(
   activation: unknown,
   expected: {
@@ -138,5 +133,4 @@ export function validateManagedActivation(
     deploymentId: string;
     now: number;
   },
-  trustStore?: unknown,
 ): unknown;

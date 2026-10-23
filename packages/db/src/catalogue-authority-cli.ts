@@ -10,7 +10,7 @@ import {
 } from "./catalogue-authority-deployment.js";
 import {
   type CatalogueAuthorityCanaryConnections,
-  runCatalogueReviewerCanaries,
+  runCatalogueAuthorityCanaries,
 } from "./catalogue-authority-deployment-runtime.js";
 import { canonicalJson } from "./catalogue-validation.js";
 import { assertDatabaseMigrationLedgerReady, createDatabase } from "./client.js";
@@ -18,10 +18,8 @@ import type { Database, JsonValue } from "./types.js";
 
 const CONNECTION_ENVIRONMENT = {
   api: "CATALOGUE_AUTHORITY_API_DATABASE_URL",
-  data: "CATALOGUE_AUTHORITY_DATA_REVIEWER_DATABASE_URL",
+  operator: "CATALOGUE_AUTHORITY_OPERATOR_DATABASE_URL",
   owner: "CATALOGUE_AUTHORITY_OWNER_DATABASE_URL",
-  quality: "CATALOGUE_AUTHORITY_QUALITY_REVIEWER_DATABASE_URL",
-  rights: "CATALOGUE_AUTHORITY_RIGHTS_REVIEWER_DATABASE_URL",
   unassigned: "CATALOGUE_AUTHORITY_UNASSIGNED_DATABASE_URL",
   worker: "CATALOGUE_AUTHORITY_WORKER_DATABASE_URL",
 } as const;
@@ -74,14 +72,10 @@ export async function main(
         worker: createClient("worker"),
       },
       owner: createClient("owner"),
-      reviewers: {
-        data: createClient("data"),
-        quality: createClient("quality"),
-        rights: createClient("rights"),
-      },
+      operator: createClient("operator"),
     };
     await assertDatabaseMigrationLedgerReady(connections.owner);
-    const canaries = await runCatalogueReviewerCanaries(connections, policy);
+    const canaries = await runCatalogueAuthorityCanaries(connections, policy);
     const report = {
       applicationSchema: policy.applicationSchema,
       canaries,
@@ -89,7 +83,7 @@ export async function main(
       databaseName: policy.databaseName,
       evidenceKind: "catalogue-authority-deployment-zero-write",
       policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
-      schemaVersion: 8,
+      schemaVersion: 9,
     };
     reportBytes = `${canonicalJson(report as unknown as JsonValue)}\n`;
   } catch (error) {

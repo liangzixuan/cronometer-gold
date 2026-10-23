@@ -561,7 +561,7 @@ def noncollecting_surface_violations(source: str) -> list[str]:
                     ]
                     approved_outputs = {
                         "sys.stdout.buffer.write(normalized_output)",
-                        "sys.stderr.write('Unsigned structural candidate only; independent trusted Ed25519 manifest review remains required.\\n')",
+                        "sys.stderr.write('Structural relay measurement only; actual observations and automated health-release checks remain required.\\n')",
                         "sys.stderr.write(f'Relay evidence rejected: {error}\\n')",
                     }
                     if (

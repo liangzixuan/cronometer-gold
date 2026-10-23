@@ -5,7 +5,6 @@ export interface BatchValidationPolicy extends JsonObject {
   readonly maximumExcludedNutrientFraction: number;
   readonly maximumQuarantineFraction: number;
   readonly maximumQuarantinedRecords: number;
-  readonly requireDistinctApprovalPrincipals: boolean;
   readonly requireAtLeastOneValidRecord: boolean;
   readonly requireMaterializedNutrientPerValidRecord: boolean;
 }
@@ -112,7 +111,6 @@ export function normalizePolicy(
   const excludedNutrientFraction = policy.maximumExcludedNutrientFraction ?? 0;
   const fraction = policy.maximumQuarantineFraction ?? 0.1;
   const count = policy.maximumQuarantinedRecords ?? 100_000;
-  const requireDistinctApprovers = policy.requireDistinctApprovalPrincipals ?? true;
   const requireValid = policy.requireAtLeastOneValidRecord ?? true;
   const requireNutrient = policy.requireMaterializedNutrientPerValidRecord ?? true;
   if (
@@ -135,14 +133,10 @@ export function normalizePolicy(
   if (typeof requireNutrient !== "boolean") {
     throw new Error("requireMaterializedNutrientPerValidRecord must be boolean");
   }
-  if (typeof requireDistinctApprovers !== "boolean") {
-    throw new Error("requireDistinctApprovalPrincipals must be boolean");
-  }
   return {
     maximumExcludedNutrientFraction: excludedNutrientFraction,
     maximumQuarantineFraction: fraction,
     maximumQuarantinedRecords: Number(count),
-    requireDistinctApprovalPrincipals: requireDistinctApprovers,
     requireAtLeastOneValidRecord: requireValid,
     requireMaterializedNutrientPerValidRecord: requireNutrient,
   };

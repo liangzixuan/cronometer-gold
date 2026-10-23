@@ -17,7 +17,6 @@ import {
 import {
   type CataloguePagedReconciliationTerminal,
   reconcileCataloguePagedBatch,
-  submitCataloguePagedApproval,
 } from "../../../packages/db/src/catalogue-paged-reconciliation.js";
 import {
   admitCataloguePreparationV2,
@@ -123,7 +122,7 @@ function record(releaseKey: string, sequence: number): StagedCatalogueRecordInpu
 }
 
 databaseDescribe("catalogue paged publication V2 integration", () => {
-  it("publishes, rolls back, and reuses a 251-record synthetic release under restricted logins", async () => {
+  it("one restricted operator publishes, rolls back and reuses 251 records with zero human approvals", async () => {
     const url = new URL(required(process.env.TEST_DATABASE_URL));
     if (
       !["postgres:", "postgresql:"].includes(url.protocol) ||
@@ -160,13 +159,17 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
     let failure: unknown;
     const cleanupErrors: unknown[] = [];
     const roleSpecs = [
+      {
+        key: "operator",
+        capabilities: [
+          "nutrition_catalogue_stage",
+          "nutrition_catalogue_validate",
+          "nutrition_catalogue_promote_activate",
+          "nutrition_catalogue_rollback",
+        ],
+      },
       { key: "stage", capabilities: ["nutrition_catalogue_stage"] },
       { key: "validate", capabilities: ["nutrition_catalogue_validate"] },
-      { key: "data", capabilities: ["nutrition_catalogue_approve_data"] },
-      { key: "quality", capabilities: ["nutrition_catalogue_approve_quality"] },
-      { key: "rights", capabilities: ["nutrition_catalogue_approve_rights"] },
-      { key: "promote", capabilities: ["nutrition_catalogue_promote_activate"] },
-      { key: "rollback", capabilities: ["nutrition_catalogue_rollback"] },
       { key: "wrong", capabilities: [] },
       { key: "multi", capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"] },
     ].map((item) => ({
@@ -176,6 +179,25 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
     }));
     const actor = (key: string) => required(roleSpecs.find((item) => item.key === key)).name;
     const client = (key: string) => required(clients.get(key));
+    async function assertSingleOperator() {
+      const counts = (
+        await sql<{ count: string }>`select (
+        (select count(*) from food_import_approval) +
+        (select count(*) from catalogue_paged_approval_v2)
+      )::text as count`.execute(db())
+      ).rows[0];
+      expect(counts?.count).toBe("0");
+      const mismatches = (
+        await sql<{ count: string }>`select (
+        (select count(*) from food_import_batch where staged_database_principal is distinct from ${actor("operator")}) +
+        (select count(*) from catalogue_preparation_admission_v2 where admitted_by is distinct from ${actor("operator")} or stage_principal is distinct from ${actor("operator")}) +
+        (select count(*) from catalogue_validation_context_v2 where validator_principal is distinct from ${actor("operator")}) +
+        (select count(*) from catalogue_publication_admission_v2 where admitted_by is distinct from ${actor("operator")} or publisher_principal is distinct from ${actor("operator")}) +
+        (select count(*) from catalogue_publication_v2 where publisher_principal is distinct from ${actor("operator")})
+      )::text as count`.execute(db())
+      ).rows[0];
+      expect(mismatches?.count).toBe("0");
+    }
     async function reconnect(key: string) {
       if (clients.has(key)) {
         await client(key).destroy();
@@ -243,8 +265,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
       input: JsonObject,
       replay = true,
     ) {
-      const key =
-        operation === "admit" ? "quality" : operation === "rollback" ? "rollback" : "promote";
+      const key = "operator";
       const document = encodeCataloguePublicationRequestV2(operation, {
         schemaVersion: 2,
         ...input,
@@ -298,7 +319,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
       expect(search.length).toBe(Math.min(count, 20));
     }
     let mappingSha = "";
-    async function reviewedBatch(
+    async function preparedBatch(
       label: string,
       count: number,
       expectedCurrentReleaseId: string | null,
@@ -307,13 +328,13 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
       const stage = stageIdentity(releaseKey, mappingSha);
       const stageDocument = encodeCataloguePreparationStageIdentityV2(stage);
       const admission = await admitCataloguePreparationV2(
-        client("quality"),
+        client("operator"),
         encodeCataloguePreparationAdmissionV2({
           stageDocument,
           manifestSha256: HASH,
           exportSha256: HASH,
           exportBytes: count * 8192,
-          stagePrincipal: actor("stage"),
+          stagePrincipal: actor("operator"),
           maxRecords: count,
           maxPayloadTextBytes: count * 16384,
           maxIntermediateBytes: 256 * 1024 ** 2,
@@ -324,7 +345,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
           reviewReference: `urn:test:publication:${label}`,
         }),
       );
-      const batch = await beginCataloguePreparationV2(client("stage"), {
+      const batch = await beginCataloguePreparationV2(client("operator"), {
         admissionSha256: admission.admissionSha256,
         stageDocument,
       });
@@ -347,7 +368,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
           previousReceiptSha256: previous,
           records,
         });
-        const receipt = await submitCataloguePreparationStagePageV2(client("stage"), {
+        const receipt = await submitCataloguePreparationStagePageV2(client("operator"), {
           batchId: batch.batchId,
           document,
         });
@@ -356,7 +377,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         payloadBytes = receipt.totalPayloadTextBytes;
         pageCount++;
       }
-      const parser = await beginCataloguePreparationSealV2(client("stage"), {
+      const parser = await beginCataloguePreparationSealV2(client("operator"), {
         batchId: batch.batchId,
         document: encodeCataloguePreparationParserReportV2(
           parserReport(
@@ -369,11 +390,11 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         ),
       });
       for (let pageNumber = 0; pageNumber < pageCount; pageNumber++)
-        await verifyCataloguePreparationSealPageV2(client("stage"), {
+        await verifyCataloguePreparationSealPageV2(client("operator"), {
           batchId: batch.batchId,
           pageNumber,
         });
-      const seal = await finishCataloguePreparationSealV2(client("stage"), {
+      const seal = await finishCataloguePreparationSealV2(client("operator"), {
         batchId: batch.batchId,
         document: encodeCataloguePreparationSealTerminalV2({
           schemaVersion: 2,
@@ -389,7 +410,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
       });
       const batchScratch = join(scratch, label);
       await mkdir(batchScratch, { mode: 0o700 });
-      let context = await beginCatalogueValidationV2(client("validate"), {
+      let context = await beginCatalogueValidationV2(client("operator"), {
         batchId: batch.batchId,
         stagingSealSha256: seal.stagingSealSha256,
         policy: POLICY,
@@ -407,7 +428,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         batchScratch,
       );
       while (context.nextSequence !== context.stagedCount) {
-        const prepared = await prepareCatalogueValidationPageV2(client("validate"), context);
+        const prepared = await prepareCatalogueValidationPageV2(client("operator"), context);
         const pending = await retainCatalogueValidationRequestV2(
           journal,
           prepared.requestDocument,
@@ -416,7 +437,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
           canonicalJson(context as unknown as JsonValue),
         );
         const receipt = await submitCatalogueValidationPageV2(
-          client("validate"),
+          client("operator"),
           prepared,
           context,
         );
@@ -437,12 +458,12 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         canonicalJson(context as unknown as JsonValue),
       );
       const terminal = await submitCatalogueValidationTerminalV2(
-        client("validate"),
+        client("operator"),
         context,
         terminalRequest,
       );
-      await client("validate").destroy();
-      clients.delete("validate");
+      await client("operator").destroy();
+      clients.delete("operator");
       const journalTerminal = await finishCatalogueValidationJournalV2(
         pending,
         terminal.terminalSha256,
@@ -450,14 +471,14 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         batchScratch,
         journal,
       );
-      await reconnect("validate");
+      await reconnect("operator");
       const report = await reconcileCataloguePagedBatch(
-        client("validate"),
+        client("operator"),
         {
           batchId: batch.batchId,
           validationTerminalSha256: terminal.terminalSha256,
           expectedCurrentReleaseId,
-          principalId: actor("validate"),
+          principalId: actor("operator"),
         },
         {
           validationPages: readCatalogueValidationJournalV2(
@@ -472,20 +493,6 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
             ),
         },
       );
-      for (const approvalRole of ["data", "quality", "rights"] as const) {
-        const decision = {
-          batchId: batch.batchId,
-          approvalRole,
-          principalId: actor(approvalRole),
-          rightsManifestSha256: HASH,
-          validationTerminalSha256: terminal.terminalSha256,
-          reportSha256: report.reportSha256,
-          contextSha256: report.contextSha256,
-          approvalReference: `urn:test:publication:${label}:${approvalRole}`,
-        };
-        await expect(submitCataloguePagedApproval(client("promote"), decision)).rejects.toThrow();
-        await submitCataloguePagedApproval(client(approvalRole), decision);
-      }
       return { batchId: batch.batchId, report };
     }
     const limits = {
@@ -506,7 +513,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         contextSha256: batch.report.contextSha256,
         validationTerminalSha256: batch.report.validationTerminalSha256,
         reportSha256: batch.report.reportSha256,
-        publisherPrincipal: actor("promote"),
+        publisherPrincipal: actor("operator"),
         limits,
       };
     }
@@ -616,7 +623,14 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         mappings: [MAPPING],
       });
       mappingSha = await getSourceNutrientMappingDigest(owner, "USDA_FDC");
-      const baseline = await createBaseline({ owner, client, actor, mappingSha, token });
+      const baseline = await createBaseline({
+        owner,
+        client: () => client("operator"),
+        actor: () => actor("operator"),
+        mappingSha,
+        token,
+      });
+      await assertSingleOperator();
       firstBaselineReleaseId = baseline.releaseId;
       const account = await registerPasswordAccount(owner, {
         email: `publication-${token}@example.invalid`,
@@ -689,7 +703,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         userId: account.userId,
         recipeId: recipe.recipe.id,
       });
-      const candidate = await reviewedBatch("first", COUNT, baseline.releaseId);
+      const candidate = await preparedBatch("first", COUNT, baseline.releaseId);
       const beforeAdmission = await state();
       await expect(
         publication("admit", {
@@ -706,18 +720,19 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
       for (const unauthorized of [
         owner,
         client("stage"),
+        client("validate"),
         client("wrong"),
         client("multi"),
-        client("promote"),
       ])
         await expect(
           submitCataloguePublicationRequestV2(unauthorized, "admit", admitDocument),
         ).rejects.toThrow();
       const begun = await beginPublication(candidate);
+      await assertSingleOperator();
       for (const unauthorized of [
         owner,
         client("stage"),
-        client("quality"),
+        client("validate"),
         client("wrong"),
         client("multi"),
       ]) {
@@ -787,7 +802,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         ).rows[0],
       );
       expect(audit).toEqual({
-        principal: actor("promote"),
+        principal: actor("operator"),
         capability: "nutrition_catalogue_promote_activate",
       });
       assertions.push("activation-receipt-search-and-barcode");
@@ -809,20 +824,20 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         "catalogue_rollback_source_release_v1",
       ])
         await expect(
-          sql`select public.${sql.id(name)}('USDA_FDC',${baseline.releaseId}::uuid,${actor("rollback")},'Synthetic legacy fence')`.execute(
-            client("rollback"),
+          sql`select public.${sql.id(name)}('USDA_FDC',${baseline.releaseId}::uuid,${actor("operator")},'Synthetic legacy fence')`.execute(
+            client("operator"),
           ),
         ).rejects.toThrow();
       const backV1 = await rollback(baseline.releaseId, firstRelease);
       await projection(baseline.releaseId, 1);
       await expect(
-        submitCataloguePublicationRequestV2(client("promote"), "activate", activated.document),
+        submitCataloguePublicationRequestV2(client("operator"), "activate", activated.document),
       ).rejects.toThrow();
       await expect(rollback(null, baseline.releaseId)).rejects.toThrow("V1-only");
       await rollback(firstRelease, baseline.releaseId);
       await projection(firstRelease, COUNT);
       await expect(
-        submitCataloguePublicationRequestV2(client("rollback"), "rollback", backV1.document),
+        submitCataloguePublicationRequestV2(client("operator"), "rollback", backV1.document),
       ).rejects.toThrow();
       await rollback(null, firstRelease);
       await projection(null, 0);
@@ -849,7 +864,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         ),
       ).toBe(false);
       assertions.push("immutable-history-diary-recipe-and-private-food");
-      const successor = await reviewedBatch("successor", COUNT, firstRelease);
+      const successor = await preparedBatch("successor", COUNT, firstRelease);
       expect(successor.report.counts.baselineRecords).toBe(String(COUNT));
       const nextBegin = await beginPublication(successor);
       const nextFinish = await materializeAndSeal(
@@ -870,7 +885,7 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
       await rollback(firstRelease, secondRelease);
       await projection(firstRelease, COUNT);
       assertions.push("published-v2-successor-baseline-and-v2-rollback");
-      const drift = await reviewedBatch("drift", 1, firstRelease);
+      const drift = await preparedBatch("drift", 1, firstRelease);
       const driftBegin = await beginPublication(drift);
       // A normal catalogued write after begin invalidates the frozen generation.
       await createCustomFood(owner, {
@@ -986,6 +1001,8 @@ databaseDescribe("catalogue paged publication V2 integration", () => {
         expect(JSON.stringify(inventory)).toContain(table);
       assertions.push("restore-inventory-includes-publication-history");
       assertions.push("exact-request-restart-and-lost-ack-replay");
+      await assertSingleOperator();
+      assertions.push("single-operator-zero-human-approval-rows");
     } catch (error) {
       failure = error;
     } finally {

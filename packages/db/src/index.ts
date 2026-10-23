@@ -125,7 +125,7 @@ export {
 export {
   type CatalogueAuthorityCanaryConnections,
   collectCatalogueAuthorityDeploymentEvidence,
-  runCatalogueReviewerCanaries,
+  runCatalogueAuthorityCanaries,
 } from "./catalogue-authority-deployment-runtime.js";
 export {
   type BatchPolicyEvaluation,

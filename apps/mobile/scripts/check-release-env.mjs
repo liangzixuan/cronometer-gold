@@ -8,18 +8,16 @@ import {
   canonicalEvidence,
   EVIDENCE_LIMITS,
   evidenceSha256,
-  loadReviewerTrustStore,
   MANAGED_DEPLOYMENT_SCHEMA,
   MANAGED_PROFILE,
   parseQualificationBundle,
-  validateCaptureReview,
+  validateCaptureObservation,
   validateManagedActivation,
   validateManagedDeployment,
 } from "../../../scripts/deployment/managed-evidence.mjs";
 
 export const RELEASE_DEPLOYMENT_SCHEMA = MANAGED_DEPLOYMENT_SCHEMA;
 export const MOBILE_RELEASE_BUNDLE_SCHEMA = "nutrition-tracker-mobile-release-bundle-v1";
-export { RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const RELEASE_DEPLOYMENT_UNCONFIRMED_MESSAGE =
   "The exact API deployment and active managed web release must be confirmed before release.";
 export const RELEASE_EXPECTED_BLOCK_EXIT_CODE = 42;
@@ -235,7 +233,7 @@ export function validateReleaseDeploymentPolicy(record) {
   };
   if (canonicalEvidence(record) !== canonicalEvidence(expected))
     throw new TypeError(
-      "The checked-in deployment policy must remain the exact unconfirmed v8 null template.",
+      "The checked-in deployment policy must remain the exact unconfirmed v9 null template.",
     );
   return record;
 }
@@ -276,12 +274,7 @@ function externalBundle(environment) {
     activation: value.activation,
   };
 }
-export function validateReleaseDeployment(
-  environment,
-  record,
-  runtime = defaultReleaseRuntime(),
-  trustStore = loadReviewerTrustStore(),
-) {
+export function validateReleaseDeployment(environment, record, runtime = defaultReleaseRuntime()) {
   validateReleaseDeploymentPolicy(record);
   const { qualification: bundle, activation } = externalBundle(environment);
   const configured = validateReleaseApiUrl(environment.EXPO_PUBLIC_API_URL);
@@ -297,46 +290,34 @@ export function validateReleaseDeployment(
     throw new TypeError(
       "Mobile release requires the production managed deployment at the exact API origin.",
     );
-  validateManagedDeployment(
-    bundle,
-    {
-      target: "production",
-      apiOrigin: configured.origin,
-      sourceRevision: revision,
-      configurationSha256: deployment.configurationSha256,
-      now,
-      webOrigin: deployment.web.webOrigin,
-      siteId: deployment.web.siteId,
-      deploymentId: deployment.web.deploymentId,
-      output: deployment.web.output,
-    },
-    trustStore,
-  );
-  const capture = bundle.captureReview;
-  validateCaptureReview(
-    capture,
-    {
-      sourceRevision: revision,
-      summarySha256: capture?.summarySha256,
-      sessionId: capture?.sessionId,
-      runId: capture?.runId,
-      attempt: capture?.attempt,
-      now,
-    },
-    trustStore,
-  );
-  validateManagedActivation(
-    activation,
-    {
-      deploymentSha256: evidenceSha256(deployment),
-      sourceRevision: revision,
-      apiOrigin: configured.origin,
-      siteId: deployment.web.siteId,
-      deploymentId: deployment.web.deploymentId,
-      now,
-    },
-    trustStore,
-  );
+  validateManagedDeployment(bundle, {
+    target: "production",
+    apiOrigin: configured.origin,
+    sourceRevision: revision,
+    configurationSha256: deployment.configurationSha256,
+    now,
+    webOrigin: deployment.web.webOrigin,
+    siteId: deployment.web.siteId,
+    deploymentId: deployment.web.deploymentId,
+    output: deployment.web.output,
+  });
+  const capture = bundle.captureObservation;
+  validateCaptureObservation(capture, {
+    sourceRevision: revision,
+    summarySha256: capture?.summarySha256,
+    sessionId: capture?.sessionId,
+    runId: capture?.runId,
+    attempt: capture?.attempt,
+    now,
+  });
+  validateManagedActivation(activation, {
+    deploymentSha256: evidenceSha256(deployment),
+    sourceRevision: revision,
+    apiOrigin: configured.origin,
+    siteId: deployment.web.siteId,
+    deploymentId: deployment.web.deploymentId,
+    now,
+  });
   return configured;
 }
 const entrypoint = process.argv[1];

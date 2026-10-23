@@ -22,7 +22,6 @@ const PREPARE_OPTIONS = [
   "maximum-excluded-nutrient-fraction",
   "maximum-quarantine-fraction",
   "maximum-quarantined-records",
-  "require-distinct-approval-principals",
   "require-at-least-one-valid-record",
   "require-materialized-nutrient-per-valid-record",
   "request-out",
@@ -70,10 +69,6 @@ export async function runCatalogueValidationCommand(
       ),
       maximumQuarantineFraction: fractionOption(options, "maximum-quarantine-fraction"),
       maximumQuarantinedRecords: integerOption(options, "maximum-quarantined-records", false),
-      requireDistinctApprovalPrincipals: trueOption(
-        options,
-        "require-distinct-approval-principals",
-      ),
       requireAtLeastOneValidRecord: trueOption(options, "require-at-least-one-valid-record"),
       requireMaterializedNutrientPerValidRecord: trueOption(
         options,

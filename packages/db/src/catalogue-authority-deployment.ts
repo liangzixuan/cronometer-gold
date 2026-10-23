@@ -23,6 +23,13 @@ export const CATALOGUE_CAPABILITY_ROLES = [
   "nutrition_catalogue_rollback",
 ] as const;
 
+export const CATALOGUE_OPERATOR_CAPABILITIES = [
+  "nutrition_catalogue_stage",
+  "nutrition_catalogue_validate",
+  "nutrition_catalogue_promote_activate",
+  "nutrition_catalogue_rollback",
+] as const;
+
 export const CATALOGUE_REVIEWER_CAPABILITIES = {
   data: "nutrition_catalogue_approve_data",
   quality: "nutrition_catalogue_approve_quality",
@@ -45,27 +52,27 @@ export const CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 =
 export const CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 =
   "feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3";
 export const CATALOGUE_PROMOTION_V1_FUNCTION_SOURCE_SHA256 =
-  "2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96";
+  "95960c2b7a1a534fc006c07166638f98d5f558d0fa715662361f19bfda17b2b7";
 export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
   "b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21";
 export const CATALOGUE_ROLLBACK_V1_FUNCTION_SOURCE_SHA256 =
   "1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303";
 export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
-  "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a";
+  "8bdfb048a53a741ed7967c19c65669107753d66d1e5174bde7aeff32110ea599";
 export const CATALOGUE_COMPUTE_STAGING_SEAL_FUNCTION_SOURCE_SHA256 =
   "e7dbe4dc44ca8cef1183b966384000a3a252e4f92cc644091d46281e04d91822";
 export const CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256 =
-  "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2";
+  "e20221d5b0840248f0c8f97f56ff92f3d4a8a72aaddb8834a6258d92ce183aed";
 export const CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256 =
-  "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445";
+  "59f39588711cb8c97d8178ad0d6992b531a12be8a9101924687e5718b282c806";
 export const CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256 =
-  "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5";
+  "53771f5e5417fb1efc5fd42d2696def09a6fdb5e1540b93b80a38a42f2caeb6b";
 export const CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256 =
-  "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2";
+  "70a9be43d627d15d456a5ba7c2af3da9527d6251c70089ac89ae419b5812e0c7";
 export const CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256 =
   "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66";
 export const CATALOGUE_VALIDATE_BATCH_V1_FUNCTION_SOURCE_SHA256 =
-  "0c14bff909d45e0fc0082962484db94af8853761d82e7654dc4494fc78f0d294";
+  "2a063eec6e102d0f69931b6f8a26d7179071e19fdd145e9039150a6ed35e6532";
 export const CATALOGUE_NUTRITION_ATTESTATION_FUNCTION_SOURCE_SHA256 =
   "3b6b5d6de655e09c4935379fbaa356429961dedb39264cb25913e16c3a2c2e59";
 export const CATALOGUE_NUTRITION_DECIMAL_PRODUCT_FUNCTION_SOURCE_SHA256 =
@@ -79,7 +86,7 @@ export const CATALOGUE_RECORD_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256 =
 export const CATALOGUE_BATCH_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256 =
   "298b898cd252f08aa9a5f212e85750aeba79cc41616c71afcd3f129471a6cf5c";
 export const CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256 =
-  "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda";
+  "d9e807d9655adec93c649c5c9ee896de182c76a8d6ade0f7d9f01d1cf9b148bb";
 export const CATALOGUE_RECORD_STAGING_SEAL_GUARD_SOURCE_SHA256 =
   "2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc";
 export const CATALOGUE_CHECKPOINT_STAGING_SEAL_GUARD_SOURCE_SHA256 =
@@ -89,7 +96,7 @@ export const CATALOGUE_APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION =
 export const CATALOGUE_ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND performed_by = database_principal AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 export const CATALOGUE_STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
-  "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
+  "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text)) IS TRUE)";
 export const CATALOGUE_STAGING_SEAL_CONSTRAINT_DEFINITION =
   "CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))";
 export const CATALOGUE_BATCH_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
@@ -486,11 +493,7 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     arguments:
       "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
     configuration: "application-schema",
-    executeGrantees: [
-      "nutrition_catalogue_approve_data",
-      "nutrition_catalogue_approve_quality",
-      "nutrition_catalogue_approve_rights",
-    ],
+    executeGrantees: "owner-only",
     language: "plpgsql",
     leakproof: false,
     name: "catalogue_record_import_approval",
@@ -1259,9 +1262,9 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly observeValidationFunctionSourceSha256: string;
   readonly policyKind: "catalogue-authority-deployment";
   readonly promotionFunctionSourceSha256: string;
-  readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
+  readonly operatorLogin: string;
   readonly rollbackFunctionSourceSha256: string;
-  readonly schemaVersion: 8;
+  readonly schemaVersion: 9;
   readonly stageBatchFunctionSourceSha256: string;
   readonly stageParserReportFunctionSourceSha256: string;
   readonly stageRecordChunkFunctionSourceSha256: string;
@@ -1452,7 +1455,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 8;
+  readonly schemaVersion: 9;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -1472,11 +1475,8 @@ export type CatalogueAuthorityDeploymentStructureEvidence = Omit<
 
 export type CatalogueAuthorityCanaryName =
   | "api-execute"
-  | "data-direct-dml"
-  | "data-matching"
-  | "data-requesting-quality"
-  | "quality-matching"
-  | "rights-matching"
+  | "operator-direct-dml"
+  | "operator-validation"
   | "unassigned-execute"
   | "worker-execute";
 
@@ -1490,7 +1490,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 8;
+  readonly schemaVersion: 9;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -1510,7 +1510,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "observeValidationFunctionSourceSha256",
     "policyKind",
     "promotionFunctionSourceSha256",
-    "reviewerLogins",
+    "operatorLogin",
     "rollbackFunctionSourceSha256",
     "schemaVersion",
     "stageBatchFunctionSourceSha256",
@@ -1519,7 +1519,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "stageValidateGuardSourceSha256",
     "validateBatchFunctionSourceSha256",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 8) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 9) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -1530,7 +1530,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
       "Catalogue authority DEPLOY-0 requires the canonical public schema owned by pg_database_owner",
     );
   }
-  const reviewerLogins = identifierMap(policy.reviewerLogins, REVIEWER_CLASSES, "reviewerLogins");
+  const operatorLogin = identifier(policy.operatorLogin, "operatorLogin");
   const nonReviewerLogins = identifierMap(
     policy.nonReviewerLogins,
     NON_REVIEWER_CLASSES,
@@ -1539,7 +1539,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
   const databaseOwner = identifier(policy.databaseOwner, "databaseOwner");
   const namedLogins = [
     databaseOwner,
-    ...REVIEWER_CLASSES.map((role) => reviewerLogins[role]),
+    operatorLogin,
     ...NON_REVIEWER_CLASSES.map((role) => nonReviewerLogins[role]),
   ];
   if (new Set(namedLogins).size !== namedLogins.length) {
@@ -1627,9 +1627,9 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     observeValidationFunctionSourceSha256,
     policyKind: "catalogue-authority-deployment",
     promotionFunctionSourceSha256,
-    reviewerLogins,
+    operatorLogin,
     rollbackFunctionSourceSha256,
-    schemaVersion: 8,
+    schemaVersion: 9,
     stageBatchFunctionSourceSha256,
     stageParserReportFunctionSourceSha256,
     stageRecordChunkFunctionSourceSha256,
@@ -1698,7 +1698,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 8 ||
+    evidence.schemaVersion !== 9 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -1722,9 +1722,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
       expectedAcl(policy.databaseOwner, policy.databaseOwner, "CONNECT"),
       expectedAcl(policy.databaseOwner, policy.databaseOwner, "CREATE"),
       expectedAcl(policy.databaseOwner, policy.databaseOwner, "TEMPORARY"),
-      ...REVIEWER_CLASSES.map((role) =>
-        expectedAcl(policy.reviewerLogins[role], policy.databaseOwner, "CONNECT"),
-      ),
+      expectedAcl(policy.operatorLogin, policy.databaseOwner, "CONNECT"),
       ...NON_REVIEWER_CLASSES.map((role) =>
         expectedAcl(policy.nonReviewerLogins[role], policy.databaseOwner, "CONNECT"),
       ),
@@ -1764,12 +1762,12 @@ export function assertCatalogueAuthorityDeploymentEvidence(
     "application schema ACL",
   );
 
-  const expectedMemberships = REVIEWER_CLASSES.map((reviewerClass) => ({
+  const expectedMemberships = CATALOGUE_OPERATOR_CAPABILITIES.map((role) => ({
     adminOption: false,
     grantor: policy.databaseOwner,
     inheritOption: true,
-    member: policy.reviewerLogins[reviewerClass],
-    role: CATALOGUE_REVIEWER_CAPABILITIES[reviewerClass],
+    member: policy.operatorLogin,
+    role,
     setOption: false,
   }));
   assertExactMembershipGraph(evidence.memberships, expectedMemberships);
@@ -1799,19 +1797,17 @@ export function assertCatalogueAuthorityDeploymentEvidence(
     if (role.outgoingMemberships.length !== 0) {
       throw new Error(`Catalogue capability role ${roleName} has outgoing membership`);
     }
-    const reviewerClass = REVIEWER_CLASSES.find(
-      (candidate) => CATALOGUE_REVIEWER_CAPABILITIES[candidate] === roleName,
-    );
+    const operational = CATALOGUE_OPERATOR_CAPABILITIES.some((role) => role === roleName);
     assertMemberships(
       role.incomingMemberships,
       roleName,
-      reviewerClass ? [policy.reviewerLogins[reviewerClass]] : [],
+      operational ? [policy.operatorLogin] : [],
       policy.databaseOwner,
     );
   }
 
   const expectedLogins = [
-    ...REVIEWER_CLASSES.map((role) => policy.reviewerLogins[role]),
+    policy.operatorLogin,
     ...NON_REVIEWER_CLASSES.map((role) => policy.nonReviewerLogins[role]),
   ].sort();
   const loginByName = new Map(evidence.logins.map((login) => [login.name, login]));
@@ -1840,26 +1836,12 @@ export function assertCatalogueAuthorityDeploymentEvidence(
     ) {
       throw new Error(`Catalogue deployment login ${loginName} is unsafe`);
     }
-    const reviewerClass = REVIEWER_CLASSES.find(
-      (candidate) => policy.reviewerLogins[candidate] === loginName,
-    );
-    if (reviewerClass) {
-      if (!login.approvalFunctionExecute) {
-        throw new Error(`Reviewer login ${loginName} cannot execute its approval function`);
-      }
-      assertMemberships(
-        login.memberships,
-        CATALOGUE_REVIEWER_CAPABILITIES[reviewerClass],
-        [loginName],
-        policy.databaseOwner,
-      );
-    } else {
-      if (login.approvalFunctionExecute) {
-        throw new Error(`Non-reviewer login ${loginName} can execute the approval function`);
-      }
-      if (login.memberships.length !== 0) {
-        throw new Error(`Non-reviewer login ${loginName} has a catalogue capability`);
-      }
+    if (login.approvalFunctionExecute)
+      throw new Error(`Restricted login ${loginName} can execute a retired approval writer`);
+    if (loginName === policy.operatorLogin) {
+      assertExactMembershipGraph(login.memberships, expectedMemberships);
+    } else if (login.memberships.length !== 0) {
+      throw new Error(`Runtime login ${loginName} has a catalogue capability`);
     }
   }
 }
@@ -1869,7 +1851,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 8 ||
+    evidence.schemaVersion !== 9 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
@@ -1886,14 +1868,11 @@ export function assertCatalogueAuthorityCanaryEvidence(
   }
   assertCatalogueAuthorityDeploymentStructureEvidence(policy, evidence.structure);
   const expected = new Map<CatalogueAuthorityCanaryName, "23503" | "42501">([
-    ["data-matching", "23503"],
-    ["quality-matching", "23503"],
-    ["rights-matching", "23503"],
-    ["data-requesting-quality", "42501"],
+    ["operator-validation", "23503"],
     ["unassigned-execute", "42501"],
     ["api-execute", "42501"],
     ["worker-execute", "42501"],
-    ["data-direct-dml", "42501"],
+    ["operator-direct-dml", "42501"],
   ]);
   if (evidence.results.length !== expected.size) {
     throw new Error("Catalogue authority canary result set differs");
@@ -2189,10 +2168,7 @@ function assertVerifierSessions(
 ): void {
   const expected = [
     { applicationName: "catalogue-authority-deploy-zero-owner", login: policy.databaseOwner },
-    ...REVIEWER_CLASSES.map((role) => ({
-      applicationName: `catalogue-authority-deploy-zero-${role}`,
-      login: policy.reviewerLogins[role],
-    })),
+    { applicationName: "catalogue-authority-deploy-zero-operator", login: policy.operatorLogin },
     ...NON_REVIEWER_CLASSES.map((role) => ({
       applicationName: `catalogue-authority-deploy-zero-${role}`,
       login: policy.nonReviewerLogins[role],

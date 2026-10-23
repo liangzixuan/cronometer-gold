@@ -1,79 +1,44 @@
 # Appwrite deployment from GitHub
 
-Nourishing uses Appwrite Cloud for the SSR web app and a separately qualified
-Azure backend. The approved profile is `appwrite-cloud-azure-v1`. Public HTTPS
-application routes retain API authentication, ownership checks and bounded
-anonymous auth/search traffic. Administration and database/search/storage
-services remain restricted.
+Nourishing uses Appwrite Sites for the SSR website and Azure for its backend.
+The profile is `appwrite-cloud-azure-v1`. API authentication, ownership checks,
+bounded traffic, private administration and actual recovery checks remain.
 
-This implements candidate preparation and activation. It does not provision the
-backend, Sites, DNS, credentials or reviewer trust. The real trust store remains
-empty until named independent reviewers and their public keys are reviewed.
-Backend egress, credential rotation, credit/allowance admission and encrypted
-off-host backup/restore still require implementation and actual evidence; their
-preflight blocks remain. Do not replace those observations with synthetic test
-fixtures or fields that merely claim success.
+The user permanently removed mandatory human reviews and signatures on October
+23, 2026. One authorized operator can prepare, measure and activate a candidate.
+No reviewer enrollment, separate person, human signature or environment approval
+is required. Existing resource, spending, credential and deployment permissions
+still apply. A source push does not deploy the product.
 
-## Managed-runtime decision
+## Prepare, measure and activate
 
-[ADR 0107](adr/0107-appwrite-managed-deployment.md) records the web-only provider
-trust decision approved on September 29, 2026. Appwrite's hidden host/image
-components are not independently scanned or digest-qualified. The release still
-binds exact source and downloaded output, the actual build and SSR Node/OpenSSL,
-libc/native inventory, independent review and private preview behavior. A generic
-`node-22` selection is insufficient. Runtime changes after observation remain a
-provider-managed risk; reports expire and must be measured again.
+1. Collect backend measurements and capture observations for the exact current
+   source, BrowserStack session, run and attempt. Preserve raw reports and their
+   actual times. Synthetic fixtures do not establish a real service result.
+2. Supply a same-revision artifact using `evidence_artifact_id`. Its bounded inert
+   JSON is checked for repository, source, digest, expiry, duplicate keys, archive
+   traversal, links and expansion. The operator may produce this artifact.
+3. Run `prepare` within the specific deployment approval. It validates actual
+   backend reports and live `/ready`, checks Site configuration, uploads an
+   inactive candidate, downloads its source/output and checks both identities.
+4. Measure the actual candidate build, SSR runtime and private preview. Record the
+   results with `deployedBy` and `recordedAt`. Keep raw archive digests and complete
+   report bodies. A person does not sign these records.
+5. Run `activate` with the measured qualification and candidate receipt. It checks
+   current Site/deployment/source/output, backend readiness and GitHub state.
+   Production also checks the actual staging deployment and distinct staging and
+   production database/search/storage identities. These are service boundaries.
+6. Activation is attempted once. An uncertain result permits one bounded provider
+   read to reconcile it. Keep an unknown outcome explicit.
+7. Before native release, record a fresh observation of the active production Site
+   and deployment. Bind it to the actual clean Git HEAD or EAS commit. Keep actual
+   platform signing identities, binary hashes and physical-device measurements.
 
-All six backend images retain their digest, source, runtime, native inventory,
-scan, signature and provenance requirements. There is no fabricated `web` image
-in that backend set. The OCI profile retains its separate seven-image contract.
+Rebuild and measure each target. Source drift or a newer current CI attempt
+invalidates the previous comparison. Records expire after 24 hours; backend and
+runtime observations expire after one hour.
 
-## Prepare, review, activate
-
-The manual `appwrite-site-release` workflow uses the exact committed default
-branch revision. Pushes do not deploy. `operation` is `prepare` or `activate`;
-`target` is `staging` or `production`. Production additionally requires explicit
-promotion and actual configured environment approval/branch protection.
-
-1. Obtain independently signed backend admission and a completed capture review
-   for the exact current BrowserStack source/session/run/attempt. Keep the raw
-   browser runner summary unchanged: its `pending-first-run-review` marker alone
-   never authorizes deployment.
-2. Provide a same-revision review artifact, identified by `review_artifact_id`.
-   An authorized reviewer-controlled GitHub workflow must have uploaded it using
-   `actions/upload-artifact`; creating that artifact is an external review step.
-   This release workflow does not create reviewer signatures or publish its own
-   acceptance input. The archive is limited to 1 MiB, each file to 512 KiB, and
-   exact inert JSON filenames below. Digest, source repository/revision, expired
-   state, duplicate names/keys, traversal, symlinks and expansion are checked.
-3. Run `prepare`. The controller reads current GitHub prerequisites, validates
-   the signed backend report and probes live `/ready` before any upload. It
-   verifies Site configuration, uploads an inactive candidate, waits within its
-   fixed budget, downloads actual source/output and checks both identities.
-   The retained receipt has `operation=prepare` and `status=candidate-prepared`.
-   It cannot authorize activation or a mobile release.
-4. Review the actual candidate's build, SSR and private preview measurements and
-   sign final v8 evidence. Preserve both raw source/output archive digests and
-   the complete report bodies whose canonical hashes were signed.
-5. Run `activate` with that final review and the candidate receipt. The controller
-   rereads Site, candidate, source/output, live backend and current GitHub state.
-   Production independently reads the current staging Site/deployment/source/
-   output, verifies its signed evidence and distinct database/search/storage
-   identities. A historical staging receipt alone cannot pass.
-6. Activation is attempted once. An uncertain provider result permits one
-   bounded read to reconcile the active identity. It does not trigger another
-   mutation, automatic rollback, or a claim that the old deployment stayed active.
-   The receipt distinguishes confirmed activation from an unknown outcome.
-7. Before native release, a reviewer separately signs a fresh observation of the
-   actually active production Site and deployment. Mobile validation consumes
-   the same v8 qualification plus that activation attestation and binds it to the
-   actual clean Git HEAD or EAS commit. Candidate evidence cannot satisfy it.
-
-The source is rebuilt for each environment. Production output must be reviewed
-for production; it is not assumed byte-identical to staging. Source drift or a
-new current CI attempt invalidates the previous comparison.
-
-### Review artifact contents
+## Evidence artifact contents
 
 | Phase | Required files |
 | --- | --- |
@@ -82,32 +47,26 @@ new current CI attempt invalidates the previous comparison.
 | Production prepare | `qualification.json`, `staging-config.json`, `staging-receipt.json` |
 | Production activate | All four files |
 
-`qualification.json` uses `nutrition-tracker-managed-qualification-bundle-v1`:
-backend admission and five actual report bodies, signed capture review, optional
-final deployment and three runtime reports, plus a non-recursive staging bundle
-for production. Backend admission is `nutrition-tracker-backend-admission-v1`;
-final web/backend evidence is `nutrition-tracker-release-deployment-v8`.
-Exact shapes and required measurements are defined in
-`scripts/deployment/managed-evidence.mjs`. Report JSON must be canonical. Reviewed
-records expire after 24 hours and runtime/backend observations after one hour.
-Signatures use active checked-in Ed25519 reviewer keys, distinct from the
-operator. CLI flags cannot supply a replacement trust store.
+Qualification uses `nutrition-tracker-managed-qualification-bundle-v2`, backend
+admission uses `nutrition-tracker-backend-admission-v2`, and final deployment uses
+`nutrition-tracker-release-deployment-v9`. Exact shapes and measured fields are
+defined in `scripts/deployment/managed-evidence.mjs`. JSON must be canonical.
+The artifact is at most 1 MiB and each file at most 512 KiB.
 
-`/ready` is a bounded live database-readiness probe. It does not identify a VM,
-prove search/worker/storage health or replace signed host/runtime observations.
-Those are separate report bodies. Credentials and signed private URLs do not
-belong in evidence or retained receipts.
+`/ready` checks current database readiness. Actual host, search, worker, storage,
+runtime, restore and access measurements remain separate. Keep credentials and
+private signed URLs out of reports and retained receipts.
 
 ## Configuration
 
 The fixed endpoint is `https://nyc.cloud.appwrite.io/v1`, project
 `6abac02e002f10c31ac2`. Each GitHub environment (`appwrite-staging` and
-`appwrite-production`) needs its own reviewed Site and exact target values.
+`appwrite-production`) needs its own configured Site and exact target values.
 
 | Environment value | Meaning |
 | --- | --- |
-| Secret `APPWRITE_DEPLOY_KEY` | Existing target API key with reviewed Sites scopes; production also needs read access to staging |
-| Secret `APPWRITE_BACKEND_READINESS_TOKEN` | Target-specific 64-hex readiness credential, unless the runner has an actually admitted reviewer /32 |
+| Secret `APPWRITE_DEPLOY_KEY` | Existing target API key with configured Sites scopes; production also needs read access to staging |
+| Secret `APPWRITE_BACKEND_READINESS_TOKEN` | Target-specific 64-hex readiness credential, unless the runner has an actually admitted operator /32 |
 | Secret `APPWRITE_STAGING_READINESS_TOKEN` | Separate staging readiness credential for production's staging comparison; no fallback to the production credential |
 | `APPWRITE_SITE_ID` / `APPWRITE_OTHER_SITE_ID` | Distinct reviewed target/other Site IDs |
 | `WEB_PUBLIC_ORIGIN` / `API_INTERNAL_URL` | Exact target HTTPS origins |

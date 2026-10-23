@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   validateHealthReleaseEvidence,
-  validateUnsignedRelayCandidateStructureForReview,
+  validateRelayMeasurement,
 } from "./check-health-release.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -78,13 +78,11 @@ describe("Windows Tailscale relay review-package normalizer trust boundary", () 
       expect(report.apiOriginCommitmentSha256).toBe(
         "324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e",
       );
-      expect(report.trustBoundary).toBe(
-        "unsigned-structural-candidate-requires-independent-ed25519-manifest-review",
-      );
+      expect(report.trustBoundary).toBe("source-and-artifact-bound-measurement");
       expect(report.sourceCommit).toBe(sourceCommit);
       expect(report.sourceCaptureBundleSha256).toMatch(/^[0-9a-f]{64}$/u);
       expect(
-        validateUnsignedRelayCandidateStructureForReview(
+        validateRelayMeasurement(
           report,
           { apiOrigin: physicalDeviceApiOrigin },
           sourceCommit,
@@ -126,7 +124,7 @@ describe("Windows Tailscale relay review-package normalizer trust boundary", () 
           NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH: reportPath,
         }),
       ).rejects.toThrow(
-        "Signed-device health release evidence is absent. Supply a cryptographically reviewed physical-device manifest.",
+        "Physical-device health release evidence is absent. Supply actual physical-device measurements.",
       );
     } finally {
       rmSync(directory, { recursive: true, force: true });

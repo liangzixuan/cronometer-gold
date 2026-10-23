@@ -19,7 +19,7 @@ const pagedPolicyBytes = readFileSync(
 );
 if (
   createHash("sha256").update(pagedPolicyBytes).digest("hex") !==
-  "97f155eed1159cab94c388990ac0e55a0714fa22190eac66563602e82df61e7c"
+  "aba3a2af0e40fca38c5e30820943d9961de6e561c6d5cc28165d6912963ac7de"
 ) {
   throw new Error("Paged catalogue authority manifest differs from reviewed policy");
 }
@@ -38,7 +38,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "36a171d19a95ba183dc99269694fe7c48f7b13826499850b01a82492905ec3dc";
+  "b27f3f04e607ffe7d0b7a4b155c3f9cfe4c235383ca0a6c83c50b4d87a062eb3";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -54,7 +54,7 @@ const APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION =
 const ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND performed_by = database_principal AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 const STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
-  "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
+  "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text)) IS TRUE)";
 const STAGING_SEAL_CONSTRAINT_DEFINITION =
   "CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))";
 const BATCH_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
@@ -490,7 +490,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2",
+      sourceSha256: "e20221d5b0840248f0c8f97f56ff92f3d4a8a72aaddb8834a6258d92ce183aed",
       strict: false,
       volatility: "v",
     },
@@ -522,7 +522,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96",
+      sourceSha256: "95960c2b7a1a534fc006c07166638f98d5f558d0fa715662361f19bfda17b2b7",
       strict: false,
       volatility: "v",
     },
@@ -533,11 +533,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       arguments:
         "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
       config: PINNED_AUTHORITY_SEARCH_PATH,
-      executeGrantees: [
-        "nutrition_catalogue_approve_data",
-        "nutrition_catalogue_approve_quality",
-        "nutrition_catalogue_approve_rights",
-      ],
+      executeGrantees: "owner-only",
       language: "plpgsql",
       leakproof: false,
       parallel: "u",
@@ -610,7 +606,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445",
+      sourceSha256: "59f39588711cb8c97d8178ad0d6992b531a12be8a9101924687e5718b282c806",
       strict: false,
       volatility: "v",
     },
@@ -626,7 +622,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5",
+      sourceSha256: "53771f5e5417fb1efc5fd42d2696def09a6fdb5e1540b93b80a38a42f2caeb6b",
       strict: false,
       volatility: "v",
     },
@@ -642,7 +638,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2",
+      sourceSha256: "70a9be43d627d15d456a5ba7c2af3da9527d6251c70089ac89ae419b5812e0c7",
       strict: false,
       volatility: "v",
     },
@@ -692,7 +688,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "0c14bff909d45e0fc0082962484db94af8853761d82e7654dc4494fc78f0d294",
+      sourceSha256: "2a063eec6e102d0f69931b6f8a26d7179071e19fdd145e9039150a6ed35e6532",
       strict: false,
       volatility: "v",
     },
@@ -795,7 +791,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
       executeGrantees: "owner-only",
-      sourceSha256: "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda",
+      sourceSha256: "d9e807d9655adec93c649c5c9ee896de182c76a8d6ade0f7d9f01d1cf9b148bb",
     },
   ],
   [
@@ -848,7 +844,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
       executeGrantees: "owner-only",
-      sourceSha256: "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a",
+      sourceSha256: "8bdfb048a53a741ed7967c19c65669107753d66d1e5174bde7aeff32110ea599",
     },
   ],
   [

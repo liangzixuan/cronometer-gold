@@ -1,4 +1,4 @@
-"""Read a bounded same-revision review artifact; never execute its contents."""
+"""Read a bounded same-revision measurement artifact; never execute its contents."""
 import argparse
 import hashlib
 import io
@@ -28,7 +28,7 @@ class AdmissionError(Exception):
 
 def require(condition):
     if not condition:
-        raise AdmissionError("review_artifact_rejected")
+        raise AdmissionError("evidence_artifact_rejected")
 
 
 def unique_object(pairs):
@@ -44,7 +44,7 @@ def parse_json(data):
         return json.loads(data, object_pairs_hook=unique_object,
                           parse_constant=lambda _: require(False))
     except (ValueError, UnicodeError, RecursionError) as error:
-        raise AdmissionError("review_artifact_json_invalid") from error
+        raise AdmissionError("evidence_artifact_json_invalid") from error
 
 
 def bounded_gh(path, maximum):
@@ -137,7 +137,7 @@ def review_files(archive, expected_sha, operation, target):
                 require(isinstance(parse_json(data), dict))
                 result[entry.filename] = data
     except (zipfile.BadZipFile, RuntimeError, EOFError, OSError) as error:
-        raise AdmissionError("review_artifact_archive_invalid") from error
+        raise AdmissionError("evidence_artifact_archive_invalid") from error
     require(set(result) == required)
     return result
 
@@ -173,7 +173,7 @@ def main():
         result = download(args.artifact_id, args.revision, args.operation, args.target, args.out)
         print(json.dumps(result))
     except (AdmissionError, OSError, subprocess.SubprocessError):
-        raise SystemExit("Review artifact admission failed; no deployment action was taken.")
+        raise SystemExit("Evidence artifact admission failed; no deployment action was taken.")
 
 
 if __name__ == "__main__":

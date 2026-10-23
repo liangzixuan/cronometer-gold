@@ -13,7 +13,7 @@ import {
   validateBrowserSummary,
   validateGitHubEvidence,
   validateJobs,
-  validateProductionReview,
+  validateProductionEnvironment,
   WORKFLOW_POLICIES,
 } from "./github-checks.ts";
 
@@ -147,7 +147,7 @@ function evidence() {
       summarySha256: createHash("sha256").update(JSON.stringify(browser())).digest("hex"),
       summary: browser(),
     },
-    productionReview: null,
+    productionEnvironment: null,
   };
 }
 
@@ -285,22 +285,9 @@ function protection() {
       id: 22989561316,
       name: "appwrite-production",
       deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
-      protection_rules: [
-        {
-          type: "required_reviewers",
-          prevent_self_review: true,
-          reviewers: [{ type: "User", reviewer: { id: 8, login: "reviewer" } }],
-        },
-      ],
+      protection_rules: [],
     },
     branches: { total_count: 1, branch_policies: [{ name: BRANCH, type: "branch" }] },
-    approvals: [
-      {
-        state: "approved",
-        user: { id: 8, login: "reviewer" },
-        environments: [{ id: 22989561316, name: "appwrite-production" }],
-      },
-    ],
     releaseRun: {
       id: 900,
       run_attempt: 1,
@@ -315,31 +302,25 @@ function protection() {
     },
   };
 }
-test("production requires actual configured reviewer, exact branch rule and approved current run", () => {
-  assert.doesNotThrow(() => validateProductionReview(protection(), context));
+test("production binds the environment, branch and current run without human approval", () => {
+  assert.doesNotThrow(() => validateProductionEnvironment(protection(), context));
   for (const mutate of [
-    (x: ReturnType<typeof protection>) => {
-      x.environment.protection_rules = [];
-    },
     (x: ReturnType<typeof protection>) => {
       first(x.branches.branch_policies).name = "*";
     },
     (x: ReturnType<typeof protection>) => {
-      x.approvals = [];
-    },
-    (x: ReturnType<typeof protection>) => {
-      first(x.approvals).state = "rejected";
-    },
-    (x: ReturnType<typeof protection>) => {
-      first(x.approvals).user.id = 9;
+      x.releaseRun.head_sha = "b".repeat(40);
     },
     (x: ReturnType<typeof protection>) => {
       x.releaseRun.run_attempt = 2;
     },
+    (x: ReturnType<typeof protection>) => {
+      x.environment.id = 1;
+    },
   ]) {
     const x = protection();
     mutate(x);
-    assert.throws(() => validateProductionReview(x, context));
+    assert.throws(() => validateProductionEnvironment(x, context));
   }
 });
 test("GitHub collection refuses HTTP errors, redirects and oversized responses without leaking credentials", async () => {
@@ -583,7 +564,7 @@ test("manual prepare and activate require the exact trusted source and private r
   assert.doesNotMatch(workflow, /(?:push|pull_request|workflow_run|schedule):/);
   assert.match(workflow, /options: \[prepare, activate\]/);
   assert.match(workflow, /options: \[staging, production\]/);
-  assert.match(workflow, /review_artifact_id:/);
+  assert.match(workflow, /evidence_artifact_id:/);
   assert.match(workflow, /permissions:\n {2}contents: read\n {2}actions: read/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.ok(
@@ -595,17 +576,20 @@ test("manual prepare and activate require the exact trusted source and private r
   assert.match(workflow, /environment: appwrite-\$\{\{ inputs.target \}\}/);
   assert.match(workflow, /ref: \$\{\{ github.sha \}\}\n +persist-credentials: false/);
   assert.doesNotMatch(workflow, /continue-on-error:|secrets: inherit/);
-  assert.match(workflow, /review-artifact.py/);
+  assert.match(workflow, /evidence-artifact.py/);
   assert.match(workflow, /--revision "\$GITHUB_SHA"/);
-  assert.match(workflow, /--qualification "\$RUNNER_TEMP\/appwrite-review\/qualification.json"/);
+  assert.match(workflow, /--qualification "\$RUNNER_TEMP\/appwrite-evidence\/qualification.json"/);
   assert.match(
     workflow,
-    /--candidate-receipt "\$RUNNER_TEMP\/appwrite-review\/candidate-receipt.json"/,
+    /--candidate-receipt "\$RUNNER_TEMP\/appwrite-evidence\/candidate-receipt.json"/,
   );
-  assert.match(workflow, /--staging-config "\$RUNNER_TEMP\/appwrite-review\/staging-config.json"/);
   assert.match(
     workflow,
-    /--staging-receipt "\$RUNNER_TEMP\/appwrite-review\/staging-receipt.json"/,
+    /--staging-config "\$RUNNER_TEMP\/appwrite-evidence\/staging-config.json"/,
+  );
+  assert.match(
+    workflow,
+    /--staging-receipt "\$RUNNER_TEMP\/appwrite-evidence\/staging-receipt.json"/,
   );
   assert.match(workflow, /APPWRITE_DEPLOY_KEY: \$\{\{ secrets.APPWRITE_DEPLOY_KEY \}\}/);
   assert.match(workflow, /APPWRITE_BACKEND_READINESS_TOKEN:/);

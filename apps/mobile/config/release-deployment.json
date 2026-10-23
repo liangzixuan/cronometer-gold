@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "nutrition-tracker-release-deployment-v8",
+  "schemaVersion": "nutrition-tracker-release-deployment-v9",
   "profile": "appwrite-cloud-azure-v1",
   "target": "production",
   "deploymentConfirmed": false,

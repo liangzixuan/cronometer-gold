@@ -6,11 +6,10 @@ import test from "node:test";
 import {
   canonicalEvidence,
   evidenceSha256,
-  loadReviewerTrustStore,
   parseQualificationBundle,
   readQualificationBundle,
   validateBackendAdmission,
-  validateCaptureReview,
+  validateCaptureObservation,
   validateManagedActivation,
   validateManagedDeployment,
   validateStagingIsolation,
@@ -35,7 +34,6 @@ function verifier(f: ReturnType<typeof fixture>, request: typeof fetch = async (
   return createQualificationVerifier(
     { qualificationPath: "/not-read-fixture", readinessToken: token },
     {
-      trustStore: f.trust,
       policy: f.policy,
       now: () => NOW,
       readBundle: () => f.bundle,
@@ -43,20 +41,18 @@ function verifier(f: ReturnType<typeof fixture>, request: typeof fetch = async (
     },
   );
 }
-test("independently signed six-image backend and v8 candidate validate with ephemeral test trust", () => {
+test("one operator validates measured backend and candidate without reviewer keys or signatures", () => {
   const f = fixture();
-  for (const trust of [
-    f.trust,
-    { ...f.trust, reviewers: f.trust.reviewers.map((root) => ({ ...root, validUntil: null })) },
-  ]) {
-    assert.equal(validateBackendAdmission(f.bundle, f.expected, trust).sourceRevision, REVISION);
-    assert.equal(
-      validateManagedDeployment(f.bundle, f.expected, trust).web.deploymentId,
-      "fixture-deployment",
-    );
-  }
+  assert.equal(validateBackendAdmission(f.bundle, f.expected).sourceRevision, REVISION);
+  assert.equal(
+    validateManagedDeployment(f.bundle, f.expected).web.deploymentId,
+    "fixture-deployment",
+  );
+  assert.equal(Object.hasOwn(f.bundle.backend, "reviewerAttestation"), false);
+  assert.equal(Object.hasOwn(f.bundle.backend, "reviewedBy"), false);
 });
-test("backend admission rejects legacy and unknown provenance even with a valid review", () => {
+
+test("backend admission rejects legacy and unknown provenance after report binding", () => {
   for (const predicateType of [
     "https://slsa.dev/provenance/v0.2",
     "https://slsa.dev/provenance/v2",
@@ -68,14 +64,14 @@ test("backend admission rejects legacy and unknown provenance even with a valid 
     };
     required(details.imageChecks[0]).provenance.predicateType = predicateType;
     f.bundle.backend.reports.security = evidenceSha256(security);
-    f.bundle.backend = f.signRecord(f.bundle.backend);
+    f.bundle.backend = f.recordEvidence(f.bundle.backend);
     assert.throws(
-      () => validateBackendAdmission(f.bundle, f.expected, f.trust),
+      () => validateBackendAdmission(f.bundle, f.expected),
       /image_provenance_mismatch/,
     );
   }
 });
-test("Azure storage readiness rejects legacy create and delete statuses after review", () => {
+test("Azure storage readiness rejects legacy create and delete statuses after measurement", () => {
   for (const replacement of [{ putHttpStatus: 200 }, { deleteHttpStatus: 204 }]) {
     const f = fixture();
     const readiness = required(f.bundle.backendReports.readiness);
@@ -84,49 +80,14 @@ test("Azure storage readiness rejects legacy create and delete statuses after re
     };
     Object.assign(details.storage, replacement);
     f.bundle.backend.reports.readiness = evidenceSha256(readiness);
-    f.bundle.backend = f.signRecord(f.bundle.backend);
+    f.bundle.backend = f.recordEvidence(f.bundle.backend);
     assert.throws(
-      () => validateBackendAdmission(f.bundle, f.expected, f.trust),
+      () => validateBackendAdmission(f.bundle, f.expected),
       /storage_readiness_invalid/,
     );
   }
 });
-test("checked-in reviewer trust rejects an unenrolled signed fixture", () => {
-  const f = fixture();
-  assert.throws(
-    () => validateBackendAdmission(f.bundle, f.expected, loadReviewerTrustStore()),
-    /reviewer_key_not_trusted/,
-  );
-});
-test("forged signature and self-selected reviewer never admit a backend", () => {
-  const f = fixture();
-  f.bundle.backend.reviewedBy = "attacker-reviewer";
-  assert.throws(
-    () => validateBackendAdmission(f.bundle, f.expected, f.trust),
-    /reviewer_key_not_trusted/,
-  );
-  f.bundle.backend.reviewedBy = "fixture-reviewer";
-  f.bundle.backend.images.api = f.bundle.backend.images.api?.replace(SHA, "2".repeat(64)) ?? "";
-  assert.throws(
-    () => validateBackendAdmission(f.bundle, f.expected, f.trust),
-    /reviewer_signature_invalid/,
-  );
-});
-test("reviewer must differ from operator and the enrolled key must be active", () => {
-  const f = fixture();
-  f.bundle.backend.deployedBy = "FIXTURE-REVIEWER";
-  assert.throws(
-    () => validateBackendAdmission(f.bundle, f.expected, f.trust),
-    /independent_reviewer_required/,
-  );
-  const g = fixture();
-  required(g.trust.reviewers[0]).validUntil = "2026-09-29T18:00:00.000Z";
-  assert.throws(
-    () => validateBackendAdmission(g.bundle, g.expected, g.trust),
-    /reviewer_key_not_trusted/,
-  );
-});
-test("signed evidence still fails source, target, API and configuration substitution", () => {
+test("measured evidence still fails source, target, API and configuration substitution", () => {
   const f = fixture();
   for (const replacement of [
     { sourceRevision: "2".repeat(40) },
@@ -135,52 +96,40 @@ test("signed evidence still fails source, target, API and configuration substitu
     { configurationSha256: "2".repeat(64) },
   ])
     assert.throws(
-      () => validateBackendAdmission(f.bundle, { ...f.expected, ...replacement }, f.trust),
+      () => validateBackendAdmission(f.bundle, { ...f.expected, ...replacement }),
       /context_mismatch/,
     );
 });
-test("a key without expiry still requires fresh signed reviews and observations", () => {
+test("measurement records and observations retain actual freshness bounds", () => {
   const f = fixture();
-  const trust = {
-    ...f.trust,
-    reviewers: f.trust.reviewers.map((root) => ({ ...root, validUntil: null })),
-  };
   assert.throws(
-    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 24 * 3600000 }, trust),
-    /review_stale/,
+    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 24 * 3600000 }),
+    /record_stale/,
   );
   assert.throws(
-    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 3600000 }, trust),
+    () => validateBackendAdmission(f.bundle, { ...f.expected, now: NOW + 3600000 }),
     /observation_stale/,
   );
 });
-test("extra web image and missing backend report do not pass signed backend admission", () => {
+
+test("extra web image and missing backend report do not pass measured backend admission", () => {
   const f = fixture();
-  const {
-    reviewerAttestation: _attestation,
-    deployedBy: _operator,
-    reviewedBy: _reviewer,
-    reviewedAt: _time,
-    ...base
-  } = f.backend;
-  f.bundle.backend = f.signRecord({
+  const { deployedBy: _operator, recordedAt: _time, ...base } = f.backend;
+  f.bundle.backend = f.recordEvidence({
     ...base,
     images: { ...base.images, web: `ghcr.io/liangzixuan/cronometer-gold-web@sha256:${SHA}` },
   });
-  assert.throws(
-    () => validateBackendAdmission(f.bundle, f.expected, f.trust),
-    /backend_images_invalid/,
-  );
+  assert.throws(() => validateBackendAdmission(f.bundle, f.expected), /backend_images_invalid/);
   const g = fixture();
   delete g.bundle.backendReports.restore;
-  assert.throws(() => validateBackendAdmission(g.bundle, g.expected, g.trust), /reports_invalid/);
+  assert.throws(() => validateBackendAdmission(g.bundle, g.expected), /reports_invalid/);
 });
-test("actual report bytes must match the reviewer's signed digests", () => {
+test("actual report bytes must match the operator's recorded digests", () => {
   const f = fixture();
   required(f.bundle.backendReports.host).details = { host: "fabricated" };
-  assert.throws(() => validateBackendAdmission(f.bundle, f.expected, f.trust), /report_mismatch/);
+  assert.throws(() => validateBackendAdmission(f.bundle, f.expected), /report_mismatch/);
 });
-test("final signature cannot authorize a different output, deployment, origin or Site", () => {
+test("final evidence cannot authorize a different output, deployment, origin or Site", () => {
   const f = fixture();
   for (const replacement of [
     { deploymentId: "other-deployment" },
@@ -189,18 +138,18 @@ test("final signature cannot authorize a different output, deployment, origin or
     { output: { ...f.expected.output, outputTreeSha256: "2".repeat(64) } },
   ])
     assert.throws(
-      () => validateManagedDeployment(f.bundle, { ...f.expected, ...replacement }, f.trust),
+      () => validateManagedDeployment(f.bundle, { ...f.expected, ...replacement }),
       /mismatch/,
     );
 });
-test("backend-only preparation cannot activate without final reviewed output", async () => {
+test("backend-only preparation cannot activate without final measured output", async () => {
   const f = fixture();
   f.bundle.deployment = null;
   const gate = verifier(f);
   await gate.beforeUpload(f.context);
-  await assert.rejects(gate.beforeActivation(f.context), /signed_evidence_shape_invalid/);
+  await assert.rejects(gate.beforeActivation(f.context), /evidence_record_shape_invalid/);
 });
-test("completed capture review binds exact summary, session and run", () => {
+test("capture observation binds exact summary, session and run", () => {
   const f = fixture();
   const expected = {
     sourceRevision: REVISION,
@@ -210,7 +159,7 @@ test("completed capture review binds exact summary, session and run", () => {
     attempt: 1,
     now: NOW,
   };
-  validateCaptureReview(f.captureReview, expected, f.trust);
+  validateCaptureObservation(f.captureObservation, expected);
   for (const replacement of [
     { summarySha256: "2".repeat(64) },
     { sessionId: "different" },
@@ -218,20 +167,20 @@ test("completed capture review binds exact summary, session and run", () => {
     { attempt: 2 },
   ])
     assert.throws(
-      () => validateCaptureReview(f.captureReview, { ...expected, ...replacement }, f.trust),
+      () => validateCaptureObservation(f.captureObservation, { ...expected, ...replacement }),
       /context_mismatch/,
     );
 });
 test("missing or unresolved capture prevents even the live readiness probe", async () => {
   const f = fixture();
   let requests = 0;
-  f.bundle.captureReview = {};
+  f.bundle.captureObservation = {};
   await assert.rejects(
     verifier(f, async () => {
       requests++;
       return ok();
     }).beforeUpload(f.context),
-    /signed_evidence_shape_invalid/,
+    /evidence_record_shape_invalid/,
   );
   assert.equal(requests, 0);
 });
@@ -361,7 +310,7 @@ test("qualification files require private owner mode and refuse symbolic links",
   }
 });
 
-test("signed high/critical findings or nonempty scanner ignores still block", () => {
+test("recorded high/critical findings or nonempty scanner ignores still block", () => {
   for (const change of ["finding", "ignore"]) {
     const f = fixture();
     const details = required(f.bundle.backendReports.security).details as {
@@ -376,34 +325,31 @@ test("signed high/critical findings or nonempty scanner ignores still block", ()
       });
     else required(details.imageChecks[0]).scan.ignores.push("CVE-2099-1234");
     f.bundle.backend.reports.security = evidenceSha256(f.bundle.backendReports.security);
-    f.bundle.backend = f.signRecord(f.bundle.backend);
+    f.bundle.backend = f.recordEvidence(f.bundle.backend);
     assert.throws(
-      () => validateBackendAdmission(f.bundle, f.expected, f.trust),
+      () => validateBackendAdmission(f.bundle, f.expected),
       /image_(vulnerability_blocked|scan_invalid)/,
     );
   }
 });
-test("a correctly signed failed worker or mismatched running-container identity cannot pass", () => {
+test("a measured failed worker or mismatched running-container identity cannot pass", () => {
   const f = fixture();
   const readiness = required(f.bundle.backendReports.readiness).details as {
     worker: { queueConnected: boolean };
   };
   readiness.worker.queueConnected = false;
   f.bundle.backend.reports.readiness = evidenceSha256(f.bundle.backendReports.readiness);
-  f.bundle.backend = f.signRecord(f.bundle.backend);
-  assert.throws(
-    () => validateBackendAdmission(f.bundle, f.expected, f.trust),
-    /worker_readiness_invalid/,
-  );
+  f.bundle.backend = f.recordEvidence(f.bundle.backend);
+  assert.throws(() => validateBackendAdmission(f.bundle, f.expected), /worker_readiness_invalid/);
   const g = fixture();
   const host = required(g.bundle.backendReports.host).details as {
     containers: { sourceRevision: string }[];
   };
   required(host.containers[0]).sourceRevision = "2".repeat(40);
   g.bundle.backend.reports.host = evidenceSha256(g.bundle.backendReports.host);
-  g.bundle.backend = g.signRecord(g.bundle.backend);
+  g.bundle.backend = g.recordEvidence(g.bundle.backend);
   assert.throws(
-    () => validateBackendAdmission(g.bundle, g.expected, g.trust),
+    () => validateBackendAdmission(g.bundle, g.expected),
     /host_container_identity_mismatch/,
   );
 });
@@ -417,16 +363,16 @@ test("observed managed runtime must include the reviewed patch and actual native
   (deployment.reports as Record<string, string>).ssr = evidenceSha256(
     required(f.bundle.runtimeReports).ssr,
   );
-  f.bundle.deployment = f.signRecord(deployment);
+  f.bundle.deployment = f.recordEvidence(deployment);
   assert.throws(
-    () => validateManagedDeployment(f.bundle, f.expected, f.trust),
+    () => validateManagedDeployment(f.bundle, f.expected),
     /managed_runtime_not_qualified/,
   );
 });
-test("missing Playwright log objects are not an accepted signed capture policy", async () => {
+test("missing Playwright log objects are not an accepted measured capture policy", async () => {
   const f = fixture();
-  f.bundle.captureReview = f.signRecord({
-    ...f.captureReview,
+  f.bundle.captureObservation = f.recordEvidence({
+    ...f.captureObservation,
     observations: {
       video: "disabled",
       network: "disabled",
@@ -438,22 +384,18 @@ test("missing Playwright log objects are not an accepted signed capture policy",
   });
   await assert.rejects(verifier(f).beforeUpload(f.context), /capture_policy_unresolved/);
 });
-test("source archive substitution cannot activate the reviewed output", () => {
+test("source archive substitution cannot activate the measured output", () => {
   const f = fixture();
   assert.throws(
     () =>
-      validateManagedDeployment(
-        f.bundle,
-        {
-          ...f.expected,
-          sourceArchiveSha256: "f".repeat(64),
-        },
-        f.trust,
-      ),
+      validateManagedDeployment(f.bundle, {
+        ...f.expected,
+        sourceArchiveSha256: "f".repeat(64),
+      }),
     /managed_source_archive_mismatch/,
   );
 });
-test("post-activation signature proves the actual selected Site separately from candidate review", () => {
+test("post-activation observation proves the actual selected Site separately from candidate measurement", () => {
   const f = fixture("production");
   const expected = {
     deploymentSha256: evidenceSha256(f.bundle.deployment),
@@ -463,27 +405,22 @@ test("post-activation signature proves the actual selected Site separately from 
     deploymentId: "fixture-deployment",
     now: NOW,
   };
-  validateManagedActivation(f.activation, expected, f.trust);
+  validateManagedActivation(f.activation, expected);
   assert.throws(
-    () => validateManagedActivation(f.bundle.deployment, expected, f.trust),
-    /signed_evidence_shape_invalid/,
+    () => validateManagedActivation(f.bundle.deployment, expected),
+    /evidence_record_shape_invalid/,
   );
   assert.throws(
-    () =>
-      validateManagedActivation(f.activation, { ...expected, deploymentId: "different" }, f.trust),
+    () => validateManagedActivation(f.activation, { ...expected, deploymentId: "different" }),
     /activation_not_confirmed/,
   );
   assert.throws(
     () =>
-      validateManagedActivation(
-        f.activation,
-        { ...expected, deploymentSha256: "2".repeat(64) },
-        f.trust,
-      ),
+      validateManagedActivation(f.activation, { ...expected, deploymentSha256: "2".repeat(64) }),
     /activation_context_mismatch/,
   );
   assert.throws(
-    () => validateManagedActivation(f.activation, { ...expected, now: NOW + 3600000 }, f.trust),
+    () => validateManagedActivation(f.activation, { ...expected, now: NOW + 3600000 }),
     /activation_observation_stale/,
   );
 });
@@ -491,12 +428,12 @@ test("post-activation signature proves the actual selected Site separately from 
 test("staging revalidation binds live provider identity and uses its distinct readiness token", async () => {
   const production = fixture("production");
   const staging = fixture("staging");
-  staging.bundle.backend = production.signRecord(staging.bundle.backend);
-  staging.bundle.captureReview = production.signRecord(staging.bundle.captureReview);
-  staging.bundle.deployment = production.signRecord({
+  staging.bundle.backend = production.recordEvidence(staging.bundle.backend);
+  staging.bundle.captureObservation = production.recordEvidence(staging.bundle.captureObservation);
+  staging.bundle.deployment = production.recordEvidence({
     ...required(staging.bundle.deployment),
     backendAdmissionSha256: evidenceSha256(staging.bundle.backend),
-    captureReviewSha256: evidenceSha256(staging.bundle.captureReview),
+    captureObservationSha256: evidenceSha256(staging.bundle.captureObservation),
   });
   production.bundle.staging = staging.bundle;
   const stageToken = "f".repeat(64);
@@ -509,7 +446,6 @@ test("staging revalidation binds live provider identity and uses its distinct re
     },
     {
       now: () => NOW,
-      trustStore: production.trust,
       readBundle: () => production.bundle,
       fetch: async (url, init) => {
         requests++;

@@ -239,7 +239,7 @@ describe("synthetic reviewed release fixture", () => {
 });
 
 describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration", () => {
-  it("stages, validates, reconciles and reviews with exact retained retries", async () => {
+  it("stages, validates, reconciles and publishes with exact retained retries", async () => {
     if (!adminDatabaseUrl) throw new Error("FDC_CSV_CLI_TEST_DATABASE_ADMIN_URL is required");
     const adminUrl = localAdminUrl(adminDatabaseUrl);
     const suffix = randomBytes(8).toString("hex");
@@ -591,7 +591,7 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
           return { role, principal: login.name, url: databaseUrl(adminUrl, databaseName, login) };
         },
       );
-      await exerciseCatalogueReviewHandoff({
+      await exerciseCataloguePublicationHandoff({
         owner,
         ownerUrl,
         stageUrl,
@@ -736,7 +736,6 @@ async function exerciseIndependentValidation(input: {
     maximumExcludedNutrientFraction: 0,
     maximumQuarantineFraction: 0,
     maximumQuarantinedRecords: 0,
-    requireDistinctApprovalPrincipals: true,
     requireAtLeastOneValidRecord: true,
     requireMaterializedNutrientPerValidRecord: true,
   });
@@ -1004,7 +1003,7 @@ interface ReviewLogin {
   readonly url: string;
 }
 
-async function exerciseCatalogueReviewHandoff(input: {
+async function exerciseCataloguePublicationHandoff(input: {
   readonly owner: DatabaseClient;
   readonly ownerUrl: string;
   readonly stageUrl: string;
@@ -1023,8 +1022,8 @@ async function exerciseCatalogueReviewHandoff(input: {
   const dataReviewer = input.reviewers.find((entry) => entry.role === "data");
   if (!dataReviewer) throw new Error("Synthetic data reviewer is missing");
 
-  // The original fixture keeps its nonrelease authority. Neither review nor a
-  // protected promotion call can turn that fixture into an active catalogue.
+  // The original fixture keeps its nonrelease authority. A protected promotion
+  // call cannot turn that fixture into an active catalogue.
   const beforeNonrelease = await catalogueSnapshot(owner);
   const nonreleaseApproval = capture(validationEnvironment(dataReviewer.url));
   expect(
@@ -1034,7 +1033,7 @@ async function exerciseCatalogueReviewHandoff(input: {
     ),
   ).toBe(1);
   expect(nonreleaseApproval.output).toEqual([]);
-  expect(nonreleaseApproval.errors.join("\n")).toContain("live-reviewed");
+  expect(nonreleaseApproval.errors.join("\n")).toMatch(/permission denied/iu);
   await expect(
     promoteSyntheticBatch(input.promoteUrl, input.promotePrincipal, input.preparation.batchId),
   ).rejects.toThrow("live-reviewed");
@@ -1099,41 +1098,7 @@ async function exerciseCatalogueReviewHandoff(input: {
       await client.destroy();
     }
     const args = approvalArguments(baseline.preparation, baseline.fixture, reviewer);
-    const first = capture(validationEnvironment(reviewer.url));
-    if (reviewer.role === "data") {
-      let lostReceipt: unknown;
-      expect(
-        await runCommand(args, {
-          ...first.io,
-          writeOutput: (value) => {
-            lostReceipt = JSON.parse(value);
-            throw new Error("synthetic approval acknowledgement lost after commit");
-          },
-        }),
-      ).toBe(1);
-      expect(first.errors.join("\n")).toContain("approval acknowledgement lost after commit");
-      expect(lostReceipt).toMatchObject({
-        batchId: baseline.preparation.batchId,
-        approvalRole: reviewer.role,
-        wasAlreadyApproved: false,
-      });
-    } else {
-      expect(await runCommand(args, first.io)).toBe(0);
-      expect(oneOutput(first)).toMatchObject({
-        batchId: baseline.preparation.batchId,
-        approvalRole: reviewer.role,
-        wasAlreadyApproved: false,
-      });
-    }
-    const beforeReplay = await catalogueSnapshot(owner);
-    const replay = capture(validationEnvironment(reviewer.url));
-    expect(await runCommand(args, replay.io)).toBe(0);
-    expect(oneOutput(replay)).toMatchObject({
-      batchId: baseline.preparation.batchId,
-      approvalRole: reviewer.role,
-      wasAlreadyApproved: true,
-    });
-    expect(await catalogueSnapshot(owner)).toEqual(beforeReplay);
+    await rejectApproval(args, reviewer.url);
     await rejectApproval(
       replaceOption(
         args,
@@ -1149,17 +1114,7 @@ async function exerciseCatalogueReviewHandoff(input: {
     .where("batch_id", "=", baseline.preparation.batchId)
     .orderBy("approval_role")
     .execute();
-  expect(approvals).toHaveLength(3);
-  expect(new Set(approvals.map((row) => row.database_principal)).size).toBe(3);
-  for (const reviewer of input.reviewers) {
-    expect(approvals.find((row) => row.approval_role === reviewer.role)).toMatchObject({
-      database_principal: reviewer.principal,
-      principal_id: reviewer.principal,
-      database_capability_role: `nutrition_catalogue_approve_${reviewer.role}`,
-      validation_digest: baseline.preparation.validationDigest,
-      rights_manifest_sha256: baseline.fixture.manifestSha256,
-    });
-  }
+  expect(approvals).toEqual([]);
   const afterApprovals = await catalogueSnapshot(owner);
   expect(afterApprovals.releaseState).toEqual(beforeApprovals.releaseState);
   expect(afterApprovals.stagingState).toEqual(beforeApprovals.stagingState);
@@ -1173,8 +1128,8 @@ async function exerciseCatalogueReviewHandoff(input: {
     label: "reviewed-baseline",
   });
 
-  // Promotion is an explicit synthetic setup step after proving approvals alone
-  // changed neither the active release nor materialized/index state.
+  // Promotion uses the validated source evidence without human approvals.
+  // Retired approval calls left the release and materialized/index state unchanged.
   const promoted = await promoteSyntheticBatch(
     input.promoteUrl,
     input.promotePrincipal,
@@ -1439,8 +1394,6 @@ function prepareValidationArguments(
     "0",
     "--maximum-quarantined-records",
     "0",
-    "--require-distinct-approval-principals",
-    "true",
     "--require-at-least-one-valid-record",
     "true",
     "--require-materialized-nutrient-per-valid-record",

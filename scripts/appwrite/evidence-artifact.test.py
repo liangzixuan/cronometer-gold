@@ -12,7 +12,7 @@ from unittest.mock import patch
 import unittest
 import zipfile
 
-spec = importlib.util.spec_from_file_location("review_artifact", Path(__file__).with_name("review-artifact.py"))
+spec = importlib.util.spec_from_file_location("evidence_artifact", Path(__file__).with_name("evidence-artifact.py"))
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 REVISION = "a" * 40

@@ -142,11 +142,7 @@ function principal(op: CataloguePublicationOperationV2) {
     privileged: false,
     ownerMember: false,
     capabilities: [
-      op === "admit"
-        ? "nutrition_catalogue_approve_quality"
-        : op === "rollback"
-          ? "nutrition_catalogue_rollback"
-          : "nutrition_catalogue_promote_activate",
+      op === "rollback" ? "nutrition_catalogue_rollback" : "nutrition_catalogue_promote_activate",
     ],
   };
 }
@@ -201,7 +197,13 @@ function fixture(responses: unknown[]) {
 describe("publication exact requests and receipts", () => {
   it("commits only verified receipts within transaction-local tighter-or-equal timeouts", async () => {
     const document = encodeCataloguePublicationRequestV2("begin", request("begin"));
-    const f = fixture([principal("begin"), receipt("begin", document)]);
+    const f = fixture([
+      {
+        ...principal("begin"),
+        capabilities: ["nutrition_catalogue_promote_activate", "nutrition_catalogue_rollback"],
+      },
+      receipt("begin", document),
+    ]);
     await submitCataloguePublicationRequestV2(f.database, "begin", document);
     expect(f.settings).toHaveLength(1);
     expect(f.settings[0]?.sql).toContain("least(2000, coalesce(nullif(");
@@ -292,9 +294,8 @@ describe("publication exact requests and receipts", () => {
     { ownerMember: true },
     { canLogin: false },
     { effectivePrincipal: "changed_role" },
-    { capabilities: ["nutrition_catalogue_promote_activate", "nutrition_catalogue_rollback"] },
     { capabilities: ["nutrition_catalogue_approve_quality"] },
-  ])("rejects unauthorized or mixed-role login %j", async (delta) => {
+  ])("rejects unauthorized login %j", async (delta) => {
     const f = fixture([{ ...principal("begin"), ...delta }]);
     await expect(
       submitCataloguePublicationRequestV2(

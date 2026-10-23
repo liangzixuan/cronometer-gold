@@ -32,8 +32,8 @@ function setup(target = "production") {
     f,
     evidence,
     env,
-    check: (changes = {}, time = runtime, trust = f.trust) =>
-      validateReleaseDeployment({ ...env(), ...changes }, policy, time, trust),
+    check: (changes = {}, time = runtime) =>
+      validateReleaseDeployment({ ...env(), ...changes }, policy, time),
   };
 }
 describe("mobile release API preflight", () => {
@@ -151,7 +151,7 @@ describe("shared managed mobile release admission", () => {
       { extra: true },
     ])
       expect(() => validateReleaseDeploymentPolicy({ ...policy, ...change })).toThrow(
-        /unconfirmed v8/u,
+        /unconfirmed v9/u,
       );
     const s = setup();
     s.evidence.schemaVersion = "nutrition-tracker-release-deployment-v7";
@@ -169,7 +169,7 @@ describe("shared managed mobile release admission", () => {
       expect(() => s.check()).toThrow();
     }
     const s = setup();
-    s.evidence.activation = s.f.signRecord({
+    s.evidence.activation = s.f.recordEvidence({
       ...s.f.activation,
       observedAt: new Date(NOW - 7200000).toISOString(),
     });
@@ -190,15 +190,15 @@ describe("shared managed mobile release admission", () => {
       "https://api.nourishing.app",
     );
   });
-  it("never trusts a caller's unsigned report or the empty checked-in trust store", () => {
+  it("accepts measured records without a human trust store and still rejects runtime mismatches", () => {
     const s = setup();
-    expect(() => validateReleaseDeployment(s.env(), policy, runtime)).toThrow();
+    expect(() => validateReleaseDeployment(s.env(), policy, runtime)).not.toThrow();
     s.evidence.qualification.runtimeReports.ssr.details.node = "0.0.0";
     expect(() => s.check()).toThrow();
   });
-  it("requires actual capture/masking review and bounded current observations", () => {
+  it("requires actual capture/masking measurements and bounded current observations", () => {
     const s = setup();
-    s.evidence.qualification.captureReview.observations.playwright = "unknown";
+    s.evidence.qualification.captureObservation.observations.playwright = "unknown";
     expect(() => s.check()).toThrow();
     expect(() => setup().check({}, { ...runtime, now: () => new Date(NOW + 7200000) })).toThrow();
     expect(() => setup().check({}, { ...runtime, now: () => new Date(NaN) })).toThrow();

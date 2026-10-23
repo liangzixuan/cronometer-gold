@@ -500,7 +500,6 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         maximumQuarantineFraction: 1,
         maximumQuarantinedRecords: 0,
         requireAtLeastOneValidRecord: false,
-        requireDistinctApprovalPrincipals: true,
         requireMaterializedNutrientPerValidRecord: true,
       });
       await approveAll(
@@ -1082,7 +1081,6 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         maximumQuarantineFraction: 0.5,
         maximumQuarantinedRecords: 2,
         requireAtLeastOneValidRecord: true,
-        requireDistinctApprovalPrincipals: true,
         requireMaterializedNutrientPerValidRecord: true,
       } as const;
       expect(await previewBatchValidation(database, firstBatch.batchId, policy)).toMatchObject({
@@ -1160,12 +1158,6 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           validationDigest: firstSummary.validationDigest,
         }),
       ).rejects.toThrow("canonical lowercase principal ID");
-      await expect(
-        promoteBatch(database, {
-          batchId: firstBatch.batchId,
-          performedBy: "service:catalogue-promoter",
-        }),
-      ).rejects.toThrow("data, quality, and rights approvals");
       expect(
         await database
           .selectFrom("food_source_release")
@@ -2423,7 +2415,6 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         maximumQuarantineFraction: 1,
         maximumQuarantinedRecords: 0,
         requireAtLeastOneValidRecord: false,
-        requireDistinctApprovalPrincipals: true,
         requireMaterializedNutrientPerValidRecord: true,
       });
       expect(emptySummary).toMatchObject({
@@ -2538,7 +2529,6 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         maximumQuarantineFraction: 1,
         maximumQuarantinedRecords: 0,
         requireAtLeastOneValidRecord: false,
-        requireDistinctApprovalPrincipals: true,
         requireMaterializedNutrientPerValidRecord: true,
       };
 
@@ -3060,7 +3050,6 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
         maximumQuarantineFraction: 0.5,
         maximumQuarantinedRecords: 1,
         requireAtLeastOneValidRecord: true,
-        requireDistinctApprovalPrincipals: true,
         requireMaterializedNutrientPerValidRecord: true,
       });
       expect(targetSummary).toMatchObject({

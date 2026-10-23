@@ -17,28 +17,28 @@
     {
       "arguments": "p_document text",
       "configuration": "application-schema",
-      "executeGrantees": ["nutrition_catalogue_approve_quality"],
+      "executeGrantees": ["nutrition_catalogue_stage"],
       "language": "plpgsql",
       "leakproof": false,
       "name": "catalogue_admit_preparation_v2",
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "186afb6bae243ba6d53966399ac26218cc46458a674988fce999aef3db307c41",
+      "sourceSha256": "6101c101a83927e4e3f340fa3781c60f4579a4c01b5b6a81f7ca806d14a0ffb0",
       "strict": false,
       "volatility": "v"
     },
     {
       "arguments": "p_document text",
       "configuration": "application-schema",
-      "executeGrantees": ["nutrition_catalogue_approve_quality"],
+      "executeGrantees": ["nutrition_catalogue_promote_activate"],
       "language": "plpgsql",
       "leakproof": false,
       "name": "catalogue_admit_publication_v2",
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "f6f98257e2605be175f65c2a63634dd1b23c9f616c479e5bd7e14f3cb3656945",
+      "sourceSha256": "b4d6679fe957735095d4ebe58c2f3748b0919a1123976f0ebbe77e3be98198bc",
       "strict": false,
       "volatility": "v"
     },
@@ -80,7 +80,7 @@
       "parallel": "u",
       "resultType": "void",
       "securityDefiner": true,
-      "sourceSha256": "0cc9ca58fd5951e5a7891768452e8aac54eeb04658d30b906633146c1df37eb8",
+      "sourceSha256": "23e06a59ffa4be8f1594cb7bb743779b764489bdc3d141ec835f4bd6cea70050",
       "strict": false,
       "volatility": "v"
     },
@@ -178,7 +178,7 @@
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "c9e6e03fede89ffabf900d5237190688bdb1be0afb220a17b2d1cb89e1193a7c",
+      "sourceSha256": "86753e48446c62db0ed07df3f6eae218e67226339304388536ba3f84a46d2448",
       "strict": false,
       "volatility": "v"
     },
@@ -332,7 +332,7 @@
       "parallel": "u",
       "resultType": "trigger",
       "securityDefiner": false,
-      "sourceSha256": "87129394a8edb35f750a730d56b07d40edac99492609838eb113912e0033a04b",
+      "sourceSha256": "5003aa66280b33a8d800932dac22185585e6589bbeb90307ee45e8d24f2604c9",
       "strict": false,
       "volatility": "v"
     },
@@ -360,7 +360,7 @@
       "parallel": "u",
       "resultType": "trigger",
       "securityDefiner": false,
-      "sourceSha256": "466ee7633cffcec06195d3beff8479bc221eced092665965aef7eb059c2b84a2",
+      "sourceSha256": "67d4b8df431259afd572ab0e81c39bb21a19419b48d634f37fcc652fdee11dd1",
       "strict": false,
       "volatility": "v"
     },
@@ -374,7 +374,7 @@
       "parallel": "u",
       "resultType": "trigger",
       "securityDefiner": true,
-      "sourceSha256": "649b36ed52f65e1888d1ba52dd8228f4fe671b0f4037d438891dabf89d8955e9",
+      "sourceSha256": "51603fa2fe8f126b701429c8db38d9cfa775e6e81a7bf73bac924ae2163e82e7",
       "strict": false,
       "volatility": "v"
     },
@@ -388,7 +388,7 @@
       "parallel": "u",
       "resultType": "trigger",
       "securityDefiner": true,
-      "sourceSha256": "5b67d69a31c82a3ed6900ab465babeb55801ed06c0a581ed8a75f83deec49215",
+      "sourceSha256": "5fe9d3cc0d0a75d8b8eb7a4d529fbe725e66f1f75e6845e9fca27474d7006ed2",
       "strict": false,
       "volatility": "v"
     },
@@ -647,18 +647,14 @@
     {
       "arguments": "p_batch_id uuid, p_report text, p_page bigint, p_role text, p_principal text",
       "configuration": "application-schema",
-      "executeGrantees": [
-        "nutrition_catalogue_approve_data",
-        "nutrition_catalogue_approve_quality",
-        "nutrition_catalogue_approve_rights"
-      ],
+      "executeGrantees": ["nutrition_catalogue_validate"],
       "language": "plpgsql",
       "leakproof": false,
       "name": "catalogue_read_reconciliation_page_v2",
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "561cf06b1a8324ba8ce552fe6c0fe75169e95311ab03401dcf6c4e063cd71cf5",
+      "sourceSha256": "f5048c85e166b3e2577238defc8acb140667dbaadd6916da4ebdf14c2236a717",
       "strict": false,
       "volatility": "v"
     },
@@ -672,7 +668,7 @@
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "955240cc42ddb8daa2a4420334f4517b4bbb99cd8f51233dfeb43dd3a1843a53",
+      "sourceSha256": "fff36dac9cfee472cb04468a27d0528461a679765e56f47ab06dc4cb44dd27c2",
       "strict": false,
       "volatility": "v"
     },
@@ -735,11 +731,7 @@
     {
       "arguments": "p_batch_id uuid, p_role text, p_principal text, p_rights text, p_validation_terminal text, p_report text, p_context text, p_reference text",
       "configuration": "application-schema",
-      "executeGrantees": [
-        "nutrition_catalogue_approve_data",
-        "nutrition_catalogue_approve_quality",
-        "nutrition_catalogue_approve_rights"
-      ],
+      "executeGrantees": "owner-only",
       "language": "plpgsql",
       "leakproof": false,
       "name": "catalogue_record_paged_approval_v2",
@@ -816,7 +808,7 @@
       "parallel": "u",
       "resultType": "text",
       "securityDefiner": false,
-      "sourceSha256": "7a1284c7da1e999e2ac0c72eef8171f029c88986c423f2a1edb6b300260d38a1",
+      "sourceSha256": "85ddcd4c7882280045d10830d4dc04d153f2dc0e33d80609043579e38a8eec81",
       "strict": false,
       "volatility": "s"
     },
@@ -4050,13 +4042,6 @@
     },
     {
       "constraintType": "c",
-      "definition": "CHECK ((stage_principal <> admitted_by))",
-      "name": "catalogue_preparation_admission_v2_check",
-      "tableName": "catalogue_preparation_admission_v2",
-      "validated": true
-    },
-    {
-      "constraintType": "c",
       "definition": "CHECK ((export_bytes > 0))",
       "name": "catalogue_preparation_admission_v2_export_bytes_check",
       "tableName": "catalogue_preparation_admission_v2",
@@ -4535,13 +4520,6 @@
       "constraintType": "p",
       "definition": "PRIMARY KEY (batch_id)",
       "name": "cat_pub_admit_v2_batch_id_pk",
-      "tableName": "catalogue_publication_admission_v2",
-      "validated": true
-    },
-    {
-      "constraintType": "c",
-      "definition": "CHECK ((publisher_principal <> admitted_by))",
-      "name": "cat_pub_admit_v2_check_1",
       "tableName": "catalogue_publication_admission_v2",
       "validated": true
     },

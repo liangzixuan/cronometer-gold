@@ -40,7 +40,7 @@ export interface GitHubEvidence {
   checkedAt: string;
   requiredRuns: { workflow: string; run: Run; jobs: Row[] }[];
   browser: { summarySha256: string; summary: BrowserSummary };
-  productionReview: Row | null;
+  productionEnvironment: Row | null;
 }
 function need(condition: unknown): asserts condition {
   if (!condition) throw new Error("GitHub release evidence is incomplete or inconsistent");
@@ -297,7 +297,7 @@ export function validateBrowserSummary(
   );
   return s as BrowserSummary;
 }
-export function validateProductionReview(value: unknown, expected: EvidenceContext): Row {
+export function validateProductionEnvironment(value: unknown, expected: EvidenceContext): Row {
   const p = row(value);
   const e = row(p.environment);
   const release = row(p.releaseRun);
@@ -313,18 +313,6 @@ export function validateProductionReview(value: unknown, expected: EvidenceConte
       branchRule?.name === BRANCH &&
       branchRule.type === "branch",
   );
-  const reviewers = rows(e.protection_rules)
-    .map(row)
-    .filter((r) => r.type === "required_reviewers");
-  const reviewerRule = reviewers[0];
-  need(
-    reviewers.length === 1 && reviewerRule && typeof reviewerRule.prevent_self_review === "boolean",
-  );
-  const configured = rows(reviewerRule.reviewers, 6).map(row);
-  need(
-    configured.length > 0 &&
-      configured.every((r) => r.type === "User" && positive(row(r.reviewer).id)),
-  );
   need(
     release.id === expected.releaseRunId &&
       release.run_attempt === expected.releaseAttempt &&
@@ -338,21 +326,6 @@ export function validateProductionReview(value: unknown, expected: EvidenceConte
   need(
     row(release.repository).full_name === REPOSITORY &&
       row(release.head_repository).full_name === REPOSITORY,
-  );
-  // Approval history is run-scoped, so production promotion is deliberately limited to attempt one.
-  need(release.run_attempt === 1);
-  const approvals = rows(p.approvals)
-    .map(row)
-    .filter((a) => rows(a.environments).some((v) => row(v).id === e.id && row(v).name === e.name));
-  need(approvals.length > 0 && approvals.every((a) => a.state === "approved"));
-  need(
-    approvals.some(
-      (a) =>
-        configured.some((r) => row(r.reviewer).id === row(a.user).id) &&
-        (reviewerRule.prevent_self_review === false ||
-          (row(a.user).id !== row(release.actor).id &&
-            row(a.user).id !== row(release.triggering_actor).id)),
-    ),
   );
   return p;
 }
@@ -396,12 +369,12 @@ export function validateGitHubEvidence(
   need(browser.summarySha256 === digest(JSON.stringify(summary)));
   need(summary.build.tree === e.tree && summary.build.lockSha256 === e.lockfileSha256);
   if (e.target === "production")
-    validateProductionReview(e.productionReview, {
+    validateProductionEnvironment(e.productionEnvironment, {
       ...expected,
       releaseRunId: release.runId,
       releaseAttempt: release.attempt,
     });
-  else need(e.productionReview === null);
+  else need(e.productionEnvironment === null);
   return e as unknown as GitHubEvidence;
 }
 
@@ -554,14 +527,13 @@ export async function collectGitHubEvidence(
     browserRun.run.id,
     browserRun.run.run_attempt,
   );
-  const productionReview =
+  const productionEnvironment =
     options.target === "production"
       ? {
           environment: await api("/environments/appwrite-production"),
           branches: await api(
             "/environments/appwrite-production/deployment-branch-policies?per_page=100",
           ),
-          approvals: await api(`/actions/runs/${options.releaseRunId}/approvals`),
           releaseRun: await api(`/actions/runs/${options.releaseRunId}`),
         }
       : null;
@@ -588,7 +560,7 @@ export async function collectGitHubEvidence(
       checkedAt: new Date().toISOString(),
       requiredRuns,
       browser: { summarySha256: digest(JSON.stringify(summary)), summary },
-      productionReview,
+      productionEnvironment,
     },
     options,
     now(),

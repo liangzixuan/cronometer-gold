@@ -1,5 +1,5 @@
 {
-  "activationGuardSourceSha256": "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a",
+  "activationGuardSourceSha256": "8bdfb048a53a741ed7967c19c65669107753d66d1e5174bde7aeff32110ea599",
   "applicationSchema": "public",
   "applicationSchemaOwner": "pg_database_owner",
   "approvalFunctionSourceSha256": "9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f",
@@ -9,9 +9,7 @@
   "effectiveLoginAllowlist": [
     "nutrition_api",
     "nutrition_app",
-    "nutrition_catalogue_data_reviewer",
-    "nutrition_catalogue_quality_reviewer",
-    "nutrition_catalogue_rights_reviewer",
+    "nutrition_catalogue_operator",
     "nutrition_catalogue_unassigned_canary",
     "nutrition_worker"
   ],
@@ -20,19 +18,15 @@
     "unassigned": "nutrition_catalogue_unassigned_canary",
     "worker": "nutrition_worker"
   },
-  "observeValidationFunctionSourceSha256": "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2",
+  "observeValidationFunctionSourceSha256": "e20221d5b0840248f0c8f97f56ff92f3d4a8a72aaddb8834a6258d92ce183aed",
   "policyKind": "catalogue-authority-deployment",
   "promotionFunctionSourceSha256": "feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3",
-  "reviewerLogins": {
-    "data": "nutrition_catalogue_data_reviewer",
-    "quality": "nutrition_catalogue_quality_reviewer",
-    "rights": "nutrition_catalogue_rights_reviewer"
-  },
   "rollbackFunctionSourceSha256": "b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21",
-  "schemaVersion": 8,
-  "stageBatchFunctionSourceSha256": "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445",
-  "stageParserReportFunctionSourceSha256": "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5",
-  "stageRecordChunkFunctionSourceSha256": "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2",
-  "stageValidateGuardSourceSha256": "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda",
-  "validateBatchFunctionSourceSha256": "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66"
+  "schemaVersion": 9,
+  "stageBatchFunctionSourceSha256": "59f39588711cb8c97d8178ad0d6992b531a12be8a9101924687e5718b282c806",
+  "stageParserReportFunctionSourceSha256": "53771f5e5417fb1efc5fd42d2696def09a6fdb5e1540b93b80a38a42f2caeb6b",
+  "stageRecordChunkFunctionSourceSha256": "70a9be43d627d15d456a5ba7c2af3da9527d6251c70089ac89ae419b5812e0c7",
+  "stageValidateGuardSourceSha256": "d9e807d9655adec93c649c5c9ee896de182c76a8d6ade0f7d9f01d1cf9b148bb",
+  "validateBatchFunctionSourceSha256": "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66",
+  "operatorLogin": "nutrition_catalogue_operator"
 }

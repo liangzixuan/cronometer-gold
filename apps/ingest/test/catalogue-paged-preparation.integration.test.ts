@@ -933,7 +933,7 @@ describe("paged preparation integration opt-in", () => {
 
 databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
   it(
-    "prepares one admitted large batch through independent validation and three reviewers without activation",
+    "prepares one admitted large batch with validation and zero human approvals without activation",
     async () => {
       if (!ADMIN) throw new Error("Dedicated administrator URL required");
       const configuration = pagedPreparationTestConfiguration(
@@ -1219,10 +1219,10 @@ databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
           maxBaselinePayloadBytes: 1024 * 1024,
           reviewReference: `urn:test:paged:admission:${token}`,
         });
-        for (const rejected of [owner, client("stage"), client("wrong"), client("multi")])
+        for (const rejected of [owner, client("quality"), client("wrong")])
           await expect(admitCataloguePreparationV2(rejected, admissionDocument)).rejects.toThrow();
-        const admission = await admitCataloguePreparationV2(client("quality"), admissionDocument);
-        expect(await admitCataloguePreparationV2(client("quality"), admissionDocument)).toEqual(
+        const admission = await admitCataloguePreparationV2(client("stage"), admissionDocument);
+        expect(await admitCataloguePreparationV2(client("stage"), admissionDocument)).toEqual(
           admission,
         );
         const batch = await beginCataloguePreparationV2(client("stage"), {
@@ -1465,7 +1465,7 @@ databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
             document: sealDocument,
           }),
         ).toEqual(seal);
-        for (const rejected of [owner, client("stage"), client("wrong"), client("multi")])
+        for (const rejected of [owner, client("stage"), client("wrong")])
           await expect(
             beginCatalogueValidationV2(rejected, {
               batchId: batch.batchId,
@@ -1731,7 +1731,7 @@ databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
         expect(report.counts.added).toBe(String(count - 1));
         expect(report.counts.changed).toBe("0");
         await durableJson(join(scratch, "report", "terminal.json"), report);
-        // Owner runtime is not a substitute for authenticated preparation or review.
+        // Owner runtime cannot bypass authenticated preparation or evidence guards.
         await expect(
           sql`update catalogue_reconciliation_v2 set added_count=added_count+1 where batch_id=${batch.batchId}::uuid`.execute(
             owner,
@@ -1758,22 +1758,19 @@ databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
             contextSha256: report.contextSha256,
             approvalReference: `urn:test:paged:review:${token}:${approvalRole}`,
           };
-          const page = await readCataloguePagedReconciliationPage(client(approvalRole), {
+          const page = await readCataloguePagedReconciliationPage(client("validate"), {
             batchId: batch.batchId,
             reportSha256: report.reportSha256,
             pageNumber: "1",
             approvalRole,
-            principalId: actor(approvalRole),
+            principalId: actor("validate"),
           });
           expect(page.stream).toBe("metadata");
           for (const rejected of [owner, client("stage"), client("wrong"), client("multi")])
             await expect(submitCataloguePagedApproval(rejected, decision)).rejects.toThrow();
-          expect(
-            (await submitCataloguePagedApproval(client(approvalRole), decision)).wasAlreadyApproved,
-          ).toBe(false);
-          expect(
-            (await submitCataloguePagedApproval(client(approvalRole), decision)).wasAlreadyApproved,
-          ).toBe(true);
+          await expect(
+            submitCataloguePagedApproval(client(approvalRole), decision),
+          ).rejects.toThrow();
           await expect(
             submitCataloguePagedApproval(client(approvalRole), {
               ...decision,
@@ -1781,6 +1778,12 @@ databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
             }),
           ).rejects.toThrow();
         }
+        const approvals = await sql<{
+          batch_id: string;
+        }>`select batch_id::text from catalogue_paged_approval_v2 where batch_id=${batch.batchId}::uuid`.execute(
+          owner,
+        );
+        expect(approvals.rows).toEqual([]);
         await expect(
           sql`select public.catalogue_promote_import_batch(${batch.batchId}::uuid,${actor("promote")}::text,'V2 must remain private')`.execute(
             client("promote"),
@@ -1828,12 +1831,12 @@ databaseDescribe("paged catalogue preparation PostgreSQL integration", () => {
           changeReason: "Synthetic return transition",
         });
         await expect(
-          readCataloguePagedReconciliationPage(client("data"), {
+          readCataloguePagedReconciliationPage(client("validate"), {
             batchId: batch.batchId,
             reportSha256: report.reportSha256,
             pageNumber: "1",
             approvalRole: "data",
-            principalId: actor("data"),
+            principalId: actor("validate"),
           }),
         ).rejects.toThrow();
         sample();

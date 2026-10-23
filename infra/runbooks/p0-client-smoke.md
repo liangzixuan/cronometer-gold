@@ -10,11 +10,11 @@ structurally.
 The resulting `nutrition-tracker-p0-client-smoke-report-v3` is an unsigned
 candidate with this exact trust marker:
 
-`unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review`
+`source-and-artifact-bound-measurement`
 
-It is not release evidence by itself. An independent reviewer must reconcile
-the preserved raw observations, rerun the normalizer, and sign a health-release
-manifest that binds the candidate's exact SHA-256 digest.
+One operator records the actual observations and runs the normalizer. Automated
+health-release checks bind the exact report digest to the source, tested builds
+and device results. No human signature or third-person approval is required.
 
 ## Exact inventory
 
@@ -114,7 +114,7 @@ day notes. Those captures, packages, reports, source-bundle digest domains and
 old signed health manifests retain their historical meaning and are rejected by
 the current contract. Do not append new assertions, relabel bytes, reinterpret a
 signature or combine generations. Collect one complete new v3 package and obtain
-independent health-manifest v6 review. [ADR 0077](../../docs/adr/0077-role-specific-p0-evidence.md)
+current automated health-manifest checks. [ADR 0077](../../docs/adr/0077-role-specific-p0-evidence.md)
 defines the coordinated successor without changing earlier release obligations.
 
 ## Capture envelopes
@@ -161,7 +161,7 @@ Create a fourth current-user-owned mode `0600` index with exact schema
 ```json
 {
   "schemaVersion": "nutrition-tracker-p0-client-smoke-review-package-v3",
-  "trustBoundary": "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",
+  "trustBoundary": "source-and-artifact-bound-measurement",
   "dataClassification": "synthetic-only",
   "gitCommit": "<same-commit>",
   "apiOrigin": "https://<same-private-api-host>.<tailnet>.ts.net",
@@ -188,7 +188,7 @@ This describes the existing v3 timing behavior; it does not tighten the parser.
 Do not infer that authentic captures are absent. Requiring strictly increasing
 timestamps would need a future reviewed contract decision.
 
-## Normalize and independently review
+## Normalize and validate
 
 Run locally without adding the package or candidate to Git:
 
@@ -208,14 +208,11 @@ with the `nutrition-tracker-p0-client-smoke-source-capture-bundle-v3`
 domain and fixed `browser`, `ios`, `android` order. Its structural
 `passed` values remain unauthenticated assertions.
 
-The independent reviewer must obtain the protected raw captures from the
-review source, compare their exact bytes and SHA-256 values with the candidate,
-verify the synthetic-only workflow observations and physical EAS build IDs,
-and rerun the normalizer from those exact files. The reviewer then puts
-`p0ClientSmoke.apiOrigin` and the exact candidate `reportSha256` into the v6
-health-release manifest and signs the full canonical manifest with the trusted
-Ed25519 review key. Only the repository health verifier's successful validation
-of that signed manifest and candidate is authoritative release evidence.
+The operator preserves the raw observations and verifies the capture hashes,
+synthetic workflow results and actual physical EAS build IDs. Rerun the normalizer
+from those exact files. Record the candidate report digest in the current health
+manifest. The repository health verifier checks the source, artifact and measured
+result bindings. A human signature is not required.
 
 ## Local contract checks
 

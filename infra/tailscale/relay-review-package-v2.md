@@ -6,7 +6,7 @@
 > adapter; the immutable production registry is empty. This document authorizes
 > no Tailscale, firewall, listener, policy, phone, certificate, or EAS action. Do
 > not normalize authentic captures until exact Windows output corpora and a
-> production adapter are independently reviewed, and do not run a live phase
+> production adapter pass automated adapter checks, and do not run a live phase
 > without its separate explicit approval.
 
 This is the current complete transcription contract for
@@ -17,9 +17,9 @@ service.
 
 The normalizer remains structural only. It authenticates neither the raw source
 nor a reviewer and emits only an unsigned
-`nutrition-tracker-physical-device-relay-report-v4` candidate. The current v6
-health manifest may bind the exact v4 report bytes only after independent
-review. A v6 manifest that binds a legacy v2 or v3 relay report must fail closed.
+`nutrition-tracker-physical-device-relay-report-v4` candidate. The current v7
+health manifest binds the exact v4 report bytes through automated checks.
+A current manifest that binds a legacy v2 or v3 relay report must fail closed.
 P0's v3 successor changes the outer health version; it does not change this
 relay package, report or source-bundle contract.
 
@@ -28,7 +28,7 @@ relay package, report or source-bundle contract.
 The v2 index retains the exact unsigned trust-boundary marker:
 
 ```text
-unsigned-structural-candidate-requires-independent-ed25519-manifest-review
+source-and-artifact-bound-measurement
 ```
 
 It includes the current session times, origin, distinct iOS and Android
@@ -367,4 +367,5 @@ health manifest to `nutrition-tracker-health-release-evidence-v6` alongside P0
 v3. The historical v5 cutover above is preserved as history. Current release
 verification requires v6, P0 v3 and relay v4 together; old manifests are not
 relabelled or re-signed automatically. Relay origin commitment, source bytes,
-adapter restrictions and independent reviewer obligations remain unchanged.
+adapter restrictions remain in force. Human review and signatures are permanently
+optional; the current v7 manifest uses automated source and artifact checks.

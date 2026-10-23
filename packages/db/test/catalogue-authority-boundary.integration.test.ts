@@ -50,7 +50,7 @@ interface RollbackResult {
 }
 
 describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, () => {
-  it("records exact approvals through separated real-login capabilities only", async () => {
+  it("preserves historical approval rows while the forward migration removes reviewer execution", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
     const token = randomBytes(6).toString("hex");
@@ -105,7 +105,18 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
 
     await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
     try {
-      await runMigrations(owner);
+      const migrations = await discoverMigrations();
+      const operatorMigration = migrations.find(
+        (migration) => migration.name === "0034_single_operator_catalogue.sql",
+      );
+      if (!operatorMigration) throw new Error("Single-operator forward migration missing");
+      // This first section tests the preserved pre-revocation history. It is not
+      // a requirement for the current product. Apply the actual revocation below.
+      for (const migration of migrations.filter(
+        (migration) => migration.name < operatorMigration.name,
+      ))
+        await sql.raw(migration.sql).execute(owner);
+
       const functionIdentity = `${schemaName}.catalogue_record_import_approval(uuid,text,text,text,text,text)`;
 
       const roleRows = (
@@ -767,6 +778,26 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         operation: "rollback",
         performed_by: "principal:authority-owner",
       });
+      const historicalRows = (
+        await sql<{ document: string }>`select coalesce(
+        json_agg(row_to_json(a) order by a.id)::text, '[]') as document
+        from food_import_approval a`.execute(owner)
+      ).rows[0]?.document;
+      await sql.raw(operatorMigration.sql).execute(owner);
+      expect(
+        (
+          await sql<{ document: string }>`select coalesce(
+        json_agg(row_to_json(a) order by a.id)::text, '[]') as document
+        from food_import_approval a`.execute(owner)
+        ).rows[0]?.document,
+      ).toBe(historicalRows);
+      for (const credential of credentials) {
+        const permission = (
+          await sql<{ allowed: boolean }>`select pg_catalog.has_function_privilege(
+          ${credential.login}, ${functionIdentity}, 'execute') as allowed`.execute(owner)
+        ).rows[0];
+        expect(permission?.allowed).toBe(false);
+      }
     } finally {
       for (const client of roleClients) await client.destroy();
       await owner.destroy();
