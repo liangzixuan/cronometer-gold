@@ -918,6 +918,14 @@ test("actual acquisition producers join held historical qualification and expire
         const hooks = registerHooks({
           resolve(specifier, context, next) {
             if (
+              specifier === "../packages/contracts/dist/index.js" &&
+              context.parentURL?.endsWith("/azure-development-runtime-database-policy.mjs")
+            )
+              return {
+                url: sourceURL("packages/contracts/src/canonical-json.ts"),
+                shortCircuit: true,
+              };
+            if (
               specifier === "./postgres-backup.mjs" &&
               context.parentURL?.endsWith("/postgres-operator.mjs")
             )
