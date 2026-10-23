@@ -7,7 +7,7 @@ export const DEVELOPMENT_RUNTIME_RELATION_GROUPS = {
   api: [
     [
       "SELECT",
-      "app_schema_migration database_restore_attestation nutrient food_source food_source_release food_barcode promoted_food_search_catalogue_v1 food_search_projection_revision",
+      "app_schema_migration database_restore_attestation nutrient food_source food_source_release food_barcode promoted_food_search_catalogue_v1 food_search_projection_revision diary_entry_revision_source",
     ],
     [
       "SELECT,INSERT,UPDATE",

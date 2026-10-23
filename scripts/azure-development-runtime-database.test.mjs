@@ -18,7 +18,7 @@ const principals = { api: "development_api", worker: "development_worker" };
 const names =
   `app_schema_migration database_restore_attestation nutrient food_source food_source_release food_barcode promoted_food_search_catalogue_v1 food_search_projection_revision
 app_user user_password_credential user_profile user_session user_data_watermark diary diary_entry auth_action_token reauthentication_proof audit_log outbox_event
-food food_version food_nutrient_value food_serving custom_food custom_food_version custom_food_version_nutrient retention_operation diary_operation diary_entry_revision diary_entry_revision_nutrient
+food food_version food_nutrient_value food_serving custom_food custom_food_version custom_food_version_nutrient retention_operation diary_operation diary_entry_revision diary_entry_revision_nutrient diary_entry_revision_source
 privacy_export_job privacy_export_upload_artifact privacy_export_artifact_deletion account_erasure_job retention_dead_letter_event privacy_export_record privacy_export_entity_snapshot privacy_export_artifact unrelated_history`.split(
     /\s+/u,
   );
