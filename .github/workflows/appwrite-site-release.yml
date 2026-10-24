@@ -15,8 +15,8 @@ on:
         options: [staging, production]
         required: true
         default: staging
-      evidence_artifact_id:
-        description: Same-revision artifact containing measured qualification and comparison receipts
+      evidence_zip_base64:
+        description: Base64 ZIP of bounded inert qualification JSON and applicable candidate receipts; no credentials
         type: string
         required: true
       promote:
@@ -56,15 +56,38 @@ jobs:
         run: pnpm --filter @nutrition-tracker/contracts build
       - name: Read only bounded inert measurement evidence for this exact revision
         env:
-          GH_TOKEN: ${{ github.token }}
-          EVIDENCE_ARTIFACT_ID: ${{ inputs.evidence_artifact_id }}
+          EVIDENCE_ZIP_BASE64: ${{ inputs.evidence_zip_base64 }}
           RELEASE_OPERATION: ${{ inputs.operation }}
           RELEASE_TARGET: ${{ inputs.target }}
-        run: >-
-          python3 scripts/appwrite/evidence-artifact.py
-          --artifact-id "$EVIDENCE_ARTIFACT_ID" --revision "$GITHUB_SHA"
-          --operation "$RELEASE_OPERATION" --target "$RELEASE_TARGET"
-          --out "$RUNNER_TEMP/appwrite-evidence"
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import importlib.util
+          import os
+          from pathlib import Path
+
+          spec = importlib.util.spec_from_file_location(
+              "evidence", "scripts/appwrite/evidence-artifact.py")
+          evidence = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(evidence)
+          encoded = os.environ["EVIDENCE_ZIP_BASE64"]
+          evidence.require(0 < len(encoded) <= 60_000 and encoded.isascii())
+          archive = base64.b64decode(encoded, validate=True)
+          files = evidence.review_files(
+              archive, hashlib.sha256(archive).hexdigest(),
+              os.environ["RELEASE_OPERATION"], os.environ["RELEASE_TARGET"])
+          output = Path(os.environ["RUNNER_TEMP"]) / "appwrite-evidence"
+          evidence.require(not output.exists() and not output.is_symlink())
+          output.mkdir(mode=0o700)
+          for name, data in files.items():
+              fd = os.open(output / name,
+                           os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+              with os.fdopen(fd, "wb") as handle:
+                  handle.write(data)
+          PY
       - name: Admit actual current source, jobs, browser run and environment configuration
         env:
           GITHUB_TOKEN: ${{ github.token }}
