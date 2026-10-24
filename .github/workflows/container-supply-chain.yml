@@ -888,10 +888,10 @@ jobs:
             (any(.Results[]?.Vulnerabilities[]?; .VulnerabilityID == "CVE-2026-14456") | not) and
             (if $component == "api" then
               package("fastify"; "5.12.2") and
-              package("zod"; "4.4.3") and
+              package("zod"; "4.6.6") and
               package("pg"; "8.23.0")
             elif $component == "worker" then
-              package("zod"; "4.4.3") and
+              package("zod"; "4.6.6") and
               package("pg"; "8.23.0")
             elif $component == "migrator" then
               package("dotenv"; "17.4.2") and

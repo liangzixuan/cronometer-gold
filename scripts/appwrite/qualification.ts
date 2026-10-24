@@ -156,9 +156,9 @@ export async function probeBackendReadiness(
   }
 }
 /**
- * Signatures establish independent report authority. Provider state/artifacts are
- * re-read by the controller; this verifier separately probes live database readiness.
- * Neither the signed host report nor /ready is represented as a fresh Azure API read.
+ * The controller re-reads provider state and artifacts. This verifier separately
+ * checks measurement records and probes live database readiness.
+ * Neither a host observation nor /ready represents a fresh Azure API read.
  */
 export function createQualificationVerifier(
   options: QualificationOptions,

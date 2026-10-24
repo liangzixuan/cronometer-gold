@@ -17,8 +17,8 @@ existing-credit-only spending limit.
 
 Adopt the named `appwrite-cloud-azure-v1` profile. Trust Appwrite to operate hidden
 web infrastructure while measuring the observable build/SSR runtime and binding
-actual source/output, Site, candidate and preview results to independent signed
-review. Preserve exact approved Node/OpenSSL and advisory requirements; unknown
+actual source/output, Site, candidate and preview results to automated
+measurements. Preserve exact approved Node/OpenSSL and advisory requirements; unknown
 or incompatible observed runtime fails. Backend admission remains a separately
 versioned six-image contract with its existing security and restore protections.
 The original seven-image OCI profile is not silently converted.
@@ -34,10 +34,11 @@ anonymous auth/search work. Keep administration and dependencies private. A
 separate narrow readiness credential is stripped by the proxy before forwarding.
 The process-wide limiter is valid only for the enforced single API instance.
 
-Mobile release consumes the shared v8 evidence and a separately signed actual
-activation observation, bound to the current source. Existing reviewer trust,
-key validity, independent principals, native identifier history and device
-acceptance remain required. No test key becomes a release authority.
+Mobile release consumes the shared v8 evidence and an actual activation
+observation bound to the current source. Native identifier history, device
+acceptance and device/platform/software signatures remain required. Human
+signatures and separate people do not block release. No test key becomes a
+device/platform/software release authority.
 
 ## Finite hosted staging dependency policy
 
@@ -51,7 +52,7 @@ in the evidence; missing, skipped or failed setup steps are not accepted.
 
 Production retains successful-check requirements. Functional/build checks,
 secret/history scans, licenses, source identity, image integrity/provenance,
-browser acceptance, backup/recovery, cleanup and independent review remain required.
+browser acceptance, backup/recovery and cleanup remain required.
 The existing one-trial spending, duration and resource limits still apply. This
 policy neither starts the trial nor grants a production release.
 
@@ -59,8 +60,8 @@ policy neither starts the trial nor grants a production release.
 
 Appwrite host drift and hidden-component coverage remain explicit provider risks.
 Rollback restores application output, not a pinned provider runtime. Fresh
-observable runtime reports expire after one hour; review expires after 24 hours.
-Unknown runtime evidence or a missing independent reviewer blocks activation.
+observable runtime reports expire after one hour; backend admission records
+expire after 24 hours. Unknown runtime evidence blocks activation.
 
 Keeping the previous unavailable verifier would leave deployment impossible.
 Moving web to a qualified container would retain a different trust model, but the
@@ -71,17 +72,22 @@ verified before any resource action.
 Backend egress, credential rotation, allowance admission and encrypted off-host
 backup/restore remain required implementations/qualifications. This decision
 does not mark them passed. Staging and production resources, live observations,
-formal signatures and browser/native evidence cannot be supplied by code tests.
+device/platform/software signatures and browser/native evidence cannot be
+supplied by code tests.
 
-## Deployment reviewer key validity
+## Historical reviewer key record
 
-Kendall Buckner's public Ed25519 deployment key `kendall-staging-20261022` is
-valid from `2026-10-22T15:31:12.000Z`, with no expiry, as requested by the user.
-The deployment trust store records an explicit `validUntil: null` for a key
-without expiry. Its start time, signature, independent principal and trust-purpose
-checks still apply. Health-review keys require a finite expiry. Signed reviews
-still expire after 24 hours and observations after one hour. Key enrollment does
-not supply a review or authorize a deployment, spending, or reviewer contact.
+The user permanently revoked mandatory third-person review, separate people and
+human signatures on October 23, 2026. The earlier reviewer-key policy is history
+and imposes no current approval or signing requirement. Do not request Kendall's
+review or reuse this policy as a release gate. Existing keys and actual review
+artifacts remain preserved as history; no unperformed review is marked complete.
+
+The prior policy recorded Kendall Buckner's public Ed25519 key
+`kendall-staging-20261022`, starting at `2026-10-22T15:31:12.000Z`, with
+`validUntil: null`. These historical dates grant no current deployment, spending,
+credential or reviewer-contact authority. Device/platform/software signatures
+and automatic tool approval remain in force.
 
 ## Review triggers
 
