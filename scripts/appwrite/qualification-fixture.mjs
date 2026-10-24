@@ -153,6 +153,8 @@ export function fixture(target = "staging") {
       egress: "passed",
       credentialRotation: "passed",
       storageAllowance: "passed",
+      sourceDatabaseSha256: isolation.databaseSha256,
+      sourceRestoreEpochSha256: "2".repeat(64),
       restoreEpochSha256: SHA,
       completedAt: OBSERVED,
       backup: {
@@ -164,7 +166,7 @@ export function fixture(target = "staging") {
       restoredDatabaseSha256: SHA,
     }),
     readiness: observe("readiness", {
-      postgres: { migrationCount: 100, restoreEpochSha256: SHA },
+      postgres: { migrationCount: 100, restoreEpochSha256: "2".repeat(64) },
       search: { indexUidSha256: SHA, httpStatus: 200 },
       worker: { sourceRevision: REVISION, heartbeatAt: OBSERVED, queueConnected: true },
       storage: {

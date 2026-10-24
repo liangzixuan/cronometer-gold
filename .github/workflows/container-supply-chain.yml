@@ -851,6 +851,29 @@ jobs:
           timeout: 15m
           cache: false
 
+      - name: Record the scan database timestamp
+        env:
+          DATABASE_METADATA: ${{ github.workspace }}/.cache/trivy/db/metadata.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          path = Path(os.environ["DATABASE_METADATA"])
+          assert path.is_file() and not path.is_symlink()
+          assert 0 < path.stat().st_size <= 65536
+          value = json.loads(path.read_text())["UpdatedAt"]
+          assert isinstance(value, str) and len(value) <= 40
+          observed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+          assert observed.tzinfo is not None
+          assert observed <= datetime.now(timezone.utc)
+          print("Trivy database UpdatedAt: " + observed.isoformat())
+          PY
+
       - name: Inventory exact application packages with Trivy
         if: matrix.component == 'api' || matrix.component == 'worker' || matrix.component == 'migrator' || matrix.component == 'web'
         env:

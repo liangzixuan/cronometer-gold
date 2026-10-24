@@ -3,7 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, readSync } fro
 import { fileURLToPath } from "node:url";
 import { canonicalJson } from "../../packages/contracts/dist/canonical-json.js";
 
-export const BACKEND_ADMISSION_SCHEMA = "nutrition-tracker-backend-admission-v2";
+export const BACKEND_ADMISSION_SCHEMA = "nutrition-tracker-backend-admission-v3";
 export const MANAGED_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v9";
 export const QUALIFICATION_BUNDLE_SCHEMA = "nutrition-tracker-managed-qualification-bundle-v2";
 export const MANAGED_PROFILE = "appwrite-cloud-azure-v1";
@@ -445,6 +445,8 @@ export function validateBackendAdmission(bundle, expected, policy = loadManagedP
       "egress",
       "credentialRotation",
       "storageAllowance",
+      "sourceDatabaseSha256",
+      "sourceRestoreEpochSha256",
       "restoreEpochSha256",
       "completedAt",
       "backup",
@@ -476,8 +478,16 @@ export function validateBackendAdmission(bundle, expected, policy = loadManagedP
   )
     fail("backup_encryption_invalid");
   fresh(details.restore.backup.createdAt, expected.now, EVIDENCE_LIMITS.recordMs, "backup_stale");
+  hash(details.restore.sourceDatabaseSha256, "restore_source_database_unbound");
+  if (details.restore.sourceDatabaseSha256 !== backend.isolation.databaseSha256)
+    fail("restore_source_database_mismatch");
   hash(details.restore.restoredDatabaseSha256, "restored_database_unbound");
+  if (details.restore.restoredDatabaseSha256 === details.restore.sourceDatabaseSha256)
+    fail("restore_target_not_isolated");
+  hash(details.restore.sourceRestoreEpochSha256, "restore_source_epoch_unbound");
   hash(details.restore.restoreEpochSha256, "restore_epoch_unbound");
+  if (details.restore.restoreEpochSha256 === details.restore.sourceRestoreEpochSha256)
+    fail("restore_epoch_reused");
   fresh(details.restore.completedAt, expected.now, EVIDENCE_LIMITS.recordMs, "restore_stale");
   record(
     details.readiness,
@@ -492,7 +502,7 @@ export function validateBackendAdmission(bundle, expected, policy = loadManagedP
   if (
     !Number.isSafeInteger(details.readiness.postgres.migrationCount) ||
     details.readiness.postgres.migrationCount < 1 ||
-    details.readiness.postgres.restoreEpochSha256 !== details.restore.restoreEpochSha256
+    details.readiness.postgres.restoreEpochSha256 !== details.restore.sourceRestoreEpochSha256
   )
     fail("postgres_readiness_invalid");
   record(details.readiness.search, ["indexUidSha256", "httpStatus"], "search_readiness_invalid");

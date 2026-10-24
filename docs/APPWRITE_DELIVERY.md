@@ -15,9 +15,10 @@ still apply. A source push does not deploy the product.
 1. Collect backend measurements and capture observations for the exact current
    source, BrowserStack session, run and attempt. Preserve raw reports and their
    actual times. Synthetic fixtures do not establish a real service result.
-2. Supply a same-revision artifact using `evidence_artifact_id`. Its bounded inert
-   JSON is checked for repository, source, digest, expiry, duplicate keys, archive
-   traversal, links and expansion. The operator may produce this artifact.
+2. Encode the phase files below as a ZIP and supply `evidence_zip_base64`, at
+   most 60,000 ASCII characters. Only inert JSON is allowed. The reader rejects
+   duplicate keys, archive traversal, links and excess expansion. Keep credentials
+   in the scoped secrets, outside this input.
 3. Run `prepare` within the specific deployment approval. It validates actual
    backend reports and live `/ready`, checks Site configuration, uploads an
    inactive candidate, downloads its source/output and checks both identities.
@@ -48,10 +49,24 @@ runtime observations expire after one hour.
 | Production activate | All four files |
 
 Qualification uses `nutrition-tracker-managed-qualification-bundle-v2`, backend
-admission uses `nutrition-tracker-backend-admission-v2`, and final deployment uses
+admission uses `nutrition-tracker-backend-admission-v3`, and final deployment uses
 `nutrition-tracker-release-deployment-v9`. Exact shapes and measured fields are
 defined in `scripts/deployment/managed-evidence.mjs`. JSON must be canonical.
+
+Clean recovery uses a separate, fenced database and a fresh target replay epoch.
+The restore report records `sourceDatabaseSha256` and `sourceRestoreEpochSha256`
+for the live source. They must match the admitted database identity and its live
+readiness epoch. The existing `restoredDatabaseSha256` and `restoreEpochSha256`
+identify the separate restored target and must differ from the source values.
+Use the actual authenticated backup, restore and readiness observations. Never
+copy the target epoch into live-source readiness or promote the test database to
+make these fields match. All other recovery and replay checks still apply.
 The artifact is at most 1 MiB and each file at most 512 KiB.
+
+The publisher records the scan database's validated `UpdatedAt` timestamp in its
+existing job log. This step emits only that timestamp. It does not publish raw
+scanner metadata, vulnerability reports or package inventories. Keep the scan's
+actual source, job and attempt binding; do not substitute the build time.
 
 `/ready` checks current database readiness. Actual host, search, worker, storage,
 runtime, restore and access measurements remain separate. Keep credentials and

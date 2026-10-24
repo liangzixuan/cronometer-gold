@@ -1,4 +1,4 @@
-export declare const BACKEND_ADMISSION_SCHEMA: "nutrition-tracker-backend-admission-v2";
+export declare const BACKEND_ADMISSION_SCHEMA: "nutrition-tracker-backend-admission-v3";
 export declare const MANAGED_DEPLOYMENT_SCHEMA: "nutrition-tracker-release-deployment-v9";
 export declare const QUALIFICATION_BUNDLE_SCHEMA: "nutrition-tracker-managed-qualification-bundle-v2";
 export declare const CAPTURE_OBSERVATION_SCHEMA: "nutrition-tracker-browser-capture-observation-v1";

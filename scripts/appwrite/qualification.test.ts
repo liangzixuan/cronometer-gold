@@ -52,6 +52,56 @@ test("one operator validates measured backend and candidate without reviewer key
   assert.equal(Object.hasOwn(f.bundle.backend, "reviewedBy"), false);
 });
 
+test("isolated recovery keeps the live source epoch distinct from the restored target", () => {
+  const f = fixture();
+  const restore = required(f.bundle.backendReports.restore).details as {
+    sourceDatabaseSha256: string;
+    sourceRestoreEpochSha256: string;
+    restoredDatabaseSha256: string;
+    restoreEpochSha256: string;
+  };
+  assert.equal(restore.sourceDatabaseSha256, f.bundle.backend.isolation.databaseSha256);
+  assert.notEqual(restore.sourceDatabaseSha256, restore.restoredDatabaseSha256);
+  assert.notEqual(restore.sourceRestoreEpochSha256, restore.restoreEpochSha256);
+  assert.doesNotThrow(() => validateBackendAdmission(f.bundle, f.expected));
+});
+
+for (const failure of [
+  "different-source-database",
+  "same-database-target",
+  "different-source-epoch",
+  "reused-target-epoch",
+  "target-epoch-as-live-readiness",
+  "legacy-schema",
+] as const) {
+  test(`isolated recovery rejects ${failure} after report binding`, () => {
+    const f = fixture();
+    const restore = required(f.bundle.backendReports.restore);
+    const details = restore.details as Record<string, string>;
+    const readiness = required(f.bundle.backendReports.readiness);
+    const postgres = (readiness.details as { postgres: { restoreEpochSha256: string } }).postgres;
+    if (failure === "different-source-database") details.sourceDatabaseSha256 = "0".repeat(64);
+    if (failure === "same-database-target")
+      details.restoredDatabaseSha256 = required(details.sourceDatabaseSha256);
+    if (failure === "different-source-epoch") details.sourceRestoreEpochSha256 = "3".repeat(64);
+    if (failure === "reused-target-epoch")
+      details.restoreEpochSha256 = required(details.sourceRestoreEpochSha256);
+    if (failure === "target-epoch-as-live-readiness")
+      postgres.restoreEpochSha256 = required(details.restoreEpochSha256);
+    f.bundle.backend.reports.restore = evidenceSha256(restore);
+    f.bundle.backend.reports.readiness = evidenceSha256(readiness);
+    f.bundle.backend = f.recordEvidence(f.bundle.backend);
+    if (failure === "legacy-schema") {
+      (f.bundle.backend as { schemaVersion: string }).schemaVersion =
+        "nutrition-tracker-backend-admission-v2";
+    }
+    assert.throws(
+      () => validateBackendAdmission(f.bundle, f.expected),
+      /restore_source_database_mismatch|restore_target_not_isolated|postgres_readiness_invalid|restore_epoch_reused|backend_schema_invalid/,
+    );
+  });
+}
+
 test("backend admission rejects legacy and unknown provenance after report binding", () => {
   for (const predicateType of [
     "https://slsa.dev/provenance/v0.2",
