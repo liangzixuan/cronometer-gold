@@ -555,7 +555,7 @@ test("the actual ESM CLI rejects a malformed selector before any network or outp
   );
 });
 
-test("manual prepare and activate require the exact trusted source and private reviewed inputs", () => {
+test("manual prepare and activate require the exact trusted source and bounded inert inputs", () => {
   const workflow = readFileSync(
     new URL("../../.github/workflows/appwrite-site-release.yml", import.meta.url),
     "utf8",
@@ -564,7 +564,7 @@ test("manual prepare and activate require the exact trusted source and private r
   assert.doesNotMatch(workflow, /(?:push|pull_request|workflow_run|schedule):/);
   assert.match(workflow, /options: \[prepare, activate\]/);
   assert.match(workflow, /options: \[staging, production\]/);
-  assert.match(workflow, /evidence_artifact_id:/);
+  assert.match(workflow, /evidence_zip_base64:/);
   assert.match(workflow, /permissions:\n {2}contents: read\n {2}actions: read/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.ok(
