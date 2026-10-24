@@ -56,6 +56,22 @@ browser acceptance, backup/recovery and cleanup remain required.
 The existing one-trial spending, duration and resource limits still apply. This
 policy neither starts the trial nor grants a production release.
 
+## Approved hosted delivery interval
+
+NOURISHING-HOSTED-DELIVERY-01597185-20261024 was approved through the
+established Oracle-to-Gmail route in the reply received at
+2026-10-24T18:15:50Z. Its separate staging interval ends at
+2026-10-27T23:30:00Z, exclusive. It retains only the two completed failed
+`ci.yml` jobs, `production dependency advisories` and
+`object-store vulnerabilities`, and their exact scan steps. Actual failed
+outcomes remain unchanged. Missing or skipped scans, failed setup and all other
+failed jobs remain inadmissible. Production remains strict.
+
+Both earlier intervals are expired history. This interval grants no extension
+of their consumed approvals. The new delivery run retains its own resource,
+credit, custody, start, powered-time, recovery and cleanup bounds; the admission
+end is not permission to run the host until that date.
+
 ## Consequences and alternatives
 
 Appwrite host drift and hidden-component coverage remain explicit provider risks.

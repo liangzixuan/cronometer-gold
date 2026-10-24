@@ -695,6 +695,23 @@ test("the approved staging exception accepts all four scans together without rew
   assert.deepEqual(data, before);
 });
 
+const DELIVERY_START = Date.parse("2026-10-24T18:15:50Z");
+const DELIVERY_END = Date.parse("2026-10-27T23:30:00Z");
+test("the approved delivery interval retains only the two failed CI scans within its boundaries", () => {
+  const data = evidence();
+  for (const entry of [STAGING_FAILURE_CASES[0], STAGING_FAILURE_CASES[1]])
+    failedDependency(data, entry);
+  const before = clone(data);
+  for (const now of [DELIVERY_START, DELIVERY_END - 1])
+    assert.doesNotThrow(() => validateGitHubEvidence(data, context, now));
+  assert.deepEqual(data, before);
+  for (const now of [DELIVERY_START - 1, DELIVERY_END, Number.NaN, Number.POSITIVE_INFINITY])
+    assert.throws(() => validateGitHubEvidence(data, context, now));
+  assert.throws(() =>
+    validateGitHubEvidence(data, { ...context, target: "production" }, DELIVERY_START),
+  );
+});
+
 const HOSTED_JOURNEY_START = Date.parse("2026-10-23T22:16:12Z");
 const HOSTED_JOURNEY_END = Date.parse("2026-10-24T10:16:12Z");
 test("the separate hosted attempt retains only its two approved failed CI scans", () => {
@@ -717,7 +734,8 @@ for (const entry of [STAGING_FAILURE_CASES[2], STAGING_FAILURE_CASES[3]]) {
   test(`the new hosted scope excludes the earlier allowance for ${entry[1]}`, () => {
     const data = evidence();
     failedDependency(data, entry);
-    assert.throws(() => validateGitHubEvidence(data, context, HOSTED_JOURNEY_START));
+    for (const now of [HOSTED_JOURNEY_START, DELIVERY_START])
+      assert.throws(() => validateGitHubEvidence(data, context, now));
   });
 }
 
@@ -750,7 +768,7 @@ for (const mutation of [
       if (mutation === "unnamed-functional-failure")
         Object.assign(first(quality.steps), { name: undefined });
     }
-    for (const now of [STAGING_POLICY_NOW, HOSTED_JOURNEY_START])
+    for (const now of [STAGING_POLICY_NOW, HOSTED_JOURNEY_START, DELIVERY_START])
       assert.throws(() => validateGitHubEvidence(data, context, now));
   });
 }
@@ -805,6 +823,20 @@ test("the collector rejects expiry of the separate hosted allowance on its final
       token: "private-token",
       fetch: fixture.fetcher,
       now: () => (++reads === 1 ? HOSTED_JOURNEY_START : HOSTED_JOURNEY_END),
+    }),
+  );
+  assert.ok(reads > 1);
+});
+
+test("the collector rejects delivery allowance expiry on its final read", async () => {
+  const fixture = apiFixture("dependency-failure");
+  let reads = 0;
+  await assert.rejects(
+    collectGitHubEvidence({
+      ...context,
+      token: "private-token",
+      fetch: fixture.fetcher,
+      now: () => (++reads === 1 ? DELIVERY_START : DELIVERY_END),
     }),
   );
   assert.ok(reads > 1);

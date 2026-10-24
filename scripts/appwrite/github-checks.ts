@@ -125,6 +125,11 @@ const HOSTED_JOURNEY_FAILURES = [
   ],
 ] as const;
 
+// NOURISHING-HOSTED-DELIVERY-01597185-20261024: approved by the matching
+// Oracle-to-Gmail reply received at 2026-10-24T18:15:50Z. One staging delivery run.
+const DELIVERY_01597185_START = Date.parse("2026-10-24T18:15:50Z");
+const DELIVERY_01597185_END = Date.parse("2026-10-27T23:30:00Z");
+
 export function validateJobs(
   value: unknown,
   run: Run,
@@ -142,7 +147,9 @@ export function validateJobs(
         ? STAGING_DEPENDENCY_FAILURES
         : now >= HOSTED_JOURNEY_APPROVAL_START && now < HOSTED_JOURNEY_APPROVAL_END
           ? HOSTED_JOURNEY_FAILURES
-          : [];
+          : now >= DELIVERY_01597185_START && now < DELIVERY_01597185_END
+            ? HOSTED_JOURNEY_FAILURES
+            : [];
   let failedDependencyJob = false;
   const jobs = rows(value).map(row);
   need(jobs.length === Object.keys(policy).length);
