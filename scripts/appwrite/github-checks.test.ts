@@ -549,10 +549,11 @@ test("the actual ESM CLI rejects a malformed selector before any network or outp
   );
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
-  assert.equal(
+  assert.match(
     result.stderr,
-    "GitHub release prerequisites failed; no deployment was authorized\n",
+    /^GitHub release prerequisites failed \[github-checks\.ts:\d+:\d+(?:, github-checks\.ts:\d+:\d+){0,2}\]; no deployment was authorized\n$/,
   );
+  assert.doesNotMatch(result.stderr, /untrusted|Bearer|https?:|PRIVATE KEY/);
 });
 
 test("manual prepare and activate require the exact trusted source and bounded inert inputs", () => {
@@ -841,3 +842,64 @@ test("the collector rejects delivery allowance expiry on its final read", async 
   );
   assert.ok(reads > 1);
 });
+
+test("delivery admission retains a skipped setup-node cache save after its exact approved audit failure", () => {
+  const data = evidence();
+  const { record, job } = failedDependency(data, STAGING_FAILURE_CASES[0]);
+  job.steps.push({
+    name: "Post Set up Node.js",
+    number: 99,
+    status: "completed",
+    conclusion: "skipped",
+  });
+  const before = clone(data);
+  for (const now of [DELIVERY_START, DELIVERY_END - 1])
+    assert.doesNotThrow(() => validateJobs(record.jobs, record.run, "ci.yml", SHA, "staging", now));
+  assert.deepEqual(data, before);
+  for (const now of [STAGING_POLICY_NOW, DELIVERY_START - 1, DELIVERY_END])
+    assert.throws(() => validateJobs(record.jobs, record.run, "ci.yml", SHA, "staging", now));
+  assert.throws(() =>
+    validateJobs(record.jobs, record.run, "ci.yml", SHA, "production", DELIVERY_START),
+  );
+});
+
+for (const mutation of [
+  "cache-failed",
+  "other-post-skip",
+  "before-audit",
+  "functional-job",
+  "no-audit-failure",
+] as const) {
+  test(`delivery cache-save handling still rejects ${mutation}`, () => {
+    const data = evidence();
+    const { record, job } = failedDependency(data, STAGING_FAILURE_CASES[0]);
+    const post = {
+      name: "Post Set up Node.js",
+      number: 99,
+      status: "completed",
+      conclusion: "skipped",
+    };
+    if (mutation === "cache-failed") post.conclusion = "failure";
+    if (mutation === "other-post-skip") post.name = "Post Install pnpm";
+    if (mutation === "no-audit-failure") {
+      record.run.conclusion = "success";
+      job.conclusion = "success";
+      const audit = job.steps.find((step) => step.name === STAGING_FAILURE_CASES[0][2]);
+      assert.ok(audit);
+      audit.conclusion = "success";
+    }
+    if (mutation === "before-audit") {
+      job.steps.unshift(post);
+      job.steps.forEach((step, index) => {
+        step.number = index + 1;
+      });
+    } else if (mutation === "functional-job") {
+      const quality = record.jobs.find((entry) => entry.name === "quality");
+      assert.ok(quality);
+      quality.steps.push(post);
+    } else job.steps.push(post);
+    assert.throws(() =>
+      validateJobs(record.jobs, record.run, "ci.yml", SHA, "staging", DELIVERY_START),
+    );
+  });
+}
