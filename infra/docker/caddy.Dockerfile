@@ -102,6 +102,8 @@ WORKDIR /srv
 
 COPY --from=rootfs /runtime/ /
 COPY --from=build --chown=1000:1000 /out/caddy /usr/bin/caddy
+COPY --from=build /usr/local/go/LICENSE /usr/share/licenses/caddy/Go-LICENSE
+COPY infra/docker/caddy-NOTICES.txt /usr/share/licenses/caddy/NOTICES.txt
 
 USER 1000:1000
 
