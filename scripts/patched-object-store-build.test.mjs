@@ -26,7 +26,7 @@ test("pins original release source, approved builder and the exact runtime libra
   );
   assert.doesNotMatch(dockerfile, /\b(?:apt-get|go mod tidy|go mod edit|go get|GOSUMDB=off)\b/);
 });
-test("runtime preserves the privilege drop and confines the decoder fix to the binary layer", () => {
+test("runtime preserves the privilege drop and bounds package changes while retaining trusted roots", () => {
   const runtime = dockerfile.split(/FROM \$\{UPSTREAM_IMAGE\} AS runtime/)[1];
   assert.ok(runtime);
   assert.doesNotMatch(runtime, /^(?:USER|ENTRYPOINT|CMD|ENV|WORKDIR|VOLUME|EXPOSE)\s/m);
@@ -37,7 +37,19 @@ test("runtime preserves the privilege drop and confines the decoder fix to the b
   );
   assert.deepEqual(runtime.match(/apk add[^;]+/g), [
     "apk add --no-cache --upgrade 'brotli-libs=1.2.1-r0'",
+    "apk add --no-network ca-certificates-bundle",
   ]);
+  assert.deepEqual(runtime.match(/apk del[^;]+/g), ["apk del --no-network curl libcurl"]);
+  assert.ok(
+    runtime.indexOf("apk add --no-network ca-certificates-bundle") <
+      runtime.indexOf("apk del --no-network curl libcurl"),
+  );
+  for (const assertion of [
+    "test ! -e /usr/bin/curl",
+    "test ! -e /usr/lib/libcurl.so.4",
+    "test -s /etc/ssl/cert.pem",
+  ])
+    assert.ok(runtime.includes(assertion));
   assert.ok(runtime.includes("cp /tmp/nourishing-weed /usr/bin/weed"));
   assert.ok(runtime.includes("chmod 0755 /usr/bin/weed"));
   assert.doesNotMatch(runtime, /--allow-untrusted|--no-check-certificate|apk upgrade/);
