@@ -25,8 +25,11 @@ ADD --checksum=sha256:a593bd7077c76102ca76d19287a5e247d4e359dd67eddbc933f865afd3
 # These exact Alpine packages provide the runtime trust bundle and timezone
 # files. Caddy also embeds Go's time/tzdata; retaining the files preserves the
 # conventional container contract without inheriting an OS package database.
-ADD --checksum=sha256:81a2c508dcdb3295196e6a8987274e3bc3487f99ad8d18e985f20bb2c336b5e6 \
-    https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/ca-certificates-bundle-20260909-r0.apk /tmp/ca-certificates-bundle.apk
+# Retain the exact public APK as a source-bound input. A remote ADD failed
+# checksum verification during a build; never accept drift or change the pin.
+# Original: https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/ca-certificates-bundle-20260909-r0.apk
+COPY infra/docker/ca-certificates-bundle-20260909-r0.apk /tmp/ca-certificates-bundle.apk
+RUN printf '%s\n' '81a2c508dcdb3295196e6a8987274e3bc3487f99ad8d18e985f20bb2c336b5e6  /tmp/ca-certificates-bundle.apk' | sha256sum -c -
 ADD --checksum=sha256:fd091890b7042a28126f7312cdf531bdf9048b04f21d92e50d063590bcfa7bec \
     https://dl-cdn.alpinelinux.org/alpine/v3.24/main/aarch64/tzdata-2026e-r0.apk /tmp/tzdata.apk
 

@@ -64,6 +64,7 @@ const reviewedExposureRules = [
   "infra/docker/*",
   "!infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc",
   "!infra/docker/caddy-NOTICES.txt",
+  "!infra/docker/ca-certificates-bundle-20260909-r0.apk",
   "!infra/docker/object-store.go.mod",
   "!infra/docker/object-store.go.sum",
   "!infra/docker/object-store-modules.json",
@@ -492,7 +493,10 @@ for (const [name, expected] of [
       "scripts/verify-mailpit-build.mjs",
     ],
   ],
-  ["Caddy", ["infra/docker/caddy-NOTICES.txt"]],
+  [
+    "Caddy",
+    ["infra/docker/ca-certificates-bundle-20260909-r0.apk", "infra/docker/caddy-NOTICES.txt"],
+  ],
 ]) {
   test(`${name} context includes every local COPY input and verifier dependency`, () => {
     const dockerfile = readFileSync(
