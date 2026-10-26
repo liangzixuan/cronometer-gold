@@ -141,7 +141,8 @@ import json, os, pathlib, sys
 cache = pathlib.Path(os.environ['TRIVY_CACHE_DIR'])
 cache.mkdir(parents=True, exist_ok=True)
 (cache / 'synthetic-db-cache').write_bytes(b'synthetic cache')
-keys = ['TRIVY_PLATFORM', 'TRIVY_IGNOREFILE', 'TRIVY_CACHE_DIR', 'TRIVY_EXIT_CODE',
+assert os.environ['TRIVY_DB_REPOSITORY'] == 'ghcr.io/aquasecurity/trivy-db:2'
+keys = ['TRIVY_DB_REPOSITORY', 'TRIVY_PLATFORM', 'TRIVY_IGNOREFILE', 'TRIVY_CACHE_DIR', 'TRIVY_EXIT_CODE',
         'TRIVY_IGNORE_UNFIXED', 'TRIVY_PKG_TYPES', 'TRIVY_SCANNERS', 'TRIVY_SEVERITY', 'TRIVY_TIMEOUT']
 pathlib.Path(os.environ['STUB_RECEIPT']).write_text(json.dumps({'argv': sys.argv[1:],
     'env': {key: os.environ.get(key) for key in keys}}))
@@ -223,6 +224,7 @@ sys.exit(int(os.environ.get('STUB_EXIT', '0')))
             with self.subTest(image=image):
                 self.assertEqual(step['uses'], ACTION)
                 self.assertEqual(step['env'], {'TRIVY_PLATFORM': 'linux/arm64',
+                    'TRIVY_DB_REPOSITORY': 'ghcr.io/aquasecurity/trivy-db:2',
                     'TRIVY_IGNOREFILE': '${{ runner.temp }}/browser-fixture.trivyignore'})
                 self.assertEqual(step['with'], {'version': 'v0.74.0', 'cache': 'false',
                     'cache-dir': '${{ runner.temp }}/browser-fixture-trivy-cache',
@@ -238,6 +240,7 @@ sys.exit(int(os.environ.get('STUB_EXIT', '0')))
             self.assertEqual(self.assert_source(), before)
             self.assertEqual(record['argv'], ['image', IMAGES[index]])
             self.assertEqual(record['env'], {'TRIVY_PLATFORM': 'linux/arm64',
+                'TRIVY_DB_REPOSITORY': 'ghcr.io/aquasecurity/trivy-db:2',
                 'TRIVY_IGNOREFILE': str(self.ignore),
                 'TRIVY_CACHE_DIR': str(self.runner / 'browser-fixture-trivy-cache'),
                 'TRIVY_EXIT_CODE': '1', 'TRIVY_IGNORE_UNFIXED': None,

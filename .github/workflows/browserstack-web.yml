@@ -79,6 +79,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
           TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
         with:
           version: v0.74.0
@@ -107,6 +108,7 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
           TRIVY_IGNOREFILE: ${{ runner.temp }}/browser-fixture.trivyignore
         with:
           version: v0.74.0

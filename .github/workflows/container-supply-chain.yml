@@ -409,6 +409,7 @@ jobs:
       - name: Fail closed on patched runtime high or critical vulnerabilities
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -428,6 +429,7 @@ jobs:
       - name: Inventory patched runtime packages with Trivy
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -835,6 +837,7 @@ jobs:
       - name: Fail closed on high or critical vulnerabilities
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -878,6 +881,7 @@ jobs:
         if: matrix.component == 'api' || matrix.component == 'worker' || matrix.component == 'migrator' || matrix.component == 'web'
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -1553,6 +1557,7 @@ jobs:
       - name: Fail closed on high or critical vulnerabilities
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -2152,6 +2157,7 @@ jobs:
       - name: Reject all high and critical patched-storage vulnerabilities
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0
@@ -2171,6 +2177,7 @@ jobs:
       - name: Inventory the patched storage image
         env:
           TRIVY_PLATFORM: linux/arm64
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.74.0

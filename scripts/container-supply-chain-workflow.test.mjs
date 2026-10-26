@@ -608,7 +608,15 @@ function assertStrictTrivyScan(step, settings, label) {
   assertExactScalar(step, 8, "uses", TRIVY_ACTION, label);
   assertMissingScalar(step, 8, "run", label);
   assertMissingScalar(step, 8, "shell", label);
-  assertExactMapping(step, "        env:", [["TRIVY_PLATFORM", "linux/arm64"]], `${label} env`);
+  assertExactMapping(
+    step,
+    "        env:",
+    [
+      ["TRIVY_PLATFORM", "linux/arm64"],
+      ["TRIVY_DB_REPOSITORY", "ghcr.io/aquasecurity/trivy-db:2"],
+    ],
+    `${label} env`,
+  );
   assertExactMapping(step, "        with:", settings, `${label} inputs`);
 }
 
