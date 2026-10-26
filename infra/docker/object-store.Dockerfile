@@ -60,13 +60,27 @@ LABEL org.opencontainers.image.source="https://github.com/liangzixuan/cronometer
       io.cronometer.upstream.image.digest="sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882" \
       io.cronometer.module-lock.sha256="e4a99de72a8abd1892d0a266772f3dfaaa16e35c5662fde137e2c169b5a49850" \
       io.cronometer.grpc.version="v1.85.0-dev.0.20260825072537-93e31b48545e"
-# Keep the upstream entrypoint, companions and its drop to seaweed UID/GID 1000.
-# Alpine published this compatible decoder fix on 2026-10-22, before the 24h floor.
-# Install only the pinned library through the signed repositories. The read-only
-# build mount copies the verified weed binary in the same derived runtime layer.
+# Keep the upstream entrypoint, supported companions and seaweed UID/GID 1000.
+# The entrypoint and Go storage server do not use the inherited curl client.
+# Keep the installed CA bundle explicitly before removing curl and libcurl.
+# This avoids importing a newly published package just to repair CVE-2026-92392.
+# The pinned Brotli decoder fix and verified weed binary remain unchanged.
 RUN --mount=type=bind,from=build,source=/out/weed,target=/tmp/nourishing-weed,readonly \
     set -eux; \
     apk add --no-cache --upgrade 'brotli-libs=1.2.1-r0'; \
+    apk add --no-network ca-certificates-bundle; \
+    apk del --no-network curl libcurl; \
+    test ! -e /usr/bin/curl; \
+    test ! -e /usr/lib/libcurl.so.4; \
+    test -s /etc/ssl/cert.pem; \
+    for companion in /usr/bin/weed-volume /usr/bin/weed-worker; do \
+      if test -s "${companion}"; then \
+        libraries="$(ldd "${companion}" 2>&1)" || \
+          case "${libraries}" in *'Not a valid dynamic program'*) ;; *) printf '%s\n' "${libraries}"; exit 1 ;; esac; \
+        if printf '%s\n' "${libraries}" | grep -E 'Error loading|not found|libcurl'; then exit 1; fi; \
+      fi; \
+    done; \
     cp /tmp/nourishing-weed /usr/bin/weed; \
-    chmod 0755 /usr/bin/weed
+    chmod 0755 /usr/bin/weed; \
+    su-exec seaweed /usr/bin/weed version
 COPY --from=build /review/NOTICES.txt /usr/share/licenses/nourishing-object-store/NOTICES.txt
