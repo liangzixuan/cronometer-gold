@@ -26,6 +26,7 @@ import {
 } from "./site-release.ts";
 import {
   canonical,
+  createWebSourceUpload,
   gitTreeIdentity,
   META_PATH,
   makeTar,
@@ -179,7 +180,7 @@ function harness() {
     resourceType: "sites",
     status: "ready",
     activate: false,
-    sourceSize: f.archive.length,
+    sourceSize: createWebSourceUpload(f.source, f.archive).length,
   };
   const port: SitesPort = {
     async getSite() {
@@ -189,7 +190,7 @@ function harness() {
     async createDeployment(siteId, archive, progress) {
       calls.push("upload-inactive");
       assert.equal(siteId, f.config.siteId);
-      assert.deepEqual(archive, f.archive);
+      assert.deepEqual(archive, createWebSourceUpload(f.source, f.archive));
       progress("new-deploy");
       return { ...deployment };
     },
@@ -199,7 +200,7 @@ function harness() {
     },
     async download(_siteId, _id, type) {
       calls.push(`download:${type}`);
-      return type === "source" ? f.archive : f.output;
+      return type === "source" ? createWebSourceUpload(f.source, f.archive) : f.output;
     },
     async activate(_siteId, id) {
       calls.push("activate");

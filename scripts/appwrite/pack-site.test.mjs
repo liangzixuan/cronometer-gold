@@ -350,3 +350,25 @@ test("rejects a standalone file where the static overlay needs a directory", asy
   await assert.rejects(packSite({ sourceRoot: root }), /collision/);
   await assert.rejects(lstat(output), { code: "ENOENT" });
 });
+
+test("web packager accepts omitted non-web manifest rows while verifying the web closure", async (t) => {
+  const { root } = await fixture(t);
+  await changeManifest(root, (manifest) => {
+    manifest.files.push({
+      path: "infra/local-development.py",
+      mode: "100644",
+      size: 25,
+      sha256: "1".repeat(64),
+    });
+    manifest.files.push({
+      path: "apps/web/src/page.test.tsx",
+      mode: "100644",
+      size: 20,
+      sha256: "2".repeat(64),
+    });
+  });
+  const sourceManifest = await readFile(join(root, ".nourishing-source.json"));
+  const output = await packSite({ sourceRoot: root });
+  assert.equal(output.sourceManifestSha256, digest(sourceManifest));
+  assert.ok(output.files.every((entry) => !entry.path.includes("local-development")));
+});

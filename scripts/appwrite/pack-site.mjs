@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { webSourcePath } from "./web-source-inputs.mjs";
 
 export const LIMITS = Object.freeze({
   entries: 20_000,
@@ -141,6 +142,9 @@ export async function verifySource(sourceRoot) {
     seen.add(file.path);
     sourceBytes += file.size;
     assert(sourceBytes <= LIMITS.bytes, "Source byte limit exceeded");
+    // The full source manifest is preserved, but local operators and other
+    // applications are deliberately absent from the hosted build upload.
+    if (!webSourcePath(file.path)) continue;
     const absolute = join(sourceRoot, file.path);
     assert((await realpath(absolute)) === absolute, "Source link is forbidden");
     const actual = await regularBytes(absolute, LIMITS.fileBytes);

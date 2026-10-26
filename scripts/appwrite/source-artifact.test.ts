@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import {
   canonical,
+  createWebSourceUpload,
   gitTreeIdentity,
   META_PATH,
   makeTar,
@@ -419,3 +420,57 @@ test("entries hidden after a complete archive terminator remain forbidden", () =
     /invalid_tar_terminator/,
   );
 });
+
+test("web upload is a deterministic projection of a fully verified source tree", () =>
+  temporaryRepo((root, git) => {
+    const content = new Map([
+      ["package.json", "{}\n"],
+      ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"],
+      ["pnpm-workspace.yaml", "packages: [apps/*, packages/*]\n"],
+      ["apps/web/src/app/page.tsx", "export default function Page() {}\n"],
+      ["packages/contracts/src/index.ts", "export const value = 1;\n"],
+      ["patches/example.patch", "locked dependency patch\n"],
+      ["scripts/appwrite/pack-site.mjs", "packaging bootstrap\n"],
+      ["scripts/appwrite/start-site.cjs", "runtime bootstrap\n"],
+      ["scripts/appwrite/web-source-inputs.mjs", "fixed build input selector\n"],
+      ["infra/local.py", "excluded infrastructure sentinel\n"],
+      ["scripts/local-runtime.mjs", "excluded development sentinel\n"],
+      ["scripts/appwrite/site-release.ts", "excluded release controller\n"],
+      ["apps/api/src/server.ts", "excluded API source\n"],
+      ["packages/db/src/schema.ts", "excluded database source\n"],
+      ["apps/web/src/app/page.test.tsx", "excluded web test\n"],
+      ["packages/contracts/src/value.spec.ts", "excluded contract test\n"],
+      ["apps/web/tests/browser.mjs", "excluded test directory\n"],
+      ["apps/web/src/__fixtures__/value.json", "excluded test fixture\n"],
+    ]);
+    for (const [path, bytes] of content) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), bytes, { mode: 0o644 });
+    }
+    const head = commit(git);
+    const source = prepareSourceArtifact(root, head, join(root, "..", "full"));
+    const archive = readFileSync(join(root, "..", "full", "source.tar.gz"));
+    const upload = createWebSourceUpload(source, archive);
+    assert.deepEqual(createWebSourceUpload(source, archive), upload);
+    const entries = readTarGzip(upload);
+    assert.deepEqual(
+      entries.filter((entry) => entry.path !== META_PATH).map((entry) => entry.path),
+      [
+        "apps/web/src/app/page.tsx",
+        "package.json",
+        "packages/contracts/src/index.ts",
+        "patches/example.patch",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "scripts/appwrite/pack-site.mjs",
+        "scripts/appwrite/start-site.cjs",
+        "scripts/appwrite/web-source-inputs.mjs",
+      ],
+    );
+    const original = readTarGzip(archive).find((entry) => entry.path === META_PATH);
+    assert.deepEqual(entries.find((entry) => entry.path === META_PATH)?.data, original?.data);
+    assert.ok(upload.length < archive.length);
+    assert.deepEqual(verifySourceArtifact(source, archive), source);
+    assert.throws(() => createWebSourceUpload(source, Buffer.from("altered")));
+    assert.throws(() => verifySourceArtifact(source, upload), /source_archive_identity_mismatch/);
+  }));

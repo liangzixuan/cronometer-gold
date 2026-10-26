@@ -8,6 +8,7 @@ import { collectGitHubEvidence, validateGitHubEvidence } from "./github-checks.t
 import { configurationSha256, createQualificationVerifier } from "./qualification.ts";
 import {
   canonical,
+  createWebSourceUpload,
   parseArgs,
   readTarGzip,
   SOURCE_LIMITS,
@@ -482,6 +483,7 @@ async function runSite(
   let port: SitesPort | undefined;
   let stagingPort: SitesPort | undefined;
   let activationAttempted = false;
+  let webUpload: Buffer;
   const deadline = () => {
     if (now() - started >= RELEASE_LIMITS.totalMs) reject("release_deadline");
   };
@@ -500,10 +502,7 @@ async function runSite(
   async function artifacts(selectedPort: SitesPort, siteId: string, deploymentId: string) {
     deadline();
     const remoteSource = await selectedPort.download(siteId, deploymentId, "source");
-    if (
-      remoteSource.length !== source.archiveBytes ||
-      sha256(remoteSource) !== source.archiveSha256
-    )
+    if (remoteSource.length !== webUpload.length || sha256(remoteSource) !== sha256(webUpload))
       reject("uploaded_source_identity_mismatch");
     deadline();
     return verifyOutputArchive(await selectedPort.download(siteId, deploymentId, "output"), source);
@@ -532,7 +531,7 @@ async function runSite(
     deadline();
     const deployment = await stagingPort.getDeployment(stagingConfig.siteId, site.deploymentId);
     validateDeployment(deployment, stagingConfig.siteId, site.deploymentId);
-    if (deployment.status !== "ready" || deployment.sourceSize !== source.archiveBytes)
+    if (deployment.status !== "ready" || deployment.sourceSize !== webUpload.length)
       reject("staging_deployment_not_ready");
     const output = await artifacts(stagingPort, stagingConfig.siteId, deployment.$id);
     if (!sameOutput(output, (options.stagingReceipt as ReleaseReceipt).output))
@@ -547,6 +546,7 @@ async function runSite(
   try {
     validateTarget(config);
     verifySourceArtifact(source, options.archive);
+    webUpload = createWebSourceUpload(source, options.archive);
     Object.assign(receipt, {
       revision: source.revision,
       tree: source.tree,
@@ -583,7 +583,7 @@ async function runSite(
     if (operation === "prepare") {
       deadline();
       receipt.phase = "upload";
-      deployment = await port.createDeployment(config.siteId, options.archive, (id) => {
+      deployment = await port.createDeployment(config.siteId, webUpload, (id) => {
         if (!isId(id)) reject("upload_identity_invalid");
         if (receipt.uploadedDeploymentId && receipt.uploadedDeploymentId !== id)
           reject("upload_identity_changed");
@@ -592,7 +592,7 @@ async function runSite(
       validateDeployment(deployment, config.siteId, receipt.uploadedDeploymentId ?? undefined);
       receipt.uploadedDeploymentId = deployment.$id;
       if (deployment.$id === site.deploymentId) reject("candidate_already_active");
-      if (deployment.sourceSize !== source.archiveBytes) reject("uploaded_source_size_mismatch");
+      if (deployment.sourceSize !== webUpload.length) reject("uploaded_source_size_mismatch");
       receipt.phase = "readiness";
       for (let attempt = 0; deployment.status !== "ready"; attempt++) {
         if (["failed", "canceled"].includes(deployment.status)) reject("deployment_build_failed");
@@ -616,7 +616,7 @@ async function runSite(
         candidate.uploadedDeploymentId as string,
       );
       validateDeployment(deployment, config.siteId, candidate.uploadedDeploymentId as string);
-      if (deployment.status !== "ready" || deployment.sourceSize !== source.archiveBytes)
+      if (deployment.status !== "ready" || deployment.sourceSize !== webUpload.length)
         reject("candidate_deployment_not_ready");
     }
     receipt.phase = "artifact_verification";

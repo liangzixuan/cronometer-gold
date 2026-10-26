@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { Parser } from "tar";
+import { webSourcePath } from "./web-source-inputs.mjs";
 
 export const SOURCE_LIMITS = {
   files: 4000,
@@ -333,6 +334,16 @@ export function verifySourceArtifact(metadata: unknown, archive: Buffer): Source
     throw new Error("source_git_tree_mismatch");
   return value;
 }
+// Validate the entire original Git tree first. The provider receives only the
+// web build closure, plus the unchanged manifest that binds output to that tree.
+export function createWebSourceUpload(source: SourceArtifact, archive: Buffer): Buffer {
+  verifySourceArtifact(source, archive);
+  const entries = readTarGzip(archive).filter(
+    (entry) => entry.path === META_PATH || webSourcePath(entry.path),
+  );
+  return gzipSync(makeTar(entries), { level: 9 });
+}
+
 export function prepareSourceArtifact(
   repoPath: string,
   revision: string,
