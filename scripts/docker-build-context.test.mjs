@@ -63,6 +63,7 @@ const reviewedExposureRules = [
   "!infra/docker/",
   "infra/docker/*",
   "!infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc",
+  "!infra/docker/caddy-NOTICES.txt",
   "!infra/docker/object-store.go.mod",
   "!infra/docker/object-store.go.sum",
   "!infra/docker/object-store-modules.json",
@@ -478,43 +479,56 @@ test("keeps the root Docker context deny-by-default with only reviewed build inp
   }
 });
 
-test("Mailpit context includes every local COPY input and verifier dependency", () => {
-  const expected = [
-    "config/license-policy.json",
-    "infra/docker/mailpit-NOTICES.txt",
-    "infra/docker/mailpit-build-inputs.json",
-    "infra/docker/mailpit-go-licenses.go.mod",
-    "infra/docker/mailpit-go-licenses.go.sum",
-    "scripts/license-policy.mjs",
-    "scripts/verify-mailpit-build.mjs",
-  ];
-  const dockerfile = readFileSync(join(repositoryRoot, "infra/docker/mailpit.Dockerfile"), "utf8");
-  const copies = logicalInstructions(dockerfile)
-    .filter((line) => /^COPY\s/iu.test(line) && !/^COPY\s+--from(?:=|\s)/iu.test(line))
-    .flatMap((line) => {
-      const operands = shellOperands(line.replace(/^COPY\s+/iu, ""));
-      assert.ok(operands && operands.length >= 2, "Local COPY must have literal source operands.");
-      return operands.slice(0, -1);
-    });
-  assert.deepEqual([...new Set(copies)].sort(), expected);
-  const rules = dockerignoreRules();
-  for (const file of expected) {
-    assert.ok(existsSync(join(repositoryRoot, file)), `${file} must exist in the source tree.`);
-    assert.ok(rules.includes(`!${file}`), `${file} must be an exact Docker context inclusion.`);
-  }
-  for (const file of expected.filter((path) => path.endsWith(".mjs"))) {
-    const source = readFileSync(join(repositoryRoot, file), "utf8");
-    for (const match of source.matchAll(/(?:from\s+|new URL\()["'](\.\.?\/[^"']+)["']/gu)) {
-      const dependency = repositoryPath(
-        fileURLToPath(new URL(match[1], pathToFileURL(join(repositoryRoot, file)))),
-      );
-      assert.ok(
-        expected.includes(dependency),
-        `${file} requires an unreviewed context input: ${dependency}`,
-      );
+for (const [name, expected] of [
+  [
+    "Mailpit",
+    [
+      "config/license-policy.json",
+      "infra/docker/mailpit-NOTICES.txt",
+      "infra/docker/mailpit-build-inputs.json",
+      "infra/docker/mailpit-go-licenses.go.mod",
+      "infra/docker/mailpit-go-licenses.go.sum",
+      "scripts/license-policy.mjs",
+      "scripts/verify-mailpit-build.mjs",
+    ],
+  ],
+  ["Caddy", ["infra/docker/caddy-NOTICES.txt"]],
+]) {
+  test(`${name} context includes every local COPY input and verifier dependency`, () => {
+    const dockerfile = readFileSync(
+      join(repositoryRoot, `infra/docker/${name.toLowerCase()}.Dockerfile`),
+      "utf8",
+    );
+    const copies = logicalInstructions(dockerfile)
+      .filter((line) => /^COPY\s/iu.test(line) && !/^COPY\s+--from(?:=|\s)/iu.test(line))
+      .flatMap((line) => {
+        const operands = shellOperands(line.replace(/^COPY\s+/iu, ""));
+        assert.ok(
+          operands && operands.length >= 2,
+          "Local COPY must have literal source operands.",
+        );
+        return operands.slice(0, -1);
+      });
+    assert.deepEqual([...new Set(copies)].sort(), expected);
+    const rules = dockerignoreRules();
+    for (const file of expected) {
+      assert.ok(existsSync(join(repositoryRoot, file)), `${file} must exist in the source tree.`);
+      assert.ok(rules.includes(`!${file}`), `${file} must be an exact Docker context inclusion.`);
     }
-  }
-});
+    for (const file of expected.filter((path) => path.endsWith(".mjs"))) {
+      const source = readFileSync(join(repositoryRoot, file), "utf8");
+      for (const match of source.matchAll(/(?:from\s+|new URL\()["'](\.\.?\/[^"']+)["']/gu)) {
+        const dependency = repositoryPath(
+          fileURLToPath(new URL(match[1], pathToFileURL(join(repositoryRoot, file)))),
+        );
+        assert.ok(
+          expected.includes(dependency),
+          `${file} requires an unreviewed context input: ${dependency}`,
+        );
+      }
+    }
+  });
+}
 
 test("Docker frozen installs receive every declared pnpm patch as an exact public input", () => {
   const workspace = readFileSync(join(repositoryRoot, "pnpm-workspace.yaml"), "utf8");
