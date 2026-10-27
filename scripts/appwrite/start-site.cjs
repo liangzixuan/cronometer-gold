@@ -42,6 +42,7 @@ function validateStartup(directory, env) {
     "Invalid output identity",
   );
   for (const relative of [
+    "server.js",
     "start-site.cjs",
     "payload/apps/web/server.js",
     "payload/apps/web/.next/BUILD_ID",
@@ -80,8 +81,7 @@ function startSite(directory = __dirname) {
   require(entrypoint);
 }
 
-module.exports = { startSite, validateStartup };
-if (require.main === module) {
+function main() {
   try {
     startSite();
   } catch {
@@ -89,3 +89,6 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
+
+module.exports = { main, startSite, validateStartup };
+if (require.main === module) main();

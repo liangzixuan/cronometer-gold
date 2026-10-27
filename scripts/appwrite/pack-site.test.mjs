@@ -114,28 +114,30 @@ test("packages the entire standalone tree, public assets, static files and inter
   }
 });
 
-test("the actual startup script loads the nested standalone dependency and retains provider NODE_OPTIONS", async (t) => {
-  const { root, output } = await fixture(t);
-  await packSite({ sourceRoot: root });
-  const result = spawnSync(process.execPath, [join(output, "start-site.cjs")], {
-    env: {
-      PORT: "8080",
-      HOSTNAME: "untrusted-container-host",
-      NODE_OPTIONS: "--no-warnings",
-      NOURISHING_OUTPUT_MANIFEST: "/untrusted/input",
-    },
-    encoding: "utf8",
-    timeout: 5000,
+for (const entrypoint of ["start-site.cjs", "server.js"]) {
+  test(`the actual ${entrypoint} loads the nested standalone dependency and retains provider NODE_OPTIONS`, async (t) => {
+    const { root, output } = await fixture(t);
+    await packSite({ sourceRoot: root });
+    const result = spawnSync(process.execPath, [join(output, entrypoint)], {
+      env: {
+        PORT: "8080",
+        HOSTNAME: "untrusted-container-host",
+        NODE_OPTIONS: "--no-warnings",
+        NOURISHING_OUTPUT_MANIFEST: "/untrusted/input",
+      },
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout), {
+      dependency: "complete-standalone",
+      port: "8080",
+      hostname: "0.0.0.0",
+      nodeOptions: "--no-warnings",
+      manifestPath: join(output, "output-manifest.json"),
+    });
   });
-  assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {
-    dependency: "complete-standalone",
-    port: "8080",
-    hostname: "0.0.0.0",
-    nodeOptions: "--no-warnings",
-    manifestPath: join(output, "output-manifest.json"),
-  });
-});
+}
 
 for (const [name, prepare] of [
   ["source bytes", async ({ root }) => put(root, "pnpm-lock.yaml", "tampered")],
@@ -282,6 +284,7 @@ for (const [name, mutate] of [
     "server bytes",
     async (root) => put(root, "appwrite-output/payload/apps/web/server.js", "tampered"),
   ],
+  ["provider bootstrap bytes", async (root) => put(root, "appwrite-output/server.js", "tampered")],
   [
     "server permissions",
     async (root) => chmod(join(root, "appwrite-output/payload/apps/web/server.js"), 0o755),
@@ -320,18 +323,23 @@ for (const [name, mutate] of [
   });
 }
 
-test("startup failure stays bounded and does not load a server", async (t) => {
-  const { root, output } = await fixture(t);
-  await packSite({ sourceRoot: root });
-  const result = spawnSync(process.execPath, [join(output, "start-site.cjs")], {
-    env: { PORT: "private-hostile-input" },
-    encoding: "utf8",
-    timeout: 5000,
+for (const entrypoint of ["start-site.cjs", "server.js"]) {
+  test(`${entrypoint} startup failure stays bounded and does not load a server`, async (t) => {
+    const { root, output } = await fixture(t);
+    await packSite({ sourceRoot: root });
+    const result = spawnSync(process.execPath, [join(output, entrypoint)], {
+      env: { PORT: "private-hostile-input" },
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(
+      result.stderr.trim(),
+      "Appwrite application startup rejected its output contract.",
+    );
   });
-  assert.equal(result.status, 1);
-  assert.equal(result.stdout, "");
-  assert.equal(result.stderr.trim(), "Appwrite application startup rejected its output contract.");
-});
+}
 
 test("preserves empty structural directories and their internal links", async (t) => {
   const { root, output } = await fixture(t);

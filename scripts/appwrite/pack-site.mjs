@@ -299,7 +299,11 @@ export async function packSite({ sourceRoot, output = "appwrite-output", limits 
   // Public assets are source inputs, so generated or unlisted additions cannot be published.
   for (const entry of entries.filter((item) => item.path.startsWith("payload/apps/web/public/")))
     assert(source.sourcePaths.has(entry.path.slice("payload/".length)), "Unlisted public asset");
-  const reportPath = "build-runtime-observation.json";
+  // Appwrite's Next.js adapter detects and starts the root standalone server.js.
+  // Use the same manifest-validating launcher as the explicit start command.
+  const bootstrapBytes = Buffer.from(
+    "void import('./start-site.cjs').then(({ default: launcher }) => launcher.main());\n",
+  );
   const reportBytes = Buffer.from(
     `${JSON.stringify(
       observeBuild({
@@ -309,22 +313,25 @@ export async function packSite({ sourceRoot, output = "appwrite-output", limits 
       }),
     )}\n`,
   );
-  assert(!origins.has(reportPath) && !directories.has(reportPath), "Observation path collision");
-  total += reportBytes.length;
-  assert(
-    reportBytes.length <= limits.fileBytes &&
-      entries.length < limits.entries &&
-      total <= limits.bytes,
-    "Observation package limit",
-  );
-  entries.push({
-    path: reportPath,
-    type: "file",
-    mode: "100644",
-    size: reportBytes.length,
-    sha256: digest(reportBytes),
-  });
-  generated.set(reportPath, reportBytes);
+  for (const [path, bytes] of [
+    ["server.js", bootstrapBytes],
+    ["build-runtime-observation.json", reportBytes],
+  ]) {
+    assert(!origins.has(path) && !directories.has(path), "Generated path collision");
+    total += bytes.length;
+    assert(
+      bytes.length <= limits.fileBytes && entries.length < limits.entries && total <= limits.bytes,
+      "Generated package limit",
+    );
+    entries.push({
+      path,
+      type: "file",
+      mode: "100644",
+      size: bytes.length,
+      sha256: digest(bytes),
+    });
+    generated.set(path, bytes);
+  }
   entries.sort((a, b) => compare(a.path, b.path));
   const manifest = {
     schemaVersion: 1,

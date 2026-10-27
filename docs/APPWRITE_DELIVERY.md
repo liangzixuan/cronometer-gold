@@ -72,6 +72,13 @@ actual source, job and attempt binding; do not substitute the build time.
 runtime, restore and access measurements remain separate. Keep credentials and
 private signed URLs out of reports and retained receipts.
 
+The package includes a root `server.js` that runs the existing
+`start-site.cjs` launcher. Appwrite's Next.js adapter uses that root entrypoint
+to detect SSR and start a standalone app when no custom command is supplied.
+Both paths validate the same output manifest before loading the nested server.
+The bootstrap is also listed and hashed in that manifest. Keep the Site on SSR;
+changing it to static cannot serve the API routes or private diary.
+
 ## Configuration
 
 The fixed endpoint is `https://nyc.cloud.appwrite.io/v1`, project
