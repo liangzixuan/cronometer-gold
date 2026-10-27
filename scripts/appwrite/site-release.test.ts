@@ -75,6 +75,34 @@ function fixture() {
   };
   const outputEntries: TarEntry[] = [
     {
+      path: "build-runtime-observation.json",
+      mode: 0o644,
+      type: "file",
+      data: canonical({
+        schemaVersion: "nutrition-tracker-appwrite-runtime-observation-v1",
+        phase: "build",
+        sourceRevision: source.revision,
+        sourceTree: source.tree,
+        sourceManifestSha256: source.manifestSha256,
+        outputTreeSha256: null,
+        provider: {
+          endpoint: APPWRITE_TARGET.endpoint,
+          projectId: APPWRITE_TARGET.projectId,
+          siteId: "staging-site",
+          deploymentId: "new-deploy",
+        },
+        node: "22.23.2",
+        openssl: "3.5.7",
+        platform: "linux",
+        architecture: "x64",
+        libc: "glibc@2.39",
+        nativeInventory: [{ path: "/fixture/node", sha256: "f".repeat(64) }],
+        observedAt: "2026-10-27T17:23:18.000Z",
+        nonFileSharedObjects: [],
+        qualificationPerformed: false,
+      }),
+    },
+    {
       path: "payload/apps/web/.next/BUILD_ID",
       mode: 0o644,
       type: "file",
@@ -617,6 +645,18 @@ async function productionHarness() {
       { key: "NODE_ENV", value: "production" },
     ],
   };
+  const productionOutput = outputArchive(
+    h.source,
+    h.outputEntries.map((entry) => {
+      if (entry.path !== "build-runtime-observation.json") return entry;
+      const report = JSON.parse(entry.data.toString());
+      report.provider.siteId = config.siteId;
+      return { ...entry, data: canonical(report) };
+    }),
+  );
+  const download = h.port.download;
+  h.port.download = async (siteId, deploymentId, type) =>
+    type === "output" ? productionOutput : download(siteId, deploymentId, type);
   let active = "previous-deploy";
   h.port.getSite = async () => ({ ...site, deploymentId: active });
   h.port.getDeployment = async (_site, id) => ({
@@ -1042,4 +1082,35 @@ test("CLI preserves nonempty malformed readiness credentials for fail-closed qua
       }),
       { qualificationPath: "/review.json", readinessToken: token, stagingReadinessToken: token },
     );
+});
+
+test("output acceptance rejects missing, altered and falsely qualified build observations", () => {
+  const f = fixture();
+  for (const change of ["missing", "source", "qualified", "extra"]) {
+    const entries = f.outputEntries.map((entry) => ({ ...entry }));
+    const index = entries.findIndex((entry) => entry.path === "build-runtime-observation.json");
+    if (change === "missing") entries.splice(index, 1);
+    else {
+      const entry = entries[index];
+      assert.ok(entry);
+      const report = JSON.parse(entry.data.toString());
+      if (change === "source") report.sourceRevision = "f".repeat(40);
+      if (change === "qualified") report.qualificationPerformed = true;
+      if (change === "extra") report.opensslFixCommit = "invented";
+      entry.data = canonical(report);
+    }
+    assert.throws(() => verifyOutputArchive(outputArchive(f.source, entries), f.source));
+  }
+});
+
+test("downloaded output must name the actual Site and deployment being consumed", () => {
+  const f = fixture();
+  assert.doesNotThrow(() =>
+    verifyOutputArchive(f.output, f.source, { siteId: "staging-site", deploymentId: "new-deploy" }),
+  );
+  for (const provider of [
+    { siteId: "other-site", deploymentId: "new-deploy" },
+    { siteId: "staging-site", deploymentId: "other-deploy" },
+  ])
+    assert.throws(() => verifyOutputArchive(f.output, f.source, provider));
 });

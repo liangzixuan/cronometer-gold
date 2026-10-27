@@ -81,38 +81,11 @@ export function selectLatestRun(value: unknown, workflow: string, revision: stri
   need(latest);
   return latest;
 }
-// Exact direct user approval; limited to the existing hosted staging trial.
-const STAGING_DEPENDENCY_APPROVAL_START = Date.parse("2026-10-22T00:37:43Z");
-const STAGING_DEPENDENCY_APPROVAL_END = Date.parse("2026-10-23T18:37:37Z");
-const STAGING_DEPENDENCY_FAILURES = [
-  [
-    "ci.yml",
-    "production dependency advisories",
-    "Reject high-severity production dependency advisories",
-  ],
-  [
-    "ci.yml",
-    "object-store vulnerabilities",
-    "Reject high or critical object-store vulnerabilities",
-  ],
-  [
-    "browserstack-web.yml",
-    "postgres-fixture-vulnerabilities",
-    "Reject high or critical PostgreSQL fixture vulnerabilities",
-  ],
-  [
-    "browserstack-web.yml",
-    "meilisearch-fixture-vulnerabilities",
-    "Reject high or critical Meilisearch fixture vulnerabilities",
-  ],
-] as const;
-
-// NOURISHING-HOSTED-JOURNEY-47C8898-20261023: approved through the delegated
-// Oracle-to-Gmail reply route at 2026-10-23T22:16:12Z. One staging attempt only.
-// The earlier interval above remains expired history and is not extended.
-const HOSTED_JOURNEY_APPROVAL_START = Date.parse("2026-10-23T22:16:12Z");
-const HOSTED_JOURNEY_APPROVAL_END = Date.parse("2026-10-24T10:16:12Z");
-const HOSTED_JOURNEY_FAILURES = [
+// Renewed direct human approval for owner bdc69bae-4933-4c42-b2c8-918b06ea12e0.
+// This admission interval cannot extend the allocation's separately recorded shutdown.
+const DELIVERY_BDC69BAE_START = Date.parse("2026-10-27T17:23:18Z");
+const DELIVERY_BDC69BAE_END = Date.parse("2026-10-29T17:23:18Z");
+const DELIVERY_FAILURES = [
   [
     "ci.yml",
     "production dependency advisories",
@@ -124,11 +97,6 @@ const HOSTED_JOURNEY_FAILURES = [
     "Reject high or critical object-store vulnerabilities",
   ],
 ] as const;
-
-// NOURISHING-HOSTED-DELIVERY-01597185-20261024: approved by the matching
-// Oracle-to-Gmail reply received at 2026-10-24T18:15:50Z. One staging delivery run.
-const DELIVERY_01597185_START = Date.parse("2026-10-24T18:15:50Z");
-const DELIVERY_01597185_END = Date.parse("2026-10-27T23:30:00Z");
 
 export function validateJobs(
   value: unknown,
@@ -141,15 +109,12 @@ export function validateJobs(
   const policy = WORKFLOW_POLICIES[workflow];
   need(policy && run.status === "completed");
   const allowedFailures =
-    target !== "staging" || !Number.isFinite(now)
-      ? []
-      : now >= STAGING_DEPENDENCY_APPROVAL_START && now < STAGING_DEPENDENCY_APPROVAL_END
-        ? STAGING_DEPENDENCY_FAILURES
-        : now >= HOSTED_JOURNEY_APPROVAL_START && now < HOSTED_JOURNEY_APPROVAL_END
-          ? HOSTED_JOURNEY_FAILURES
-          : now >= DELIVERY_01597185_START && now < DELIVERY_01597185_END
-            ? HOSTED_JOURNEY_FAILURES
-            : [];
+    target === "staging" &&
+    Number.isFinite(now) &&
+    now >= DELIVERY_BDC69BAE_START &&
+    now < DELIVERY_BDC69BAE_END
+      ? DELIVERY_FAILURES
+      : [];
   let failedDependencyJob = false;
   const jobs = rows(value).map(row);
   need(jobs.length === Object.keys(policy).length);
@@ -188,8 +153,8 @@ export function validateJobs(
       // The pinned setup-node cache save runs only on success. Keep its skip
       // after this delivery's approved audit failure, without rewriting the failure.
       const skippedApprovedCacheSave =
-        now >= DELIVERY_01597185_START &&
-        now < DELIVERY_01597185_END &&
+        now >= DELIVERY_BDC69BAE_START &&
+        now < DELIVERY_BDC69BAE_END &&
         failedDependencyStep &&
         workflow === "ci.yml" &&
         job.name === "production dependency advisories" &&

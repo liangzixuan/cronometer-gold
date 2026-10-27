@@ -74,6 +74,7 @@ function validateStartup(directory, env) {
 
 function startSite(directory = __dirname) {
   const entrypoint = validateStartup(directory, process.env);
+  process.env.NOURISHING_OUTPUT_MANIFEST = join(directory, "output-manifest.json");
   process.env.HOSTNAME = "0.0.0.0";
   // Provider-injected NODE_OPTIONS is deliberately retained for its runtime hook.
   require(entrypoint);

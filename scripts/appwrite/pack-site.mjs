@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { observeBuild } from "../../apps/web/src/lib/appwrite-runtime.cjs";
 import { webSourcePath } from "./web-source-inputs.mjs";
 
 export const LIMITS = Object.freeze({
@@ -185,6 +186,7 @@ export async function packSite({ sourceRoot, output = "appwrite-output", limits 
   const source = await verifySource(root);
   const entries = [];
   const origins = new Map();
+  const generated = new Map();
   const directories = new Set();
   let total = 0;
   let visited = 0;
@@ -297,6 +299,32 @@ export async function packSite({ sourceRoot, output = "appwrite-output", limits 
   // Public assets are source inputs, so generated or unlisted additions cannot be published.
   for (const entry of entries.filter((item) => item.path.startsWith("payload/apps/web/public/")))
     assert(source.sourcePaths.has(entry.path.slice("payload/".length)), "Unlisted public asset");
+  const reportPath = "build-runtime-observation.json";
+  const reportBytes = Buffer.from(
+    `${JSON.stringify(
+      observeBuild({
+        revision: source.manifest.revision,
+        tree: source.manifest.tree,
+        sourceManifestSha256: source.manifestSha256,
+      }),
+    )}\n`,
+  );
+  assert(!origins.has(reportPath) && !directories.has(reportPath), "Observation path collision");
+  total += reportBytes.length;
+  assert(
+    reportBytes.length <= limits.fileBytes &&
+      entries.length < limits.entries &&
+      total <= limits.bytes,
+    "Observation package limit",
+  );
+  entries.push({
+    path: reportPath,
+    type: "file",
+    mode: "100644",
+    size: reportBytes.length,
+    sha256: digest(reportBytes),
+  });
+  generated.set(reportPath, reportBytes);
   entries.sort((a, b) => compare(a.path, b.path));
   const manifest = {
     schemaVersion: 1,
@@ -333,7 +361,9 @@ export async function packSite({ sourceRoot, output = "appwrite-output", limits 
       assert((await readlink(origin)) === entry.target, "Package link changed");
       await symlink(entry.target, target);
     } else {
-      const file = await regularBytes(origin, limits.fileBytes);
+      const file = generated.has(entry.path)
+        ? { bytes: generated.get(entry.path), mode: "100644" }
+        : await regularBytes(origin, limits.fileBytes);
       assert(
         digest(file.bytes) === entry.sha256 &&
           file.bytes.length === entry.size &&

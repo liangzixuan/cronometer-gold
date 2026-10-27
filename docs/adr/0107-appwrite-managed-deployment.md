@@ -40,7 +40,7 @@ acceptance and device/platform/software signatures remain required. Human
 signatures and separate people do not block release. No test key becomes a
 device/platform/software release authority.
 
-## Finite hosted staging dependency policy
+## Historical finite hosted staging dependency policy
 
 The user's direct approval permits the existing hosted staging trial to retain
 failed standalone dependency checks. Admission applies from
@@ -56,7 +56,7 @@ browser acceptance, backup/recovery and cleanup remain required.
 The existing one-trial spending, duration and resource limits still apply. This
 policy neither starts the trial nor grants a production release.
 
-## Approved hosted delivery interval
+## Historical hosted delivery interval
 
 NOURISHING-HOSTED-DELIVERY-01597185-20261024 was approved through the
 established Oracle-to-Gmail route in the reply received at
@@ -71,6 +71,49 @@ Both earlier intervals are expired history. This interval grants no extension
 of their consumed approvals. The new delivery run retains its own resource,
 credit, custody, start, powered-time, recovery and cleanup bounds; the admission
 end is not permission to run the host until that date.
+
+## Renewed hosted delivery interval
+
+Direct human approval on October 27 renewed delivery for owner
+`bdc69bae-4933-4c42-b2c8-918b06ea12e0`. The current staging admission interval
+starts at 2026-10-27T17:23:18Z and ends at 2026-10-29T17:23:18Z, exclusive.
+It retains only the same two completed failed CI advisory jobs and their exact
+scan steps. A skipped setup-node post cache save is permitted only after that
+job's approved advisory failure. Failed outcomes remain failures. Production,
+fixture scans, functional checks and all other requirements remain strict.
+Historical intervals above are removed from active admission. This source policy
+does not grant allocation or extend the separately recorded shutdown deadline.
+
+## Raw build and server observations
+
+The packager writes `build-runtime-observation.json` into the output inventory.
+It measures the actual packaging Node process after the build. The output
+manifest binds its bytes to the full source revision, tree and source manifest.
+It does not assert that every build subprocess used the same executable.
+
+The launcher sets `NOURISHING_OUTPUT_MANIFEST` from its validated package path,
+overriding an incoming value. GET `/api/deployment/runtime` reads that manifest
+and measures the server process. Complete official Appwrite endpoint, project,
+Site and deployment identifiers are required for a server observation. A local
+development server without this context returns HTTP 503. Query parameters are
+rejected; the route accepts no file selector or credential. It is a bounded
+anonymous operational route and does not replace application authentication.
+
+Both reports contain measured Node/OpenSSL versions, Linux architecture, libc,
+the executable and file-backed shared-library checksums. Virtual shared objects
+are listed separately because they have no bytes on disk to hash. A process-fact
+cache lasts at most 30 seconds and retains the original observation timestamp.
+Responses disable caching. No environment dump, Appwrite API key, request header,
+user or diary data is serialized. `detect-libc` 2.1.2 is reused from the existing
+dependency graph.
+
+These reports explicitly set `qualificationPerformed: false`. They do not claim
+an advisory assessment, zero findings, an OpenSSL fix commit, a native package
+inventory or software provenance. Existing managed-runtime qualification still
+needs the applicable actual evidence. Source/output integrity and authorized
+and unauthorized preview measurements remain separate acceptance conditions.
+Provider-injected identifiers are documented in the official
+[Appwrite environment variable reference](https://appwrite.io/docs/products/sites/environment-variables).
 
 ## Consequences and alternatives
 

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { Client, DeploymentDownloadType, Sites } from "node-appwrite";
 import { InputFile } from "node-appwrite/file";
 import { Agent, DecoratorHandler, type Dispatcher } from "undici";
+import { validateBuildObservation } from "../../apps/web/src/lib/appwrite-runtime.cjs";
 import { collectGitHubEvidence, validateGitHubEvidence } from "./github-checks.ts";
 import { configurationSha256, createQualificationVerifier } from "./qualification.ts";
 import {
@@ -200,7 +201,11 @@ function validateDeployment(deployment: DeploymentRecord, siteId: string, deploy
   )
     reject("deployment_identity_mismatch");
 }
-export function verifyOutputArchive(archive: Buffer, source: SourceArtifact): OutputIdentity {
+export function verifyOutputArchive(
+  archive: Buffer,
+  source: SourceArtifact,
+  provider?: { siteId: string; deploymentId: string },
+): OutputIdentity {
   const entries = readTarGzip(archive, {
     archiveBytes: RELEASE_LIMITS.outputArchiveBytes,
     totalBytes: RELEASE_LIMITS.outputBytes,
@@ -306,6 +311,25 @@ export function verifyOutputArchive(archive: Buffer, source: SourceArtifact): Ou
       )
     )
       reject("output_unexpected_file");
+  const buildObservation = files.get("build-runtime-observation.json");
+  if (buildObservation?.type !== "file" || buildObservation.data.length > 64 * 1024)
+    reject("output_build_observation_missing");
+  try {
+    const report = JSON.parse(buildObservation.data.toString("utf8"));
+    validateBuildObservation(report, {
+      revision: source.revision,
+      tree: source.tree,
+      sourceManifestSha256: source.manifestSha256,
+    });
+    if (
+      provider &&
+      (report.provider?.siteId !== provider.siteId ||
+        report.provider?.deploymentId !== provider.deploymentId)
+    )
+      reject("output_build_provider_mismatch");
+  } catch {
+    reject("output_build_observation_invalid");
+  }
   const launcher = files.get("start-site.cjs");
   const expectedLauncher = source.files.find(
     (file) => file.path === "scripts/appwrite/start-site.cjs",
@@ -505,7 +529,11 @@ async function runSite(
     if (remoteSource.length !== webUpload.length || sha256(remoteSource) !== sha256(webUpload))
       reject("uploaded_source_identity_mismatch");
     deadline();
-    return verifyOutputArchive(await selectedPort.download(siteId, deploymentId, "output"), source);
+    return verifyOutputArchive(
+      await selectedPort.download(siteId, deploymentId, "output"),
+      source,
+      { siteId, deploymentId },
+    );
   }
   async function observeStaging(context: QualificationContext) {
     if (config.target !== "production") return;

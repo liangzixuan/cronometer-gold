@@ -625,9 +625,9 @@ for (const securityJob of ["production dependency advisories", "object-store vul
   }
 }
 
-const STAGING_POLICY_START = Date.parse("2026-10-22T00:37:43Z");
-const STAGING_POLICY_NOW = Date.parse("2026-10-22T12:00:00Z");
-const STAGING_POLICY_END = Date.parse("2026-10-23T18:37:37Z");
+const STAGING_POLICY_START = Date.parse("2026-10-27T17:23:18Z");
+const STAGING_POLICY_NOW = Date.parse("2026-10-28T12:00:00Z");
+const STAGING_POLICY_END = Date.parse("2026-10-29T17:23:18Z");
 const STAGING_FAILURE_CASES = [
   [
     "ci.yml",
@@ -666,7 +666,7 @@ function failedDependency(
   step.conclusion = "failure";
   return { record, job, step };
 }
-for (const entry of STAGING_FAILURE_CASES) {
+for (const entry of STAGING_FAILURE_CASES.slice(0, 2)) {
   test(`approved staging retains actual failed dependency results: ${entry[1]}`, () => {
     const data = evidence();
     const { record } = failedDependency(data, entry);
@@ -688,55 +688,40 @@ for (const entry of STAGING_FAILURE_CASES) {
   });
 }
 
-test("the approved staging exception accepts all four scans together without rewriting failure evidence", () => {
+test("the renewed staging scope rejects both fixture scan failures", () => {
   const data = evidence();
   for (const entry of STAGING_FAILURE_CASES) failedDependency(data, entry);
-  const before = clone(data);
-  assert.doesNotThrow(() => validateGitHubEvidence(data, context, STAGING_POLICY_NOW));
-  assert.deepEqual(data, before);
+  assert.throws(() => validateGitHubEvidence(data, context, STAGING_POLICY_NOW));
 });
 
-const DELIVERY_START = Date.parse("2026-10-24T18:15:50Z");
-const DELIVERY_END = Date.parse("2026-10-27T23:30:00Z");
-test("the approved delivery interval retains only the two failed CI scans within its boundaries", () => {
+const DELIVERY_START = STAGING_POLICY_START;
+const DELIVERY_END = STAGING_POLICY_END;
+test("the renewed interval retains only the same two failed CI scans", () => {
   const data = evidence();
-  for (const entry of [STAGING_FAILURE_CASES[0], STAGING_FAILURE_CASES[1]])
-    failedDependency(data, entry);
+  for (const entry of STAGING_FAILURE_CASES.slice(0, 2)) failedDependency(data, entry);
   const before = clone(data);
   for (const now of [DELIVERY_START, DELIVERY_END - 1])
     assert.doesNotThrow(() => validateGitHubEvidence(data, context, now));
   assert.deepEqual(data, before);
-  for (const now of [DELIVERY_START - 1, DELIVERY_END, Number.NaN, Number.POSITIVE_INFINITY])
+  for (const now of [
+    DELIVERY_START - 1,
+    DELIVERY_END,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Date.parse("2026-10-22T12:00:00Z"),
+    Date.parse("2026-10-23T23:00:00Z"),
+    Date.parse("2026-10-26T12:00:00Z"),
+  ])
     assert.throws(() => validateGitHubEvidence(data, context, now));
   assert.throws(() =>
     validateGitHubEvidence(data, { ...context, target: "production" }, DELIVERY_START),
   );
 });
-
-const HOSTED_JOURNEY_START = Date.parse("2026-10-23T22:16:12Z");
-const HOSTED_JOURNEY_END = Date.parse("2026-10-24T10:16:12Z");
-test("the separate hosted attempt retains only its two approved failed CI scans", () => {
-  const data = evidence();
-  for (const entry of [STAGING_FAILURE_CASES[0], STAGING_FAILURE_CASES[1]])
-    failedDependency(data, entry);
-  const before = clone(data);
-  for (const now of [HOSTED_JOURNEY_START, HOSTED_JOURNEY_END - 1])
-    assert.doesNotThrow(() => validateGitHubEvidence(data, context, now));
-  assert.deepEqual(data, before);
-  for (const now of [HOSTED_JOURNEY_START - 1, HOSTED_JOURNEY_END, Number.NaN])
-    assert.throws(() => validateGitHubEvidence(data, context, now));
-  const ci = data.requiredRuns.find((record) => record.workflow === "ci.yml");
-  assert.ok(ci);
-  assert.throws(() =>
-    validateJobs(ci.jobs, ci.run, "ci.yml", SHA, "production", HOSTED_JOURNEY_START),
-  );
-});
-for (const entry of [STAGING_FAILURE_CASES[2], STAGING_FAILURE_CASES[3]]) {
-  test(`the new hosted scope excludes the earlier allowance for ${entry[1]}`, () => {
+for (const entry of STAGING_FAILURE_CASES.slice(2)) {
+  test(`the renewed scope rejects ${entry[1]}`, () => {
     const data = evidence();
     failedDependency(data, entry);
-    for (const now of [HOSTED_JOURNEY_START, DELIVERY_START])
-      assert.throws(() => validateGitHubEvidence(data, context, now));
+    assert.throws(() => validateGitHubEvidence(data, context, STAGING_POLICY_NOW));
   });
 }
 
@@ -769,7 +754,7 @@ for (const mutation of [
       if (mutation === "unnamed-functional-failure")
         Object.assign(first(quality.steps), { name: undefined });
     }
-    for (const now of [STAGING_POLICY_NOW, HOSTED_JOURNEY_START, DELIVERY_START])
+    for (const now of [STAGING_POLICY_NOW, DELIVERY_START])
       assert.throws(() => validateGitHubEvidence(data, context, now));
   });
 }
@@ -815,20 +800,6 @@ test("the collector rejects approval expiry during collection using its final cl
   );
 });
 
-test("the collector rejects expiry of the separate hosted allowance on its final read", async () => {
-  const fixture = apiFixture("dependency-failure");
-  let reads = 0;
-  await assert.rejects(
-    collectGitHubEvidence({
-      ...context,
-      token: "private-token",
-      fetch: fixture.fetcher,
-      now: () => (++reads === 1 ? HOSTED_JOURNEY_START : HOSTED_JOURNEY_END),
-    }),
-  );
-  assert.ok(reads > 1);
-});
-
 test("the collector rejects delivery allowance expiry on its final read", async () => {
   const fixture = apiFixture("dependency-failure");
   let reads = 0;
@@ -856,7 +827,7 @@ test("delivery admission retains a skipped setup-node cache save after its exact
   for (const now of [DELIVERY_START, DELIVERY_END - 1])
     assert.doesNotThrow(() => validateJobs(record.jobs, record.run, "ci.yml", SHA, "staging", now));
   assert.deepEqual(data, before);
-  for (const now of [STAGING_POLICY_NOW, DELIVERY_START - 1, DELIVERY_END])
+  for (const now of [DELIVERY_START - 1, DELIVERY_END])
     assert.throws(() => validateJobs(record.jobs, record.run, "ci.yml", SHA, "staging", now));
   assert.throws(() =>
     validateJobs(record.jobs, record.run, "ci.yml", SHA, "production", DELIVERY_START),

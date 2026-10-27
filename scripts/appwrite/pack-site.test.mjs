@@ -21,7 +21,7 @@ import { validateStartup } from "./start-site.cjs";
 
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const sourceScript = fileURLToPath(new URL("./start-site.cjs", import.meta.url));
-const server = `const dependency = require('example-dependency'); console.log(JSON.stringify({dependency, port:process.env.PORT, hostname:process.env.HOSTNAME, nodeOptions:process.env.NODE_OPTIONS}));`;
+const server = `const dependency = require('example-dependency'); console.log(JSON.stringify({dependency, port:process.env.PORT, hostname:process.env.HOSTNAME, nodeOptions:process.env.NODE_OPTIONS, manifestPath:process.env.NOURISHING_OUTPUT_MANIFEST}));`;
 async function put(root, path, value, mode = 0o644) {
   const target = join(root, path);
   await mkdir(dirname(target), { recursive: true });
@@ -118,7 +118,12 @@ test("the actual startup script loads the nested standalone dependency and retai
   const { root, output } = await fixture(t);
   await packSite({ sourceRoot: root });
   const result = spawnSync(process.execPath, [join(output, "start-site.cjs")], {
-    env: { PORT: "8080", HOSTNAME: "untrusted-container-host", NODE_OPTIONS: "--no-warnings" },
+    env: {
+      PORT: "8080",
+      HOSTNAME: "untrusted-container-host",
+      NODE_OPTIONS: "--no-warnings",
+      NOURISHING_OUTPUT_MANIFEST: "/untrusted/input",
+    },
     encoding: "utf8",
     timeout: 5000,
   });
@@ -128,6 +133,7 @@ test("the actual startup script loads the nested standalone dependency and retai
     port: "8080",
     hostname: "0.0.0.0",
     nodeOptions: "--no-warnings",
+    manifestPath: join(output, "output-manifest.json"),
   });
 });
 
@@ -371,4 +377,22 @@ test("web packager accepts omitted non-web manifest rows while verifying the web
   const output = await packSite({ sourceRoot: root });
   assert.equal(output.sourceManifestSha256, digest(sourceManifest));
   assert.ok(output.files.every((entry) => !entry.path.includes("local-development")));
+});
+
+test("packages a measured build observation bound to source and output inventory", async (t) => {
+  const { root, output, source } = await fixture(t);
+  const manifest = await packSite({ sourceRoot: root });
+  const bytes = await readFile(join(output, "build-runtime-observation.json"));
+  const report = JSON.parse(bytes);
+  assert.equal(report.sourceRevision, source.revision);
+  assert.equal(report.sourceManifestSha256, manifest.sourceManifestSha256);
+  assert.equal(report.node, process.versions.node);
+  assert.equal(report.openssl, process.versions.openssl);
+  assert.equal(report.phase, "build");
+  assert.equal(report.outputTreeSha256, null);
+  assert.equal(report.qualificationPerformed, false);
+  assert.equal(
+    manifest.files.find((file) => file.path === "build-runtime-observation.json").sha256,
+    digest(bytes),
+  );
 });
