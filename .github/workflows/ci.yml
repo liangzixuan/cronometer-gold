@@ -73,6 +73,10 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Install the bounded provider output reader
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y erofs-utils=1.7.1-1build2 bubblewrap=0.9.0-1ubuntu0.3
       - name: Install locked dependencies
         run: |
           test "$(pnpm --version)" = "11.19.0"

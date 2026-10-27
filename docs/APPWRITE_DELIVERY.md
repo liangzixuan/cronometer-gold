@@ -162,3 +162,22 @@ Official references: [Next.js on Appwrite Sites](https://appwrite.io/docs/produc
 [Sites deployment lifecycle](https://appwrite.io/docs/products/sites/deployments),
 [Node SDK Sites API](https://appwrite.io/docs/references/cloud/server-nodejs/sites),
 [GitHub artifact API](https://docs.github.com/en/rest/actions/artifacts).
+
+### Provider output formats
+
+The deployment download API returns source as gzip tar and output as binary data.
+Appwrite can package SSR output as an EROFS filesystem image. The release reader
+uses Ubuntu 24.04 `erofs-utils` 1.7.1-1build2 and `bubblewrap` 0.9.0-1ubuntu0.3.
+CI installs these tools in the quality and Site release jobs. Local Linux release
+tests need the same packages and working unprivileged user namespaces.
+
+The EROFS decoder runs without sudo, network access, credentials or writable host
+paths. It writes only to a size-limited private temporary filesystem and does not
+run any downloaded code. The existing path, mode, byte, file-count, symlink,
+manifest, source, build observation and provider identity checks then apply to
+all decoded entries. The output identity retains the digest of the original
+provider image. Only an empty regular `.extracted` marker with mode 0644 is
+accepted in addition to the existing bounded `.open-runtimes` metadata.
+
+An inactive candidate that builds successfully still needs complete output,
+process runtime and preview acceptance before activation.

@@ -6,12 +6,12 @@ import { InputFile } from "node-appwrite/file";
 import { Agent, DecoratorHandler, type Dispatcher } from "undici";
 import { validateBuildObservation } from "../../apps/web/src/lib/appwrite-runtime.cjs";
 import { collectGitHubEvidence, validateGitHubEvidence } from "./github-checks.ts";
+import { readOutputArtifact } from "./output-artifact.ts";
 import { configurationSha256, createQualificationVerifier } from "./qualification.ts";
 import {
   canonical,
   createWebSourceUpload,
   parseArgs,
-  readTarGzip,
   SOURCE_LIMITS,
   type SourceArtifact,
   safePath,
@@ -206,7 +206,7 @@ export function verifyOutputArchive(
   source: SourceArtifact,
   provider?: { siteId: string; deploymentId: string },
 ): OutputIdentity {
-  const entries = readTarGzip(archive, {
+  const entries = readOutputArtifact(archive, {
     archiveBytes: RELEASE_LIMITS.outputArchiveBytes,
     totalBytes: RELEASE_LIMITS.outputBytes,
     files: RELEASE_LIMITS.outputFiles,
@@ -304,10 +304,14 @@ export function verifyOutputArchive(
     if (
       !expected.has(path) &&
       !(
-        path === ".open-runtimes" &&
-        files.get(path)?.type === "file" &&
-        [0o644, 0o755].includes(files.get(path)?.mode ?? -1) &&
-        (files.get(path)?.data.length ?? Infinity) <= 4096
+        (path === ".open-runtimes" &&
+          files.get(path)?.type === "file" &&
+          [0o644, 0o755].includes(files.get(path)?.mode ?? -1) &&
+          (files.get(path)?.data.length ?? Infinity) <= 4096) ||
+        (path === ".extracted" &&
+          files.get(path)?.type === "file" &&
+          files.get(path)?.mode === 0o644 &&
+          files.get(path)?.data.length === 0)
       )
     )
       reject("output_unexpected_file");

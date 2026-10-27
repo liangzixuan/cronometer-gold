@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
@@ -1113,4 +1124,106 @@ test("downloaded output must name the actual Site and deployment being consumed"
     { siteId: "staging-site", deploymentId: "other-deploy" },
   ])
     assert.throws(() => verifyOutputArchive(f.output, f.source, provider));
+});
+
+function erofsOutput(output: Buffer) {
+  const directory = mkdtempSync(join(tmpdir(), "appwrite-erofs-test-"));
+  try {
+    const tree = join(directory, "tree");
+    mkdirSync(tree);
+    for (const entry of readTarGzip(output)) {
+      const path = join(tree, entry.path);
+      mkdirSync(dirname(path), { recursive: true });
+      if (entry.type === "directory") mkdirSync(path, { recursive: true });
+      else if (entry.type === "symlink") symlinkSync(entry.target as string, path);
+      else {
+        writeFileSync(path, entry.data, { mode: entry.mode });
+        chmodSync(path, entry.mode);
+      }
+    }
+    const image = join(directory, "output.erofs");
+    execFileSync("/usr/bin/mkfs.erofs", ["-T", "0", image, tree], { stdio: "pipe" });
+    return readFileSync(image);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+test("EROFS provider output passes the same source and file identity checks", () => {
+  const value = fixture();
+  const image = erofsOutput(value.output);
+  const identity = verifyOutputArchive(image, value.source);
+  assert.equal(
+    identity.outputTreeSha256,
+    verifyOutputArchive(value.output, value.source).outputTreeSha256,
+  );
+  assert.equal(identity.outputArchiveSha256, sha256(image));
+});
+
+test("provider extraction marker must be an empty nonexecutable regular file", () => {
+  const value = fixture();
+  const entries = readTarGzip(value.output);
+  const marker: TarEntry = { path: ".extracted", mode: 0o644, type: "file", data: Buffer.alloc(0) };
+  verifyOutputArchive(erofsOutput(gzipSync(makeTar([...entries, marker]))), value.source);
+  for (const invalid of [
+    { ...marker, data: Buffer.from("unexpected") },
+    { ...marker, mode: 0o755 },
+    { ...marker, type: "symlink" as const, target: "start-site.cjs" },
+  ]) {
+    assert.throws(
+      () =>
+        verifyOutputArchive(erofsOutput(gzipSync(makeTar([...entries, invalid]))), value.source),
+      /output_unexpected_file/,
+    );
+  }
+});
+
+test("EROFS still rejects altered payloads, unknown files and escaping symlinks", () => {
+  const value = fixture();
+  const entries = readTarGzip(value.output);
+  const altered = entries.map((entry) =>
+    entry.path === "start-site.cjs" ? { ...entry, data: Buffer.from("changed") } : entry,
+  );
+  assert.throws(
+    () => verifyOutputArchive(erofsOutput(gzipSync(makeTar(altered))), value.source),
+    /output_file_mismatch/,
+  );
+  assert.throws(
+    () =>
+      verifyOutputArchive(
+        erofsOutput(
+          gzipSync(
+            makeTar([
+              ...entries,
+              { path: "unknown", mode: 0o644, type: "file", data: Buffer.alloc(0) },
+            ]),
+          ),
+        ),
+        value.source,
+      ),
+    /output_unexpected_file/,
+  );
+  const escapingLink: TarEntry = {
+    path: "payload/escape",
+    mode: 0o777,
+    type: "symlink",
+    target: "/etc/passwd",
+    data: Buffer.alloc(0),
+  };
+  assert.throws(
+    () =>
+      verifyOutputArchive(
+        erofsOutput(outputArchive(value.source, [...value.outputEntries, escapingLink])),
+        value.source,
+      ),
+    /output_symlink_mismatch/,
+  );
+});
+
+test("malformed EROFS and compressed input byte limits fail closed", () => {
+  const value = fixture();
+  const image = erofsOutput(value.output);
+  assert.throws(() => verifyOutputArchive(image.subarray(0, 2048), value.source));
+  const large = Buffer.alloc(RELEASE_LIMITS.outputArchiveBytes + 1);
+  assert.throws(() => verifyOutputArchive(large, value.source), /archive_size_limit/);
 });
