@@ -14,10 +14,10 @@
   "localOnly": "127.0.0.1,3287,0",
   "localBinary": {
     "url": "https://local-downloads.browserstack.com/BrowserStackLocal-linux-arm64.zip",
-    "archiveSha256": "a2a70ca9eeac87af7a4275d7af1c350539ba04bffe9caca5dd475c5c74a0908e",
-    "binarySha256": "fc5a704b385bd261ebc96720496c3c0cfac6bd29eae910f0552c147b2e480c7e",
-    "archiveBytes": 15235295,
-    "binaryBytes": 47524519,
+    "archiveSha256": "e485c7716d573a4c58d43daac5f80a06b602665337ce37146f9563046cdc0aa2",
+    "binarySha256": "e8e19913355eb362816960c6ec1e85d3b5db2c4e453a89c4ca87040c8e0b7eaa",
+    "archiveBytes": 15237464,
+    "binaryBytes": 47527394,
     "version": "8.9",
     "architecture": "arm64"
   },
