@@ -168,8 +168,15 @@ Official references: [Next.js on Appwrite Sites](https://appwrite.io/docs/produc
 The deployment download API returns source as gzip tar and output as binary data.
 Appwrite can package SSR output as an EROFS filesystem image. The release reader
 uses Ubuntu 24.04 `erofs-utils` 1.7.1-1build2 and `bubblewrap` 0.9.0-1ubuntu0.3.
-CI installs these tools in the quality and Site release jobs. Local Linux release
-tests need the same packages and working unprivileged user namespaces.
+CI installs these tools in the quality and Site release jobs. On Ubuntu 24.04,
+`.github/scripts/setup-appwrite-output-reader.sh` also installs the exact official
+`apparmor-profiles` package and verifies its Bubblewrap profile digest before
+loading that single profile on the ephemeral runner. The packaged profile allows
+Bubblewrap to create its sandbox and denies capabilities in its child processes.
+The system-wide user-namespace restriction remains enabled. A bounded native
+sandbox preflight fails with its diagnostic before tests or provider requests.
+Local Linux release tests need the reader packages and working unprivileged user
+namespaces; the CI setup script does not run on the application host.
 
 The EROFS decoder runs without sudo, network access, credentials or writable host
 paths. It writes only to a size-limited private temporary filesystem and does not
