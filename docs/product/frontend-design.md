@@ -207,6 +207,12 @@ even before the replacement renders; returning to the earlier day does not reviv
 it. Duplicate confirmations and callbacks from a closed page do nothing. Only a
 fresh explicit Add can submit after the current day is confirmed.
 
+If the profile read during timezone review confirms that the session expired,
+ask the person to sign in. Keep the public results and the selected day, meal
+and exact quantity. Do not parse the signed-out response or repeat the add.
+Profile responses from an older destination or closed page must not change the
+current timezone, diary groups or sign-in state.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

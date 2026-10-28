@@ -1659,3 +1659,135 @@ describe("Food diary-day review callback ownership", () => {
     expect(pendingPosts(fetcher)).toHaveLength(1);
   });
 });
+
+describe("Food timezone profile recovery follows the current session", () => {
+  async function pendingProfile() {
+    const profile = deferred<Response>();
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return ++authReads === 1 ? session() : profile.promise;
+      if (init?.method === "POST") {
+        return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    return { profile, fetcher };
+  }
+
+  it.each(["search", "barcode"])(
+    "keeps the %s draft and requests sign-in when timezone recovery returns401",
+    async (instance) => {
+      const { profile, fetcher } = await pendingProfile();
+      await change("food-barcode", "012345678905");
+      const form = elements().find((node) => node.props.className === "barcodeForm");
+      if (!form) throw new Error("Missing barcode form");
+      invoke(form, "onSubmit", { preventDefault: vi.fn() });
+      await hooks.settle();
+      await change("quick-add-date", "2026-09-22");
+      await change("quick-add-meal", "snacks");
+      await change("quick-add-search-202-amount", "2.500000");
+      const controls = elements().find(
+        (node) =>
+          node.type === "fieldset" &&
+          elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+      );
+      const add = controls && elements(controls).find((node) => node.type === "button");
+      if (!add) throw new Error("Missing Add");
+      invoke(add);
+      await hooks.settle();
+      expect(authCount(fetcher)).toBe(2);
+      const json = vi.fn(() => {
+        throw new Error("401 body must not be parsed");
+      });
+      profile.resolve({ ok: false, status: 401, json } as unknown as Response);
+      await hooks.settle();
+      expect(text()).toContain("Sign in to choose a quantity and add it to your diary.");
+      expect(text()).not.toContain("refresh this page");
+      expect(json).not.toHaveBeenCalled();
+      expect(field("quick-add-date").props.value).toBe("2026-09-22");
+      expect(field("quick-add-meal").props.value).toBe("snacks");
+      for (const source of ["search", "barcode"]) {
+        expect(field(`quick-add-${source}-202-amount`).props.value).toBe("2.500000");
+      }
+      expect(button("Search").props.disabled).toBe(false);
+      expect(button("Look up").props.disabled).toBe(false);
+      invoke(add);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(authCount(fetcher)).toBe(2);
+      expect(operationId).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not apply profile JSON retained across a replacement diary route", async () => {
+    const { profile, fetcher } = await pendingProfile();
+    const body = deferred<unknown>();
+    const json = vi.fn(() => body.promise);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    profile.resolve({ ok: true, status: 200, json } as unknown as Response);
+    await hooks.settle();
+    expect(json).toHaveBeenCalledOnce();
+    route.query = "date=2026-09-25&meal=lunch";
+    hooks.render();
+    await hooks.settle();
+    body.resolve(await session("Pacific/Honolulu").json());
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+    expect(button("Confirm 2026-09-25 as local day").props.disabled).toBe(true);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+
+  it.each([
+    ["route", 200],
+    ["route", 401],
+    ["unmount", 200],
+    ["unmount", 401],
+  ] as const)("ignores profile headers after %s for status %s", async (retirement, status) => {
+    const { profile, fetcher } = await pendingProfile();
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const json = vi.fn(() => session("Pacific/Honolulu").json());
+    if (retirement === "route") {
+      route.query = "date=2026-09-25&meal=lunch";
+      hooks.renderWithoutEffects();
+    } else {
+      hooks.unmount();
+    }
+    const writes = hooks.afterClose();
+    profile.resolve({ ok: status === 200, status, json } as unknown as Response);
+    await hooks.settle();
+    expect(json).not.toHaveBeenCalled();
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(authCount(fetcher)).toBe(2);
+    if (retirement === "route") {
+      expect(text()).not.toContain("Sign in to choose a quantity");
+      expect(button("Confirm 2026-09-25 as local day").props.disabled).toBe(true);
+    } else {
+      expect(hooks.afterClose()).toBe(writes);
+    }
+  });
+
+  it("ignores parsed profile settings after the page closes", async () => {
+    const { profile, fetcher } = await pendingProfile();
+    const body = deferred<unknown>();
+    const json = vi.fn(() => body.promise);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    profile.resolve({ ok: true, status: 200, json } as unknown as Response);
+    await hooks.settle();
+    expect(json).toHaveBeenCalledOnce();
+    hooks.unmount();
+    const writes = hooks.afterClose();
+    body.resolve(await session("Pacific/Honolulu").json());
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(writes);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(authCount(fetcher)).toBe(2);
+  });
+});

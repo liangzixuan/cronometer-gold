@@ -591,19 +591,31 @@ export function FoodSearchClient() {
     }
   }
 
-  async function refreshDiaryProfileAfterTimeZoneChange(): Promise<string | null> {
+  async function refreshDiaryProfileAfterTimeZoneChange(
+    currentAdd: () => boolean,
+  ): Promise<string | null> {
+    if (!currentAdd()) return null;
     profileRefreshController.current?.abort();
     const controller = new AbortController();
     profileRefreshController.current = controller;
+    const currentProfile = () =>
+      !controller.signal.aborted && profileRefreshController.current === controller && currentAdd();
     try {
       const response = await fetch("/api/auth/me", {
         headers: { accept: "application/json" },
         cache: "no-store",
         signal: controller.signal,
       });
+      if (!currentProfile()) return null;
+      if (response.status === 401) {
+        sessionStateRef.current = "unauthenticated";
+        setSessionState("unauthenticated");
+        setTimeZone(null);
+        return null;
+      }
       if (!response.ok) return null;
       const session = parseSession(await responseJson(response));
-      if (controller.signal.aborted) return null;
+      if (!currentProfile()) return null;
       dayReviewGeneration.current += 1;
       setTimeZone(session.profile.timeZone);
       setDiaryGroups(session.profile.diaryGroups);
@@ -727,7 +739,7 @@ export function FoodSearchClient() {
           dayReviewGeneration.current += 1;
           setDateReviewRequired(true);
           setTimeZone(null);
-          const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange();
+          const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange(currentAdd);
           if (!currentAdd()) return;
           setAddState("error");
           setAddMessage(quickAddTimeZoneReviewMessage(diaryDate, currentTimeZone));
