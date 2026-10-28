@@ -201,7 +201,11 @@ Session retry ignores duplicate clicks, stale responses and closed pages. Once
 initial discovery succeeds, changing the destination updates it locally without
 reopening session recovery. Recovery never repeats an add or changes an
 unconfirmed add's exact retry. Existing timezone conflicts still require an
-explicit review of the local diary day.
+explicit review of the local diary day. That confirmation belongs to the displayed
+day and recovered time zone. Changing the day or route retires the old control,
+even before the replacement renders; returning to the earlier day does not revive
+it. Duplicate confirmations and callbacks from a closed page do nothing. Only a
+fresh explicit Add can submit after the current day is confirmed.
 
 ## Responsive layout
 

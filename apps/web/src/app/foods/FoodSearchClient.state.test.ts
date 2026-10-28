@@ -1534,3 +1534,128 @@ describe("food Add response matches the submitted operation", () => {
     },
   );
 });
+
+describe("Food diary-day review callback ownership", () => {
+  async function requireDayReview() {
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session(++authReads === 1 ? "America/Chicago" : "UTC");
+      if (init?.method === "POST") {
+        if (authReads === 1) {
+          return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+        }
+        const date = new URL(url, "https://fixture.invalid").searchParams.get("date");
+        const response = await savedMutation(init, date ?? "2026-09-24").json();
+        response.data.entry.timeZone = "UTC";
+        response.data.entry.localTime = new Date(response.data.entry.occurredAt)
+          .toISOString()
+          .slice(11, 19);
+        return Response.json(response);
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(text()).toContain("This food was not added");
+    return { fetcher, review: button("Confirm 2026-09-24 as local day") };
+  }
+
+  it("keeps a changed diary day locked when a retained previous-day confirmation fires", async () => {
+    const { fetcher, review } = await requireDayReview();
+    await change("quick-add-date", "2026-09-25");
+    invoke(review);
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+    expect(button("Confirm 2026-09-25 as local day").props.disabled).toBe(false);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(text()).not.toContain("2026-09-24 is confirmed");
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+
+  it("retires the previous day synchronously before the changed input renders", async () => {
+    const { review, fetcher } = await requireDayReview();
+    invoke(field("quick-add-date"), "onChange", { target: { value: "2026-09-25" } });
+    invoke(review);
+    await hooks.settle();
+    expect(button("Confirm 2026-09-25 as local day").props.disabled).toBe(false);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+
+  it("does not revive an older confirmation after a destination date round trip", async () => {
+    const { review, fetcher } = await requireDayReview();
+    await change("quick-add-date", "2026-09-25");
+    await change("quick-add-date", "2026-09-24");
+    invoke(review);
+    await hooks.settle();
+    expect(button("Confirm 2026-09-24 as local day").props.disabled).toBe(false);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+
+  it("ignores a confirmation retained before a replacement-route render and its effects", async () => {
+    const { review, fetcher } = await requireDayReview();
+    route.query = "date=2026-09-25&meal=lunch";
+    hooks.renderWithoutEffects();
+    invoke(review);
+    hooks.render();
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+    expect(button("Confirm 2026-09-25 as local day").props.disabled).toBe(false);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+
+  it("allows current review when replacement route parameters keep the selected destination", async () => {
+    const { review, fetcher } = await requireDayReview();
+    route.query = "date=2026-09-24";
+    hooks.render();
+    await hooks.settle();
+    invoke(review);
+    await hooks.settle();
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    invoke(button("Confirm 2026-09-24 as local day"));
+    await hooks.settle();
+    expect(text()).toContain("2026-09-24 is confirmed as a local diary day in UTC");
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(false);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+
+  it("allows only the current reviewed day and one explicit fresh add after confirmation", async () => {
+    const { review, fetcher } = await requireDayReview();
+    await change("quick-add-date", "2026-09-25");
+    invoke(review);
+    await hooks.settle();
+    const current = button("Confirm 2026-09-25 as local day");
+    invoke(current);
+    invoke(current);
+    await hooks.settle();
+    expect(text()).toContain("2026-09-25 is confirmed as a local diary day in UTC");
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(false);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    invoke(current);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[0]).toContain("date=2026-09-25");
+    expect(posts[1]?.[1]?.headers).toMatchObject({ "x-expected-profile-time-zone": "UTC" });
+    expect(posts[1]?.[1]?.headers).not.toEqual(posts[0]?.[1]?.headers);
+    expect(text()).toContain("was added to Dinner on 2026-09-25");
+    expect(operationId).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores retained diary-day confirmation after unmount", async () => {
+    const { review, fetcher } = await requireDayReview();
+    hooks.unmount();
+    invoke(review);
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+});

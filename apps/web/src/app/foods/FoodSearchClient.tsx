@@ -231,6 +231,8 @@ export function FoodSearchClient() {
   const pendingAdds = useRef(new Map<string, QuickAddOperation>());
   const activeAddOperation = useRef<string | null>(null);
   const [dateReviewRequired, setDateReviewRequired] = useState(false);
+  const dayReviewGeneration = useRef(0);
+  const renderedDayReviewGeneration = dayReviewGeneration.current;
   const [query, setQuery] = useState("");
   const [intent, setIntent] = useState<FoodSearchIntent>("all");
   const [suggestions, setSuggestions] = useState<readonly FoodAutocompleteSuggestion[]>([]);
@@ -602,6 +604,7 @@ export function FoodSearchClient() {
       if (!response.ok) return null;
       const session = parseSession(await responseJson(response));
       if (controller.signal.aborted) return null;
+      dayReviewGeneration.current += 1;
       setTimeZone(session.profile.timeZone);
       setDiaryGroups(session.profile.diaryGroups);
       return session.profile.timeZone;
@@ -721,6 +724,7 @@ export function FoodSearchClient() {
       if (!currentAdd()) return;
       if (!response.ok) {
         if (fenceQuickAddForTimeZoneChange(pendingAdds.current, operation, response.status, body)) {
+          dayReviewGeneration.current += 1;
           setDateReviewRequired(true);
           setTimeZone(null);
           const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange();
@@ -776,6 +780,17 @@ export function FoodSearchClient() {
   }
 
   function confirmDiaryDateReview() {
+    if (
+      !mounted.current ||
+      sessionStateRef.current !== "ready" ||
+      activeAddOperation.current !== null ||
+      sessionRoute.current.revision !== sessionRouteRevision ||
+      appliedSessionRoute.current !== sessionRouteRevision ||
+      dayReviewGeneration.current !== renderedDayReviewGeneration ||
+      !dateReviewRequired
+    ) {
+      return;
+    }
     if (!timeZone) {
       setAddState("error");
       setAddMessage(
@@ -783,6 +798,7 @@ export function FoodSearchClient() {
       );
       return;
     }
+    dayReviewGeneration.current += 1;
     setDateReviewRequired(false);
     setAddState("idle");
     setAddMessage(
@@ -973,6 +989,7 @@ export function FoodSearchClient() {
               onChange={(event) => {
                 if (isLocalDate(event.target.value)) {
                   dateEdited.current = true;
+                  dayReviewGeneration.current += 1;
                   setDiaryDate(event.target.value);
                 }
               }}
