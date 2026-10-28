@@ -16,6 +16,7 @@ import {
   parseSession,
   quoteRevision,
   type SessionSummary,
+  shiftLocalDate,
 } from "../../../lib/diary";
 import { formatNutrientAmount } from "../../../lib/nutrition-display";
 import { confirmBrowserLogout } from "../../../lib/private-api";
@@ -329,6 +330,15 @@ export function CustomFoodsClient() {
         next.localDate !== previous.localDate ||
         next.localTime !== previous.localTime);
     replaceCustomLog(coordinatesChanged ? { ...next, occurrence: null } : next);
+  }
+
+  function chooseRecentCustomLogDate(offset: 0 | -1) {
+    if (!canUseCustomLogControls() || !session || !customLog) return;
+    const today = localDateInTimeZone(new Date(), session.profile.timeZone);
+    setCustomLog({
+      ...customLog,
+      localDate: offset === 0 ? today : shiftLocalDate(today, offset),
+    });
   }
 
   const renderedCustomGeneration = customGeneration.current;
@@ -2096,6 +2106,25 @@ export function CustomFoodsClient() {
                         }
                       />
                     </label>
+                  </div>
+                  <div className="entryActions">
+                    {(
+                      [
+                        ["Today", 0],
+                        ["Yesterday", -1],
+                      ] as const
+                    ).map(([label, offset]) => (
+                      <button
+                        key={label}
+                        aria-label={`Set private-food diary date to ${label.toLowerCase()}`}
+                        className="buttonQuiet"
+                        disabled={!canUseCustomLogControls()}
+                        onClick={() => chooseRecentCustomLogDate(offset)}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                   <small>
                     Uses {session?.profile.timeZone ?? "your verified profile zone"} local time.

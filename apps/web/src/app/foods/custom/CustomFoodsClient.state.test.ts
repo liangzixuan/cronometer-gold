@@ -4154,3 +4154,165 @@ describe("My foods repeated local logging minute", () => {
     },
   );
 });
+
+describe("My foods recent diary days", () => {
+  async function openLog(timeZone = "UTC") {
+    const fixture = workspace([food()]);
+    fixture.state.timeZone = timeZone;
+    await mount();
+    await click("Log pinned v1", card(food()));
+    return fixture;
+  }
+
+  it.each([
+    ["America/Los_Angeles", "2026-01-01T00:30:00Z", "2025-12-31", "2025-12-30"],
+    ["Pacific/Kiritimati", "2026-01-01T12:30:00Z", "2026-01-02", "2026-01-01"],
+    ["America/Chicago", "2026-03-09T05:30:00Z", "2026-03-09", "2026-03-08"],
+    ["UTC", "2024-03-01T12:30:00Z", "2024-03-01", "2024-02-29"],
+  ])("uses the profile calendar in %s at %s", async (zone, now, today, yesterday) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(now));
+    const { writes } = await openLog(zone);
+    await change("Local time", "13:14");
+    await change("Exact quantity", "0.500000");
+    invoke(logMealField(), "onChange", { target: { value: "lunch" } });
+    await hooks.settle();
+    await click("Set private-food diary date to today");
+    expect(field("Local date").props.value).toBe(today);
+    await click("Set private-food diary date to yesterday");
+    expect(field("Local date").props.value).toBe(yesterday);
+    expect(field("Local time").props.value).toBe("13:14");
+    expect(field("Exact quantity").props.value).toBe("0.500000");
+    expect(logMealField().props.value).toBe("lunch");
+    expect(text(logForm())).toContain("Log Saved food 1 v1");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("uses the click-time clock and logs only on explicit submission", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T23:59:00Z"));
+    const { state, writes } = await openLog();
+    await change("Local time", "13:14");
+    const today = button("Set private-food diary date to today");
+    vi.setSystemTime(new Date("2026-10-01T00:01:00Z"));
+    invoke(today, "onClick");
+    await hooks.settle();
+    expect(field("Local date").props.value).toBe("2026-10-01");
+    expect(writes()).toHaveLength(0);
+    state.write = () =>
+      Response.json({
+        data: {
+          replayed: false,
+          entry: null,
+          affectedDays: [{ localDate: "2026-10-01", revision: "1" }],
+        },
+      });
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(1);
+    const body = JSON.parse(String(writes()[0]?.[1]?.body));
+    expect(body.customFoodVersionId).toBe(food().currentVersion.id);
+    expect(body.occurredAt).toBe("2026-10-01T13:14:00.000Z");
+    expect(status()).toContain("2026-10-01");
+  });
+
+  it("preserves a no-op repeated-minute choice and clears it after a calendar change", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T17:00:00Z"));
+    const { writes } = await openLog("America/Chicago");
+    await change("Local time", "01:30");
+    await click("Later occurrence · UTC−06:00");
+    await click("Set private-food diary date to today");
+    expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+    await click("Set private-food diary date to yesterday");
+    expect(field("Local date").props.value).toBe("2026-10-31");
+    await click("Set private-food diary date to today");
+    expect(field("Local time").props.value).toBe("01:30");
+    expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
+    expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(0);
+    expect(status()).toContain("Choose Earlier or Later");
+  });
+
+  it("keeps an older request and independent editor while changing an editable logging day", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const { state, writes } = await openLog();
+    await change("Name", "  Unsaved private food  ");
+    await change("Local date", "2026-09-28");
+    await change("Local time", "13:14");
+    await change("Exact quantity", "0.500000");
+    const response = deferred<Response>();
+    state.write = () => response.promise;
+    await submit("Log exact version");
+    const original = writes()[0]?.[1];
+    await click("Set private-food diary date to yesterday");
+    expect(field("Local date").props.value).toBe("2026-09-29");
+    expect(field("Exact quantity").props.value).toBe("0.500000");
+    expect(field("Local time").props.value).toBe("13:14");
+    expect(field("Name").props.value).toBe("  Unsaved private food  ");
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]?.[1]).toEqual(original);
+    response.resolve(Response.json({ error: "Unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(field("Local date").props.value).toBe("2026-09-29");
+    await change("Local date", "2026-09-28");
+    state.write = () => Response.json({ error: "Still unavailable" }, { status: 503 });
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(original?.body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(original?.headers).get("idempotency-key"),
+    );
+    expect(field("Name").props.value).toBe("  Unsaved private food  ");
+  });
+
+  it.each(["raw-edit", "route", "hidden", "unmount"])(
+    "ignores a date control retained across %s",
+    async (retirement) => {
+      const pageVisibility = visibility();
+      const { fetcher, writes } = await openLog();
+      const today = button("Set private-food diary date to today");
+      if (retirement === "raw-edit") {
+        await change("Exact quantity", "0.500000");
+        await change("Exact quantity", "1");
+      }
+      if (retirement === "route") {
+        navigation.search = "date=2026-09-10&meal=lunch";
+        hooks.renderWithoutEffects();
+      }
+      if (retirement === "hidden") pageVisibility.document.visibilityState = "hidden";
+      if (retirement === "unmount") hooks.unmount();
+      const raw = formValues();
+      const requests = fetcher.mock.calls.length;
+      invoke(today, "onClick");
+      await hooks.settle();
+      expect(formValues()).toEqual(raw);
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      expect(writes()).toHaveLength(0);
+      expect(hooks.afterClose()).toBe(0);
+    },
+  );
+
+  it("keeps a shortcut-selected date under explicit timezone review", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const { state, writes } = await openLog();
+    await change("Local date", "2026-09-28");
+    state.write = () => {
+      state.timeZone = "America/New_York";
+      return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+    };
+    await submit("Log exact version");
+    const oldReview = button("Confirm 2026-09-28 as local day");
+    await click("Set private-food diary date to yesterday");
+    invoke(oldReview, "onClick");
+    await hooks.settle();
+    expect(field("Local date").props.value).toBe("2026-09-29");
+    expect(button("Log exact version").props.disabled).toBe(true);
+    expect(writes()).toHaveLength(1);
+    await click("Confirm 2026-09-29 as local day");
+    expect(button("Log exact version").props.disabled).toBe(false);
+    expect(writes()).toHaveLength(1);
+  });
+});

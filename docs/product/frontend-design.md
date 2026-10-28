@@ -95,6 +95,13 @@ opened log. Changing that route date does not overwrite an open logging draft.
 Owner checks, draft choices and exact retries apply on the dedicated page as they
 do elsewhere in the app. Revising a food never rewrites past diary entries.
 
+The pinned-food log offers Today and Yesterday using the verified account's
+local calendar at click time. Keep the saved version, exact portion, meal,
+entered time and independent food-editor draft. These choices follow the same
+editable-draft rules as the date field; an older pending log keeps its original
+request. A changed day clears a repeated-minute choice, while the same day keeps
+it. Logging and timezone review still require their explicit actions.
+
 ## Recipe drafts
 
 New recipe, opening a saved recipe and copying a saved version use the same
