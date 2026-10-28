@@ -189,6 +189,19 @@ retry; session recovery must never replay it or discard its retry information.
 Hydration sign-out remains available during session verification and prevents a
 late response from reopening private content.
 
+## Food diary date choices
+
+Catalogue food logging offers Today and Yesterday beside the diary destination.
+Both use the account's time zone and the current date when clicked. Yesterday is
+one calendar day earlier, including across daylight-saving and month boundaries.
+Keep the chosen meal, exact quantity and search or barcode result. The choice
+only changes the draft date; adding a food still requires an explicit Add.
+
+Keep these choices unavailable until the session and time zone are known and
+while an addition is pending. An older route or closed page cannot change the
+date. A timezone conflict still requires confirmation of the chosen local day;
+Today and Yesterday do not supply that confirmation or discard an uncertain add.
+
 ## Foods session recovery
 
 Foods keeps public search, suggestions and barcode lookup available while it

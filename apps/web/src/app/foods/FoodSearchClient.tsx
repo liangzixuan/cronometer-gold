@@ -25,6 +25,7 @@ import {
   prepareQuickAddOperation,
   type QuickAddOperation,
   quickAddMatchesRequest,
+  shiftLocalDate,
 } from "../../lib/diary";
 
 import {
@@ -791,6 +792,28 @@ export function FoodSearchClient() {
     }
   }
 
+  function canChooseRecentDiaryDate() {
+    return (
+      mounted.current &&
+      sessionStateRef.current === "ready" &&
+      timeZone !== null &&
+      activeAddOperation.current === null &&
+      sessionRoute.current.revision === sessionRouteRevision &&
+      appliedSessionRoute.current === sessionRouteRevision &&
+      dayReviewGeneration.current === renderedDayReviewGeneration
+    );
+  }
+
+  function chooseRecentDiaryDate(offset: 0 | -1) {
+    if (!canChooseRecentDiaryDate() || !timeZone) return;
+    const today = localDateInTimeZone(new Date(), timeZone);
+    const date = offset === 0 ? today : shiftLocalDate(today, offset);
+    if (date === diaryDate) return;
+    dateEdited.current = true;
+    dayReviewGeneration.current += 1;
+    setDiaryDate(date);
+  }
+
   function confirmDiaryDateReview() {
     if (
       !mounted.current ||
@@ -1026,6 +1049,25 @@ export function FoodSearchClient() {
               ))}
             </select>
           </label>
+          <div className="entryActions">
+            {(
+              [
+                ["Today", 0],
+                ["Yesterday", -1],
+              ] as const
+            ).map(([label, offset]) => (
+              <button
+                key={label}
+                aria-label={`Set diary date to ${label.toLowerCase()}`}
+                className="buttonQuiet"
+                disabled={!canChooseRecentDiaryDate()}
+                onClick={() => chooseRecentDiaryDate(offset)}
+                type="button"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <Link href="/login">Account</Link>
           {dateReviewRequired ? (
             <button

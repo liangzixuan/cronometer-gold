@@ -1791,3 +1791,164 @@ describe("Food timezone profile recovery follows the current session", () => {
     expect(authCount(fetcher)).toBe(2);
   });
 });
+
+describe("Food recent diary days", () => {
+  async function mountReady(
+    timeZone = "UTC",
+    post?: (url: string, init: RequestInit) => Promise<Response>,
+  ) {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session(timeZone);
+      if (init?.method === "POST") {
+        if (post) return post(url, init);
+        const date = new URL(url, "https://fixture.invalid").searchParams.get("date") ?? "";
+        const result = await savedMutation(init, date).json();
+        result.data.entry.timeZone = "UTC";
+        result.data.entry.localTime = new Date(result.data.entry.occurredAt)
+          .toISOString()
+          .slice(11, 19);
+        return Response.json(result);
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    return fetcher;
+  }
+
+  it.each([
+    ["America/Los_Angeles", "2026-01-01T00:30:00Z", "2025-12-31", "2025-12-30"],
+    ["Pacific/Kiritimati", "2026-01-01T12:30:00Z", "2026-01-02", "2026-01-01"],
+    ["America/Chicago", "2026-03-09T05:30:00Z", "2026-03-09", "2026-03-08"],
+    ["UTC", "2024-03-01T12:30:00Z", "2024-03-01", "2024-02-29"],
+  ])("chooses calendar days in %s at %s", async (timeZone, now, today, yesterday) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(now));
+    const fetcher = await mountReady(timeZone);
+    await change("quick-add-meal", "snacks");
+    await change("quick-add-search-202-amount", "2.500000");
+    invoke(button("Set diary date to today"));
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe(today);
+    invoke(button("Set diary date to yesterday"));
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe(yesterday);
+    expect(field("quick-add-meal").props.value).toBe("snacks");
+    expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+    expect(text()).toContain("Apple Pie");
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(operationId).not.toHaveBeenCalled();
+  });
+
+  it("reads the clock when clicked and submits only after an explicit Add", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T23:59:00Z"));
+    const fetcher = await mountReady();
+    const today = button("Set diary date to today");
+    vi.setSystemTime(new Date("2026-10-01T00:01:00Z"));
+    invoke(today);
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-10-01");
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.[0]).toContain("date=2026-10-01");
+    expect(text()).toContain("was added to Dinner on 2026-10-01");
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+
+  it.each(["loading", "signed-out", "unavailable"])(
+    "keeps date choices inactive while session is %s",
+    async (state) => {
+      const auth = deferred<Response>();
+      const fetcher = vi.fn(async (url: string) =>
+        url === "/api/auth/me" ? auth.promise : publicResponse(url),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      if (state !== "loading") {
+        auth.resolve(Response.json({}, { status: state === "signed-out" ? 401 : 503 }));
+        await hooks.settle();
+      }
+      const today = button("Set diary date to today");
+      expect(today.props.disabled).toBe(true);
+      invoke(today);
+      await hooks.settle();
+      expect(field("quick-add-date").props.value).toBe("2026-09-24");
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["route", "unmount"])(
+    "ignores a date shortcut retained before %s",
+    async (retirement) => {
+      const fetcher = await mountReady();
+      const today = button("Set diary date to today");
+      if (retirement === "route") {
+        route.query = "date=2026-09-25&meal=lunch";
+        hooks.renderWithoutEffects();
+      } else {
+        hooks.unmount();
+      }
+      invoke(today);
+      if (retirement === "route") hooks.render();
+      await hooks.settle();
+      if (retirement === "route") expect(field("quick-add-date").props.value).toBe("2026-09-25");
+      else expect(hooks.afterClose()).toBe(0);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+    },
+  );
+
+  it("ignores a retained shortcut during a pending add and enables it after failure", async () => {
+    const response = deferred<Response>();
+    const fetcher = await mountReady("UTC", () => response.promise);
+    const today = button("Set diary date to today");
+    invoke(button("Add 1 default serving of Apple Pie"));
+    invoke(today);
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-24");
+    expect(button("Set diary date to today").props.disabled).toBe(true);
+    response.resolve(Response.json({ error: "Unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Set diary date to today").props.disabled).toBe(false);
+    invoke(button("Set diary date to today"));
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    await change("quick-add-date", "2026-09-24");
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+    expect(posts[1]?.[1]?.headers).toEqual(posts[0]?.[1]?.headers);
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the new day under review after choosing Yesterday following a timezone conflict", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const fetcher = await mountReady("UTC", async () =>
+      Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 }),
+    );
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const oldReview = button("Confirm 2026-09-24 as local day");
+    invoke(button("Set diary date to yesterday"));
+    invoke(oldReview);
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-29");
+    expect(button("Confirm 2026-09-29 as local day").props.disabled).toBe(false);
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    invoke(button("Confirm 2026-09-29 as local day"));
+    await hooks.settle();
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(false);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+  });
+});
