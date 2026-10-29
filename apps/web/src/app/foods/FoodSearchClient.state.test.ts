@@ -2812,3 +2812,68 @@ describe("Closed food lookup actions", () => {
     },
   );
 });
+
+describe("Current food suggestion ownership", () => {
+  async function suggested() {
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? session() : publicResponse(url),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await change("food-query", "apple");
+    for (const callback of timers.values()) callback();
+    timers.clear();
+    await hooks.settle();
+    const suggestion = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Apple Pie"),
+    );
+    if (!suggestion) throw new Error("Missing suggestion");
+    return { fetcher, suggestion };
+  }
+  function searches(fetcher: ReturnType<typeof vi.fn>) {
+    return fetcher.mock.calls.filter(([url]) => String(url).startsWith("/api/foods/search?"));
+  }
+  it.each(["query", "intent", "restore"])("retires a suggestion after %s changes", async (kind) => {
+    const { fetcher, suggestion } = await suggested();
+    if (kind === "intent") {
+      const radio = elements().find(
+        (node) => node.props.name === "food-intent" && node.props.value === "generic",
+      );
+      if (!radio) throw new Error("Missing intent");
+      invoke(radio, "onChange");
+    } else if (kind === "restore") {
+      await change("food-query", "pear");
+      await change("food-query", "apple");
+    } else invoke(field("food-query"), "onChange", { target: { value: "pear" } });
+    invoke(suggestion);
+    await hooks.settle();
+    expect(searches(fetcher)).toHaveLength(0);
+    expect(field("food-query").props.value).toBe(kind === "query" ? "pear" : "apple");
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it.each(["selection", "manual-search"])("consumes the old suggestion after %s", async (kind) => {
+    const { fetcher, suggestion } = await suggested();
+    if (kind === "selection") invoke(suggestion);
+    else {
+      const form = elements().find(
+        (node) => node.type === "form" && node.props["aria-label"] === "Food search",
+      );
+      if (!form) throw new Error("Missing search form");
+      invoke(form, "onSubmit", { preventDefault() {} });
+    }
+    invoke(suggestion);
+    await hooks.settle();
+    expect(searches(fetcher)).toHaveLength(1);
+    expect(field("food-query").props.value).toBe(kind === "selection" ? "Apple Pie" : "apple");
+    expect(text()).toContain("Apple Pie");
+  });
+  it("keeps a current suggestion after a same-value query event", async () => {
+    const { fetcher, suggestion } = await suggested();
+    invoke(field("food-query"), "onChange", { target: { value: "apple" } });
+    invoke(suggestion);
+    await hooks.settle();
+    expect(searches(fetcher)).toHaveLength(1);
+    expect(field("food-query").props.value).toBe("Apple Pie");
+  });
+});

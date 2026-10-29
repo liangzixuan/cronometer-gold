@@ -286,6 +286,13 @@ and exact quantity. Do not parse the signed-out response or repeat the add.
 Profile responses from an older destination or closed page must not change the
 current timezone, diary groups or sign-in state.
 
+A suggestion belongs to the query and food type that produced it. Changing either
+retires that suggestion before the next view renders; restoring the query does
+not revive it. A same-value query edit keeps it usable. Choosing a suggestion or
+pressing Search consumes the old suggestions, so a retained click cannot issue
+a second search or replace newer typed text. Current selection still uses the
+full normalized food label within the query limit.
+
 Public food lookup stops when its page closes. Retained query or barcode edits,
 search submissions, suggestions, food-type choices and pagination cannot start
 another request or update the closed view. Open pages keep these public tools

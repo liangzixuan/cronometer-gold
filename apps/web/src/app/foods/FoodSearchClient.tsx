@@ -284,6 +284,7 @@ export function FoodSearchClient() {
     "Enter all digits printed beneath a UPC, EAN, or GTIN barcode.",
   );
   const autocompleteController = useRef<AbortController | null>(null);
+  const renderedAutocompleteController = autocompleteController.current;
   const searchController = useRef<AbortController | null>(null);
   const barcodeController = useRef<AbortController | null>(null);
   const profileRefreshController = useRef<AbortController | null>(null);
@@ -561,7 +562,13 @@ export function FoodSearchClient() {
   }
 
   function chooseSuggestion(suggestion: FoodAutocompleteSuggestion) {
-    if (!mounted.current) return;
+    if (
+      !mounted.current ||
+      !renderedAutocompleteController ||
+      renderedAutocompleteController.signal.aborted ||
+      autocompleteController.current !== renderedAutocompleteController
+    )
+      return;
     // Fit the input's UTF-16 limit and API query limit without splitting a character.
     let selectedQuery = "";
     for (const character of normalizeSearchText(suggestion.label)) {
@@ -576,6 +583,7 @@ export function FoodSearchClient() {
 
   function chooseIntent(nextIntent: FoodSearchIntent) {
     if (!mounted.current) return;
+    if (nextIntent !== intent) autocompleteController.current?.abort();
     searchController.current?.abort();
     setIntent(nextIntent);
     setResults([]);
@@ -1101,7 +1109,9 @@ export function FoodSearchClient() {
                 id="food-query"
                 maxLength={128}
                 onChange={(event) => {
-                  if (mounted.current) setQuery(event.target.value);
+                  if (!mounted.current || event.target.value === query) return;
+                  autocompleteController.current?.abort();
+                  setQuery(event.target.value);
                 }}
                 placeholder="Try banana, lentils, or a brand"
                 type="search"
