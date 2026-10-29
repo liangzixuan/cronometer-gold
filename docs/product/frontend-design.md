@@ -101,6 +101,11 @@ offset and IANA zone in their accessible names. Identical foods logged in a
 repeated local minute remain distinct. Each control keeps its own disclosure
 state and target; opening nutrient details requires no extra request.
 
+The outer More disclosure also names the saved portion, clock, UTC offset and
+IANA zone. Users can identify identical food entries before opening their actions.
+Keep native details/summary behavior and the existing forced-open repeat form;
+the label does not add requests or change the selected entry.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the

@@ -4686,3 +4686,94 @@ describe("Diary Repeat today actual instant", () => {
     expect(text()).toContain("Pinned entry version repeated in Breakfast for 2026-11-02.");
   });
 });
+
+describe("Diary saved-time More disclosure names", () => {
+  it.each([
+    ["2026-11-01T06:30:45.123456Z", "America/Chicago", "01:30:45 GMT-05:00"],
+    ["2026-11-01T07:30:45.123Z", "America/Chicago", "01:30:45 GMT-06:00"],
+    ["2026-11-01T12:30:45.000Z", "Asia/Tokyo", "21:30:45 GMT+09:00"],
+  ])("identifies unopened More actions by saved %s in %s", async (instant, zone, clock) => {
+    route.date = "2026-11-01";
+    const saved = recordedDiaryEntry(0, instant, zone, clock.slice(0, 8));
+    const fixture = page([saved], null, 1, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    expect(text()).toContain("Apple 0");
+    const disclosures = elements().filter(
+      (node) => node.type === "details" && node.props.className === "ledgerMore",
+    );
+    expect(disclosures).toHaveLength(1);
+    const summary = elements(disclosures[0]).find((node) => node.type === "summary");
+    expect(summary?.props["aria-label"]).toBe(
+      `More actions and details for Apple 0, 1.250000 × medium apple at ${clock} in ${zone}`,
+    );
+    expect(text(summary)).toBe("More");
+    expect(disclosures[0]?.props.open).toBeUndefined();
+    hooks.render();
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("keeps duplicate Earlier and Later disclosures attached to their own repeat destination", async () => {
+    route.date = "2026-11-01";
+    const sameName = { name: "Same food", brandName: null };
+    const early = {
+      ...recordedDiaryEntry(0, "2026-11-01T06:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: sameName,
+    };
+    const late = {
+      ...recordedDiaryEntry(1, "2026-11-01T07:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: sameName,
+    };
+    const fixture = page([early, late], null, 2, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    const disclosures = () =>
+      elements().filter((node) => node.type === "details" && node.props.className === "ledgerMore");
+    const names = () =>
+      disclosures().map(
+        (detail) => elements(detail).find((node) => node.type === "summary")?.props["aria-label"],
+      );
+    const expected = ["GMT-05:00", "GMT-06:00"].map(
+      (offset) =>
+        `More actions and details for Same food, 1.250000 × medium apple at 01:30:00 ${offset} in America/Chicago`,
+    );
+    expect(disclosures()).toHaveLength(2);
+    expect(names()).toEqual(expected);
+    const laterAction = elements(disclosures()[1]).find(
+      (node) =>
+        node.type === "button" &&
+        node.props["aria-label"] === "Repeat Same food to another day or meal",
+    );
+    expect(laterAction).toBeDefined();
+    if (!laterAction) throw new Error("Missing Later repeat action");
+    invoke(laterAction);
+    await hooks.settle();
+    expect(disclosures().map((node) => node.props.open)).toEqual([undefined, true]);
+    expect(names()).toEqual(expected);
+    expect(
+      elements(disclosures()[0]).some(
+        (node) =>
+          node.type === "section" &&
+          node.props["aria-label"] === "Repeat destination for Same food",
+      ),
+    ).toBe(false);
+    expect(
+      elements(disclosures()[1]).some(
+        (node) =>
+          node.type === "section" &&
+          node.props["aria-label"] === "Repeat destination for Same food",
+      ),
+    ).toBe(true);
+    await click("Cancel repeat destination");
+    expect(disclosures().map((node) => node.props.open)).toEqual([undefined, undefined]);
+    expect(names()).toEqual(expected);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+});

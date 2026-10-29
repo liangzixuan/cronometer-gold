@@ -2386,7 +2386,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                         }
                                       >
                                         <summary
-                                          aria-label={`More actions and details for ${entryName(entry)}`}
+                                          aria-label={`More actions and details for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entryRecordedTime(entry)} in ${entry.timeZone}`}
                                         >
                                           <Icon name="more" />
                                           <span>More</span>
