@@ -2633,7 +2633,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                           ) : null}
                                           {canInspectEntryNutrients(entry) ? (
                                             <section
-                                              aria-label={`Logged nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                                              aria-label={`Logged nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entryRecordedTime(entry)} in ${entry.timeZone}`}
                                               style={{
                                                 minWidth: 0,
                                                 paddingBottom: 16,
@@ -2642,7 +2642,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                             >
                                               <div className="entryActions">
                                                 <button
-                                                  aria-label={`${entryNutrientChoices.get(entry)?.open ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                                                  aria-label={`${entryNutrientChoices.get(entry)?.open ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entryRecordedTime(entry)} in ${entry.timeZone}`}
                                                   aria-expanded={
                                                     entryNutrientChoices.get(entry)?.open ?? false
                                                   }

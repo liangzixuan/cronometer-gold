@@ -1141,6 +1141,7 @@ describe("logged portion nutrient details", () => {
     const second = {
       ...entry(1, "lunch"),
       food: sameName,
+      occurredAt: "2026-08-15T14:45:00.000Z",
       localTime: "09:45:00",
       nutrients: [
         { ...nutrient, name: "First recorded value" },
@@ -4492,6 +4493,101 @@ describe("Diary saved clock precision", () => {
     expect(recordedDiaryTimes().map(text)).toEqual(["01:30:00 GMT-05:00", "01:30:00 GMT-06:00"]);
     hooks.render();
     await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+});
+
+describe("Diary saved-time nutrient control names", () => {
+  it.each([
+    ["2026-11-01T06:30:45.123456Z", "America/Chicago", "01:30:45 GMT-05:00"],
+    ["2026-11-01T07:30:45.123Z", "America/Chicago", "01:30:45 GMT-06:00"],
+    ["2026-11-01T12:30:45.000Z", "Asia/Tokyo", "21:30:45 GMT+09:00"],
+  ])("names the nutrient control and section with saved %s in %s", async (instant, zone, clock) => {
+    route.date = "2026-11-01";
+    const saved = recordedDiaryEntry(0, instant, zone, clock.slice(0, 8));
+    const fixture = page([saved], null, 1, "2026-11-01");
+    const parsed = parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    const context = `Apple 0, 1.250000 × medium apple at ${clock} in ${zone}`;
+    expect(text()).toContain("Apple 0");
+    expect(nutrientControl(0).props["aria-label"]).toBe(`Show nutrients for ${context}`);
+    expect(nutrientControl(0).props["aria-controls"]).toBe(`entry-nutrients-${saved.id}`);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+    expect(
+      elements().filter(
+        (node) =>
+          node.type === "section" && node.props["aria-label"] === `Logged nutrients for ${context}`,
+      ),
+    ).toHaveLength(1);
+    await toggleNutrients(0);
+    expect(nutrientControl(0).props["aria-label"]).toBe(`Hide nutrients for ${context}`);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(nutrientControl(0).props["aria-controls"]).toBe(nutrientDetail(0)?.props.id);
+    expect(
+      elements().filter(
+        (node) =>
+          node.type === "section" && node.props["aria-label"] === `Logged nutrients for ${context}`,
+      ),
+    ).toHaveLength(1);
+    expect(detailsRows(0)).toEqual(
+      parsed.data.entries[0]?.nutrients.flatMap((row) => {
+        const display = nutrientDisplay(row);
+        return [`${row.name} (${row.unit})`, `${display.amount}${display.qualification}`];
+      }),
+    );
+    await toggleNutrients(0);
+    expect(nutrientControl(0).props["aria-label"]).toBe(`Show nutrients for ${context}`);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("distinguishes duplicate nutrient controls for Earlier and Later without linking their state", async () => {
+    route.date = "2026-11-01";
+    const sameName = { name: "Same food", brandName: null };
+    const early = {
+      ...recordedDiaryEntry(0, "2026-11-01T06:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: sameName,
+    };
+    const late = {
+      ...recordedDiaryEntry(1, "2026-11-01T07:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: sameName,
+    };
+    const fixture = page([early, late], null, 2, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    const contexts = ["GMT-05:00", "GMT-06:00"].map(
+      (offset) => `Same food, 1.250000 × medium apple at 01:30:00 ${offset} in America/Chicago`,
+    );
+    expect(text(group("breakfast"))).toContain("Same food");
+    expect([0, 1].map((number) => nutrientControl(number).props["aria-label"])).toEqual(
+      contexts.map((context) => `Show nutrients for ${context}`),
+    );
+    for (const context of contexts) {
+      expect(
+        elements().filter(
+          (node) =>
+            node.type === "section" &&
+            node.props["aria-label"] === `Logged nutrients for ${context}`,
+        ),
+      ).toHaveLength(1);
+    }
+    await toggleNutrients(0);
+    expect(nutrientControl(0).props["aria-label"]).toBe(`Hide nutrients for ${contexts[0]}`);
+    expect(nutrientControl(1).props["aria-label"]).toBe(`Show nutrients for ${contexts[1]}`);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(nutrientControl(1).props["aria-expanded"]).toBe(false);
+    expect(nutrientControl(0).props["aria-controls"]).toBe(`entry-nutrients-${early.id}`);
+    expect(nutrientControl(1).props["aria-controls"]).toBe(`entry-nutrients-${late.id}`);
+    await toggleNutrients(1);
+    await toggleNutrients(0);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+    expect(nutrientControl(1).props["aria-expanded"]).toBe(true);
     expect(fetch.mock.calls).toHaveLength(requests);
     expect(JSON.stringify(fixture)).toBe(original);
   });

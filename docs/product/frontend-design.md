@@ -89,6 +89,11 @@ at the same local minute remain distinct; the current account or browser zone
 does not replace their saved context. This display does not change entries,
 ordering, totals or editing.
 
+Nutrient Show/Hide controls and their sections use the same saved clock, UTC
+offset and IANA zone in their accessible names. Identical foods logged in a
+repeated local minute remain distinct. Each control keeps its own disclosure
+state and target; opening nutrient details requires no extra request.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the
