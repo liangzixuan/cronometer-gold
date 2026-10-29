@@ -402,6 +402,7 @@ export function FoodSearchClient() {
       setDiaryGroups(session.profile.diaryGroups);
       const now = new Date();
       if (!(requestedDate && isLocalDate(requestedDate)) && !dateEdited.current) {
+        dayReviewGeneration.current += 1;
         setDiaryDate(localDateInTimeZone(now, session.profile.timeZone));
       }
       if (!mealSlots.some((meal) => meal === requestedMeal) && !mealEdited.current) {
@@ -843,6 +844,22 @@ export function FoodSearchClient() {
     }
   }
 
+  function changeDiaryDate(value: string) {
+    if (
+      !mounted.current ||
+      sessionRoute.current.revision !== sessionRouteRevision ||
+      appliedSessionRoute.current !== sessionRouteRevision ||
+      dayReviewGeneration.current !== renderedDayReviewGeneration ||
+      !isLocalDate(value) ||
+      value === diaryDate
+    )
+      return;
+    dateEdited.current = true;
+    dayReviewGeneration.current += 1;
+    setDiaryDate(value);
+    setSelectedOccurredAt(null);
+  }
+
   function changeDiaryMeal(value: MealSlot) {
     if (
       !mounted.current ||
@@ -1148,14 +1165,7 @@ export function FoodSearchClient() {
             Local day
             <input
               id="quick-add-date"
-              onChange={(event) => {
-                if (isLocalDate(event.target.value) && event.target.value !== diaryDate) {
-                  dateEdited.current = true;
-                  dayReviewGeneration.current += 1;
-                  setDiaryDate(event.target.value);
-                  setSelectedOccurredAt(null);
-                }
-              }}
+              onChange={(event) => changeDiaryDate(event.target.value)}
               type="date"
               value={diaryDate}
             />

@@ -216,6 +216,12 @@ while an addition is pending. An older route or closed page cannot change the
 date. A timezone conflict still requires confirmation of the chosen local day;
 Today and Yesterday do not supply that confirmation or discard an uncertain add.
 
+The manual date field keeps its draft editable during session loading and an
+earlier pending addition. It accepts a valid new day only from the current view;
+an older input cannot replace newer edits, even after the date is restored.
+A no-op keeps Add available. A genuine day change clears a selected repeated
+minute. The pending addition keeps its original day and exact retry request.
+
 ## Catalogue food meals
 
 Add uses the selected meal. A changed meal retires older Add and meal controls

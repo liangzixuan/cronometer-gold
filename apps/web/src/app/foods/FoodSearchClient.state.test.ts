@@ -2628,3 +2628,130 @@ describe("Current food meal draft actions", () => {
     });
   });
 });
+
+describe("Current food manual date actions", () => {
+  async function ready() {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST") return Response.json({}, { status: 503 });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    return fetcher;
+  }
+  it("retires the old date input before a newer day renders", async () => {
+    await ready();
+    const old = field("quick-add-date");
+    invoke(old, "onChange", { target: { value: "2026-09-25" } });
+    invoke(old, "onChange", { target: { value: "2026-09-26" } });
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+  });
+  it("does not revive a date input after editing and restoring its day", async () => {
+    await ready();
+    const old = field("quick-add-date");
+    await change("quick-add-date", "2026-09-25");
+    await change("quick-add-date", "2026-09-24");
+    invoke(old, "onChange", { target: { value: "2026-09-26" } });
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-24");
+  });
+  it("rejects a date input retained from a previous route", async () => {
+    await ready();
+    const old = field("quick-add-date");
+    route.query = "date=2026-09-25&meal=lunch";
+    hooks.render();
+    await hooks.settle();
+    invoke(old, "onChange", { target: { value: "2026-09-26" } });
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+  });
+  it("does not write date state after the page closes", async () => {
+    const fetcher = await ready();
+    const old = field("quick-add-date");
+    hooks.unmount();
+    invoke(old, "onChange", { target: { value: "2026-09-25" } });
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it("keeps a same-value date event and the current Add usable", async () => {
+    const fetcher = await ready();
+    const add = button("Add 1 default serving of Apple Pie");
+    invoke(field("quick-add-date"), "onChange", { target: { value: "2026-09-24" } });
+    invoke(add);
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+  it("keeps the day selected while the initial profile loads", async () => {
+    route.query = "meal=dinner";
+    const auth = deferred<Response>();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => (url === "/api/auth/me" ? auth.promise : publicResponse(url))),
+    );
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await change("quick-add-date", "2026-09-25");
+    auth.resolve(session());
+    await hooks.settle();
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+  });
+  it("preserves the pending day's request when its editable date changes", async () => {
+    const fetcher = await ready();
+    const post = deferred<Response>();
+    fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST")
+        return pendingPosts(fetcher).length === 1
+          ? post.promise
+          : Response.json({}, { status: 503 });
+      return publicResponse(url);
+    });
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const original = pendingPosts(fetcher)[0];
+    await change("quick-add-date", "2026-09-25");
+    expect(field("quick-add-date").props.value).toBe("2026-09-25");
+    post.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    await change("quick-add-date", "2026-09-24");
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[0]).toBe(original?.[0]);
+    expect(posts[1]?.[1]?.body).toBe(original?.[1]?.body);
+    expect(posts[1]?.[1]?.headers).toEqual(original?.[1]?.headers);
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+  it("clears a chosen repeated-minute occurrence only when the manual day changes", async () => {
+    const fetcher = await ready();
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    const later = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Later occurrence"),
+    );
+    if (!later) throw new Error("Missing Later occurrence");
+    invoke(later);
+    await hooks.settle();
+    await change("quick-add-date", "2026-11-01");
+    expect(
+      elements().find((node) => node.type === "button" && text(node).startsWith("Later occurrence"))
+        ?.props["aria-pressed"],
+    ).toBe(true);
+    await change("quick-add-date", "2026-11-02");
+    await change("quick-add-date", "2026-11-01");
+    const freshLater = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Later occurrence"),
+    );
+    expect(freshLater?.props["aria-pressed"]).toBe(false);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(operationId).not.toHaveBeenCalled();
+  });
+});
