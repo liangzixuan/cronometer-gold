@@ -286,6 +286,12 @@ and exact quantity. Do not parse the signed-out response or repeat the add.
 Profile responses from an older destination or closed page must not change the
 current timezone, diary groups or sign-in state.
 
+Public food lookup stops when its page closes. Retained query or barcode edits,
+search submissions, suggestions, food-type choices and pagination cannot start
+another request or update the closed view. Open pages keep these public tools
+available during session verification and recovery; closing does not submit a
+diary addition. In-flight reads retain their existing cancellation behavior.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

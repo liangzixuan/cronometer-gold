@@ -2755,3 +2755,60 @@ describe("Current food manual date actions", () => {
     expect(operationId).not.toHaveBeenCalled();
   });
 });
+
+describe("Closed food lookup actions", () => {
+  it.each(["search", "more", "suggestion", "intent", "barcode", "query-input", "barcode-input"])(
+    "ignores a retained %s action after the page closes",
+    async (action) => {
+      const fetcher = vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?"))
+          return Response.json({ data: [hit], page: { nextCursor: "lifecycle_cursor" } });
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await change("food-query", "apple");
+      for (const callback of timers.values()) callback();
+      timers.clear();
+      await hooks.settle();
+      const suggestion = elements().find(
+        (node) => node.type === "button" && text(node).startsWith("Apple Pie"),
+      );
+      if (!suggestion) throw new Error("Missing suggestion");
+      const form = elements().find(
+        (node) => node.type === "form" && node.props["aria-label"] === "Food search",
+      );
+      if (!form) throw new Error("Missing search form");
+      invoke(form, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      await change("food-barcode", "012345678905");
+      const barcodeForm = elements().find((node) => node.props.className === "barcodeForm");
+      const intent = elements().find(
+        (node) => node.props.name === "food-intent" && node.props.value === "generic",
+      );
+      if (!barcodeForm || !intent) throw new Error("Missing public lookup control");
+      const actions: Record<string, () => unknown> = {
+        search: () => invoke(form, "onSubmit", { preventDefault() {} }),
+        more: () => invoke(button("Load more results")),
+        suggestion: () => invoke(suggestion),
+        intent: () => invoke(intent, "onChange"),
+        barcode: () => invoke(barcodeForm, "onSubmit", { preventDefault() {} }),
+        "query-input": () => invoke(field("food-query"), "onChange", { target: { value: "pear" } }),
+        "barcode-input": () =>
+          invoke(field("food-barcode"), "onChange", { target: { value: "12345678" } }),
+      };
+      const act = actions[action];
+      if (!act) throw new Error("Missing action");
+      const reads = fetcher.mock.calls.length;
+      hooks.unmount();
+      act();
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(reads);
+      expect(hooks.afterClose()).toBe(0);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -477,6 +477,7 @@ export function FoodSearchClient() {
 
   const runSearch = useCallback(
     async (requestedQuery: string, cursor?: string) => {
+      if (!mounted.current) return;
       searchController.current?.abort();
       searchController.current = null;
       const normalized = normalizeSearchText(requestedQuery);
@@ -554,11 +555,13 @@ export function FoodSearchClient() {
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!mounted.current) return;
     closeSuggestions(query);
     void runSearch(query);
   }
 
   function chooseSuggestion(suggestion: FoodAutocompleteSuggestion) {
+    if (!mounted.current) return;
     // Fit the input's UTF-16 limit and API query limit without splitting a character.
     let selectedQuery = "";
     for (const character of normalizeSearchText(suggestion.label)) {
@@ -572,6 +575,7 @@ export function FoodSearchClient() {
   }
 
   function chooseIntent(nextIntent: FoodSearchIntent) {
+    if (!mounted.current) return;
     searchController.current?.abort();
     setIntent(nextIntent);
     setResults([]);
@@ -583,6 +587,7 @@ export function FoodSearchClient() {
 
   async function submitBarcode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!mounted.current) return;
     barcodeController.current?.abort();
     const controller = new AbortController();
     barcodeController.current = controller;
@@ -1095,7 +1100,9 @@ export function FoodSearchClient() {
                 autoComplete="off"
                 id="food-query"
                 maxLength={128}
-                onChange={(event) => setQuery(event.target.value)}
+                onChange={(event) => {
+                  if (mounted.current) setQuery(event.target.value);
+                }}
                 placeholder="Try banana, lentils, or a brand"
                 type="search"
                 value={query}
@@ -1343,7 +1350,9 @@ export function FoodSearchClient() {
               id="food-barcode"
               inputMode="numeric"
               maxLength={64}
-              onChange={(event) => setBarcode(normalizeBarcodeInput(event.target.value))}
+              onChange={(event) => {
+                if (mounted.current) setBarcode(normalizeBarcodeInput(event.target.value));
+              }}
               pattern="(?:[0-9]{8}|[0-9]{12}|[0-9]{13}|[0-9]{14})"
               placeholder="012345678905"
               type="text"
