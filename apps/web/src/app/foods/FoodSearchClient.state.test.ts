@@ -3130,3 +3130,78 @@ describe("Current public search draft actions", () => {
     expect(field("food-query").props.value).toBe("Apple Pie");
   });
 });
+
+describe("Public Add provenance", () => {
+  it.each(["search", "barcode"])(
+    "retains exact %s retry when a private-food receipt reuses the version ID",
+    async (instance) => {
+      let privateReceipt = true;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          const receipt = await savedMutation(init).json();
+          if (privateReceipt) {
+            receipt.data.entry.source = null;
+            receipt.data.entry.foodProvenance = {
+              kind: "private_custom",
+              customFoodId: "3bcfa2bf-4950-43f7-9f24-000000000001",
+              customFoodVersionNumber: 1,
+            };
+          }
+          return Response.json(receipt);
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await search();
+      if (instance === "barcode") {
+        await change("food-barcode", "012345678905");
+        const form = elements().find((node) => node.props.className === "barcodeForm");
+        if (!form) throw new Error("Missing barcode form");
+        invoke(form, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+      }
+      const currentAdd = () => {
+        const controls = elements().find(
+          (node) =>
+            node.type === "fieldset" &&
+            elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+        );
+        const add = controls && elements(controls).find((node) => node.type === "button");
+        if (!add) throw new Error("Missing Add");
+        return add;
+      };
+      const amount = field(`quick-add-${instance}-202-amount`).props.value;
+      invoke(currentAdd());
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(text()).not.toContain("was added to Dinner");
+      expect(
+        elements().filter((node) => node.type === FoodAddConfirmation && node.props.confirmation),
+      ).toHaveLength(0);
+      expect(field(`quick-add-${instance}-202-amount`).props.value).toBe(amount);
+      expect(field("quick-add-date").props.value).toBe("2026-09-24");
+      expect(field("quick-add-time").props.value).toBe("");
+      privateReceipt = false;
+      invoke(currentAdd());
+      await hooks.settle();
+      const posts = pendingPosts(fetcher);
+      expect(posts).toHaveLength(2);
+      expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+      expect(posts[1]?.[1]?.headers).toEqual(posts[0]?.[1]?.headers);
+      expect(text()).toContain("was added to Dinner on 2026-09-24");
+      expect(
+        elements().filter((node) => node.type === FoodAddConfirmation && node.props.confirmation),
+      ).toHaveLength(1);
+      invoke(currentAdd());
+      await hooks.settle();
+      const fresh = pendingPosts(fetcher);
+      expect(fresh).toHaveLength(3);
+      expect(new Headers(fresh[2]?.[1]?.headers).get("idempotency-key")).not.toBe(
+        new Headers(fresh[0]?.[1]?.headers).get("idempotency-key"),
+      );
+    },
+  );
+});

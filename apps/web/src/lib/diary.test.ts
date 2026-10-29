@@ -34,6 +34,7 @@ import {
   prepareDiaryEntryNotePatch,
   prepareDiaryGroups,
   prepareQuickAddOperation,
+  quickAddMatchesRequest,
   quickAddOccurredAt,
   recipeLogMatchesRequest,
   resolveDiaryRouteDate,
@@ -1509,4 +1510,43 @@ describe("Private custom-food log receipt matching", () => {
       false,
     );
   });
+});
+
+describe("Public Add provenance", () => {
+  it.each([false, true])(
+    "rejects a private-food version collision replayed=%s while accepting public",
+    (replayed) => {
+      const operation = prepareQuickAddOperation(
+        new Map(),
+        {
+          foodVersionId: entry.foodVersionId,
+          portion: entry.portion,
+          mealSlot: entry.mealSlot,
+          localDate: entry.localDate,
+          timeZone: entry.timeZone,
+        },
+        new Date(entry.occurredAt),
+        () => "a7183708-7725-4b7c-a180-58e03ca01234",
+      );
+      const mutation = (candidate: unknown) =>
+        parseDiaryMutation({
+          data: {
+            replayed,
+            entry: candidate,
+            affectedDays: [{ localDate: entry.localDate, revision: "1" }],
+          },
+        });
+      const privateFood = {
+        ...entry,
+        source: null,
+        foodProvenance: {
+          kind: "private_custom",
+          customFoodId: "3bcfa2bf-4950-43f7-9f24-000000000001",
+          customFoodVersionNumber: 1,
+        },
+      };
+      expect(quickAddMatchesRequest(mutation(privateFood), operation)).toBe(false);
+      expect(quickAddMatchesRequest(mutation(entry), operation)).toBe(true);
+    },
+  );
 });

@@ -284,6 +284,10 @@ it. Each automatic, entered and repeated-minute choice keeps its own exact retry
 request after an uncertain response. Timezone recovery preserves the entered time
 and requires review of the current day and time before a fresh explicit Add.
 
+Catalogue and barcode Add require a matching public-food receipt. A private-food
+entry cannot confirm either addition, even if its numeric version ID matches.
+Keep the exact request for explicit retry after that mismatch.
+
 The inline saved receipt shows the confirmed local clock time, UTC offset and
 account zone. Earlier and Later additions remain distinct when a clock repeats.
 Its machine-readable time keeps the precise confirmed instant. Later draft edits

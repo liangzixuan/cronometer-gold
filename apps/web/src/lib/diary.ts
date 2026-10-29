@@ -1524,7 +1524,7 @@ export function quickAddMatchesRequest(
   operation: QuickAddOperation,
 ): boolean {
   const entry = mutation.entry;
-  if (entry?.entryKind !== "food") return false;
+  if (entry?.entryKind !== "food" || entry.foodProvenance.kind !== "public") return false;
   const instant =
     /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.(\d{1,9}))?(?:Z|[+-]\d{2}:\d{2})$/u.exec(
       entry.occurredAt,
