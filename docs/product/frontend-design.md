@@ -66,6 +66,13 @@ ready editor or replay a save. Session closure, route replacement and leaving th
 screen invalidate pending reads. An expired or replaced account requires signing
 in again; a failed sign-out attempt must leave a usable recovery path.
 
+Sign-out actions retained from a closed page cannot send another request. A
+pending confirmation belongs to the mounted private-page generation that started
+it; a late response cannot navigate or update a closed or replaced page. Current
+sign-out still works during session recovery, and an unconfirmed attempt keeps
+the existing retry path. Restarted effects clear only a retired logout busy state
+so a fresh sign-out remains available.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

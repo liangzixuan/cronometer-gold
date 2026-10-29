@@ -968,8 +968,11 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     };
   }, [date, loadOverviewCard, session]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    setMutationBusy((current) =>
+      activeMutation.current === null && current === "logout" ? null : current,
+    );
+    return () => {
       repeatOperations.current.clear();
       viewEpoch.current += 1;
       activeMutation.current = null;
@@ -986,9 +989,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       profileController.current = null;
       timeZoneRefreshController.current?.abort();
       timeZoneRefreshController.current = null;
-    },
-    [],
-  );
+    };
+  }, []);
 
   function chooseDate(next: string) {
     transitionCommittedDate(next, true);
@@ -1852,6 +1854,12 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   async function signOut() {
+    if (!sessionActive.current || privateUiClosed.current) return;
+    const generation = privateUiGeneration.current;
+    const ownsCurrentPage = () =>
+      sessionActive.current &&
+      privateUiGeneration.current === generation &&
+      !privateUiClosed.current;
     sessionController.current?.abort();
     sessionController.current = null;
     sessionRequestGeneration.current += 1;
@@ -1861,9 +1869,11 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     setMutationBusy("logout");
     const confirmed = await confirmBrowserLogout(
       () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
-      signInAgain,
+      () => {
+        if (ownsCurrentPage()) signInAgain();
+      },
     );
-    if (!confirmed && activeMutation.current === token && !privateUiClosed.current) {
+    if (!confirmed && activeMutation.current === token && ownsCurrentPage()) {
       activeMutation.current = null;
       const failure = "Sign out could not be confirmed. Your diary remains open; please retry.";
       setMessage(failure);

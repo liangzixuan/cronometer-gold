@@ -4981,3 +4981,92 @@ describe("Diary editor saved context", () => {
     expect(JSON.stringify(fixture)).toBe(original);
   });
 });
+
+describe("Diary logout closed-page ownership", () => {
+  it.each(["unmount", "confirmed closure"] as const)(
+    "ignores a retained sign-out action after %s",
+    async (transition) => {
+      const base = fetcher();
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url === "/api/auth/logout"
+          ? Promise.resolve(new Response(null, { status: 204 }))
+          : base(url, init),
+      );
+      await mount(fetch);
+      const retained = button("Sign out");
+      if (transition === "unmount") hooks.unmount();
+      else await click("Sign out");
+      const requests = fetch.mock.calls.length;
+      const routes = router.replace.mock.calls.slice();
+      const refreshes = router.refresh.mock.calls.length;
+      const before = text();
+      invoke(retained);
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(router.replace.mock.calls).toEqual(routes);
+      expect(router.refresh).toHaveBeenCalledTimes(refreshes);
+      expect(text()).toBe(before);
+      expect(hooks.afterClose()).toBe(0);
+    },
+  );
+
+  it.each([204, 401, 503])("ignores a pending logout %s after unmount", async (status) => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/auth/logout" ? pending.promise : base(url, init),
+    );
+    await mount(fetch);
+    invoke(button("Sign out"));
+    await hooks.settle();
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/logout")).toHaveLength(1);
+    hooks.unmount();
+    const requests = fetch.mock.calls.length;
+    const routes = router.replace.mock.calls.slice();
+    const refreshes = router.refresh.mock.calls.length;
+    pending.resolve(new Response(null, { status }));
+    await hooks.settle();
+    expect(router.replace.mock.calls).toEqual(routes);
+    expect(router.refresh).toHaveBeenCalledTimes(refreshes);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+  });
+
+  it("retires a prior logout receipt on effect replay and lets a fresh current logout close once", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    let logouts = 0;
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/auth/logout") {
+        logouts += 1;
+        return logouts === 1
+          ? pending.promise
+          : Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    invoke(button("Sign out"));
+    await hooks.settle();
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(text()).toContain("Apple 0");
+    expect(button("Sign out").props.disabled).not.toBe(true);
+    const requests = fetch.mock.calls.length;
+    const routes = router.replace.mock.calls.slice();
+    const refreshes = router.refresh.mock.calls.length;
+    pending.resolve(new Response(null, { status: 204 }));
+    await hooks.settle();
+    expect(router.replace.mock.calls).toEqual(routes);
+    expect(router.refresh).toHaveBeenCalledTimes(refreshes);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(text()).toContain("Apple 0");
+    expect(button("Sign out").props.disabled).not.toBe(true);
+    await click("Sign out");
+    expect(logouts).toBe(2);
+    expect(router.replace).toHaveBeenLastCalledWith("/login");
+    expect(router.refresh).toHaveBeenCalledTimes(refreshes + 1);
+    expect(text()).not.toContain("Apple 0");
+    expect(hooks.afterClose()).toBe(0);
+  });
+});
