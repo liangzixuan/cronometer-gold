@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  customFoodLogMatchesRequest,
   defaultDiaryGroups,
   diaryCorrectionMatchesRequest,
   diaryDayOrderDigest,
@@ -1444,6 +1445,67 @@ describe("Recipe log receipt matching", () => {
       },
     });
     expect(recipeLogMatchesRequest(recipe, { ...expected(), timeZone: "Invalid/Zone" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("Private custom-food log receipt matching", () => {
+  function receipt(portion: unknown = entry.portion, replayed = false) {
+    return parseDiaryMutation({
+      data: {
+        replayed,
+        entry: {
+          ...entry,
+          source: null,
+          foodProvenance: {
+            kind: "private_custom",
+            customFoodId: "3bcfa2bf-4950-43f7-9f24-000000000001",
+            customFoodVersionNumber: 1,
+          },
+          portion,
+        },
+        affectedDays: [{ localDate: entry.localDate, revision: "1" }],
+      },
+    });
+  }
+  const expected = {
+    customFoodId: "3bcfa2bf-4950-43f7-9f24-000000000001",
+    customFoodVersionId: entry.foodVersionId,
+    customFoodVersionNumber: 1,
+    portion: { kind: "serving", servingId: "303", amount: "1.000000" },
+    mealSlot: entry.mealSlot,
+    occurredAt: entry.occurredAt,
+    timeZone: entry.timeZone,
+  };
+  it.each([false, true])("accepts matching canonical private serving replayed=%s", (replayed) => {
+    expect(customFoodLogMatchesRequest(receipt(entry.portion, replayed), expected)).toBe(true);
+  });
+  it("accepts matching grams and rejects a different quantity", () => {
+    const mutation = receipt({ kind: "grams", grams: "1.25" });
+    expect(
+      customFoodLogMatchesRequest(mutation, {
+        ...expected,
+        portion: { kind: "grams", grams: "1.25000" },
+      }),
+    ).toBe(true);
+    expect(
+      customFoodLogMatchesRequest(mutation, {
+        ...expected,
+        portion: { kind: "grams", grams: "1.25001" },
+      }),
+    ).toBe(false);
+  });
+  it("rejects recipe entries and invalid expected time zones", () => {
+    const mutation = parseDiaryMutation({
+      data: {
+        replayed: false,
+        entry: recipeEntry,
+        affectedDays: [{ localDate: recipeEntry.localDate, revision: "1" }],
+      },
+    });
+    expect(customFoodLogMatchesRequest(mutation, expected)).toBe(false);
+    expect(customFoodLogMatchesRequest(receipt(), { ...expected, timeZone: "Invalid/Zone" })).toBe(
       false,
     );
   });

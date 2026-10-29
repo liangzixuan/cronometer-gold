@@ -213,6 +213,14 @@ successful log or change the selected day. Matching normal and replayed receipts
 close the request. Equivalent decimal spellings and timestamp offsets remain
 valid when they represent the same quantity and instant.
 
+## My foods log confirmations
+
+My foods confirms a pinned log only when its saved entry matches the submitted
+private food identity and version, portion, meal, exact instant, profile time zone
+and local day. Its affected-day receipt must identify that one day. An absent or
+unrelated receipt keeps the raw log draft and the exact request for explicit retry.
+A matching normal or replayed receipt closes the log form and retires that request.
+
 ## Food diary date choices
 
 Catalogue food logging offers Today and Yesterday beside the diary destination.

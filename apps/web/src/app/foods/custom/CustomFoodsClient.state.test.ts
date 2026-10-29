@@ -123,7 +123,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.search),
 }));
 
-import { mealSlots } from "../../../lib/diary";
+import { localDateInTimeZone, mealSlots } from "../../../lib/diary";
 import type { CustomFood } from "../../../lib/retention";
 import FoodsNavigation from "../../ui/FoodsNavigation";
 import { CustomFoodsClient } from "./CustomFoodsClient";
@@ -2861,7 +2861,8 @@ function logForm() {
   if (!found) throw new Error("Missing pinned food log form");
   return found;
 }
-function logReceipt() {
+function logReceipt(init?: RequestInit) {
+  if (init) return Response.json(matchedLogData(init));
   return Response.json({
     data: {
       replayed: false,
@@ -2936,7 +2937,7 @@ describe("My foods pinned log lifecycle", () => {
     expect(writes()).toHaveLength(1);
     await change("Exact quantity", "3.125");
     expect(field("Exact quantity").props.value).toBe("3.125");
-    pending.resolve(logReceipt());
+    pending.resolve(logReceipt(writes()[0]?.[1]));
     await hooks.settle();
     expect(field("Exact quantity").props.value).toBe("3.125");
     expect(button("Log exact version").props.disabled).toBe(false);
@@ -2959,7 +2960,7 @@ describe("My foods pinned log lifecycle", () => {
     expect(keys[4]).toBe(keys[0]);
     for (const index of [1, 2, 4]) expect(attempts[index]?.[1]?.body).toBe(attempts[0]?.[1]?.body);
     expect(attempts[3]?.[1]?.body).not.toBe(attempts[0]?.[1]?.body);
-    state.write = () => logReceipt();
+    state.write = (_url, init) => logReceipt(init);
     await submit("Log exact version");
     expect(
       elements().some((node) => node.type === "button" && text(node) === "Log exact version"),
@@ -3894,7 +3895,7 @@ describe("My foods repeated local logging minute", () => {
       const meal = logMealField();
       invoke(meal, "onChange", { target: { value: "lunch" } });
       await hooks.settle();
-      state.write = repeatedReceipt;
+      state.write = (_url, init) => logReceipt(init);
       await click(label);
       expect(writes()).toHaveLength(0);
       expect(occurrenceSelected(label)).toBe(true);
@@ -4199,14 +4200,7 @@ describe("My foods recent diary days", () => {
     await hooks.settle();
     expect(field("Local date").props.value).toBe("2026-10-01");
     expect(writes()).toHaveLength(0);
-    state.write = () =>
-      Response.json({
-        data: {
-          replayed: false,
-          entry: null,
-          affectedDays: [{ localDate: "2026-10-01", revision: "1" }],
-        },
-      });
+    state.write = (_url, init) => logReceipt(init);
     await submit("Log exact version");
     expect(writes()).toHaveLength(1);
     const body = JSON.parse(String(writes()[0]?.[1]?.body));
@@ -4315,4 +4309,177 @@ describe("My foods recent diary days", () => {
     expect(button("Log exact version").props.disabled).toBe(false);
     expect(writes()).toHaveLength(1);
   });
+});
+
+function matchedLogData(init: RequestInit, replayed = false) {
+  const body = JSON.parse(String(init.body));
+  const timeZone =
+    new Headers(init.headers).get("x-expected-profile-time-zone") ?? "America/Chicago";
+  const saved = food();
+  return {
+    data: {
+      replayed,
+      entry: {
+        id: "96aac405-c107-4776-923e-a40ca5014975",
+        revision: "1",
+        entryKind: "food",
+        foodVersionId: body.customFoodVersionId,
+        recipeVersionId: null,
+        portion:
+          body.portion.kind === "serving"
+            ? { ...body.portion, servingLabel: "Saved portion" }
+            : body.portion,
+        food: { name: saved.currentVersion.name, brandName: null },
+        recipe: null,
+        source: null,
+        foodProvenance: {
+          kind: "private_custom",
+          customFoodId: saved.id,
+          customFoodVersionNumber: 1,
+        },
+        mealSlot: body.mealSlot,
+        occurredAt: body.occurredAt,
+        timeZone,
+        localDate: localDateInTimeZone(new Date(body.occurredAt), timeZone),
+        localTime: "13:14:00",
+        resolvedGrams: "297.46875",
+        note: null,
+        position: 1,
+        nutrients: [],
+      },
+      affectedDays: [
+        { localDate: localDateInTimeZone(new Date(body.occurredAt), timeZone), revision: "1" },
+      ],
+    },
+  };
+}
+
+describe("My foods exact saved log receipt", () => {
+  it.each([
+    "absent",
+    "public",
+    "identity",
+    "version",
+    "version-number",
+    "quantity",
+    "kind",
+    "serving",
+    "meal",
+    "instant",
+    "zone",
+    "day",
+    "affected-day",
+    "extra-day",
+    "submillisecond",
+  ])("keeps the exact retry and raw draft for a mismatched %s receipt", async (mismatch) => {
+    const { state, writes } = workspace([food()]);
+    await mount();
+    await prepareLog();
+    const raw = formValues();
+    state.write = (_url, init) => {
+      const receipt = matchedLogData(init);
+      const entry = receipt.data.entry;
+      if (mismatch === "absent")
+        return Response.json({ ...receipt, data: { ...receipt.data, entry: null } });
+      if (mismatch === "public")
+        return Response.json({
+          ...receipt,
+          data: {
+            ...receipt.data,
+            entry: {
+              ...entry,
+              source: {
+                code: "FIXTURE",
+                releaseId: "ea8c79b4-49b0-4548-8ae6-c1b228317f19",
+                displayName: "Fixture",
+                licenseExpression: "CC0-1.0",
+                attributionRequired: false,
+                attributionText: "Fixture",
+              },
+              foodProvenance: {
+                kind: "public",
+                source: {
+                  code: "FIXTURE",
+                  releaseId: "ea8c79b4-49b0-4548-8ae6-c1b228317f19",
+                  displayName: "Fixture",
+                  licenseExpression: "CC0-1.0",
+                  attributionRequired: false,
+                  attributionText: "Fixture",
+                },
+              },
+            },
+          },
+        });
+      if (mismatch === "identity") entry.foodProvenance.customFoodId = food(2).id;
+      if (mismatch === "version") entry.foodVersionId = "9007199254740999";
+      if (mismatch === "version-number") entry.foodProvenance.customFoodVersionNumber = 2;
+      if (mismatch === "quantity")
+        entry.portion = {
+          kind: "serving",
+          servingId: "1",
+          amount: "2.376",
+          servingLabel: "Saved portion",
+        };
+      if (mismatch === "kind") entry.portion = { kind: "grams", grams: "2.375" };
+      if (mismatch === "serving")
+        entry.portion = {
+          kind: "serving",
+          servingId: "2",
+          amount: "2.375",
+          servingLabel: "Saved portion",
+        };
+      if (mismatch === "meal") entry.mealSlot = entry.mealSlot === "lunch" ? "dinner" : "lunch";
+      if (mismatch === "instant") entry.occurredAt = "2026-09-09T18:15:00.000Z";
+      if (mismatch === "zone") entry.timeZone = "America/New_York";
+      if (mismatch === "day") entry.localDate = "2026-09-10";
+      if (mismatch === "affected-day")
+        receipt.data.affectedDays = [{ localDate: "2026-09-10", revision: "1" }];
+      if (mismatch === "extra-day")
+        receipt.data.affectedDays.push({ localDate: "2026-09-10", revision: "1" });
+      if (mismatch === "submillisecond") entry.occurredAt = "2026-09-09T18:14:00.000001Z";
+      return Response.json(receipt);
+    };
+    await submit("Log exact version");
+    expect(status()).not.toContain("version logged");
+    expect(formValues()).toEqual(raw);
+    expect(button("Log exact version").props.disabled).toBe(false);
+    expect(writes()).toHaveLength(1);
+    state.write = (_url, init) => Response.json(matchedLogData(init, true));
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(writes()[1]?.[1]?.headers).toEqual(writes()[0]?.[1]?.headers);
+    expect(status()).toContain("version logged");
+    expect(
+      elements().some((node) => node.type === "form" && text(node).includes("Log exact version")),
+    ).toBe(false);
+  });
+  it.each([false, true])(
+    "accepts matching canonical quantities and offset timestamps replayed=%s",
+    async (replayed) => {
+      const { state, writes } = workspace([food()]);
+      await mount();
+      await prepareLog();
+      await change("Exact quantity", "2.375000");
+      state.write = (_url, init) => {
+        const receipt = matchedLogData(init, replayed);
+        receipt.data.entry.portion = {
+          kind: "serving",
+          servingId: "1",
+          amount: "2.375",
+          servingLabel: "Saved portion",
+        };
+        receipt.data.entry.occurredAt = "2026-09-09T13:14:00-05:00";
+        return Response.json(receipt);
+      };
+      await submit("Log exact version");
+      expect(status()).toContain("version logged");
+      const firstKey = new Headers(writes()[0]?.[1]?.headers).get("idempotency-key");
+      await prepareLog();
+      await change("Exact quantity", "2.375000");
+      state.write = () => Response.json({ error: "Uncertain" }, { status: 503 });
+      await submit("Log exact version");
+      expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).not.toBe(firstKey);
+    },
+  );
 });

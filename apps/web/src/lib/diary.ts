@@ -1584,6 +1584,43 @@ export function recipeLogMatchesRequest(
   );
 }
 
+/** Confirm the pinned private food before retiring its uncertain log request. */
+export function customFoodLogMatchesRequest(
+  mutation: DiaryMutationResult,
+  expected: {
+    readonly customFoodId: string;
+    readonly customFoodVersionId: string;
+    readonly customFoodVersionNumber: number;
+    readonly portion: unknown;
+    readonly mealSlot: MealSlot;
+    readonly occurredAt: string;
+    readonly timeZone: string;
+  },
+): mutation is DiaryMutationResult & { readonly entry: DiaryPrivateCustomFoodEntry } {
+  const entry = mutation.entry;
+  if (entry?.entryKind !== "food" || entry.foodProvenance.kind !== "private_custom") return false;
+  const instant =
+    /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.(\d{1,9}))?(?:Z|[+-]\d{2}:\d{2})$/u.exec(
+      entry.occurredAt,
+    );
+  if (!instant || !isLocalDate(instant[1] ?? "") || /[1-9]/u.test(instant[2]?.slice(3) ?? ""))
+    return false;
+  const localDate = correctionTargetLocalDate(expected.occurredAt, expected.timeZone);
+  return (
+    entry.foodProvenance.customFoodId === expected.customFoodId &&
+    entry.foodProvenance.customFoodVersionNumber === expected.customFoodVersionNumber &&
+    entry.foodVersionId === expected.customFoodVersionId &&
+    sameDiaryPortionRequest(expected.portion, entry.portion) &&
+    entry.mealSlot === expected.mealSlot &&
+    Date.parse(entry.occurredAt) === Date.parse(expected.occurredAt) &&
+    entry.timeZone === expected.timeZone &&
+    localDate !== null &&
+    entry.localDate === localDate &&
+    mutation.affectedDays.length === 1 &&
+    mutation.affectedDays[0]?.localDate === localDate
+  );
+}
+
 export function isPositiveDecimal(value: string): boolean {
   return value.length <= 19 && API_POSITIVE_DECIMAL.test(value);
 }

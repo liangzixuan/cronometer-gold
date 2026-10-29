@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  customFoodLogMatchesRequest,
   defaultDiaryGroups,
   diaryGroupLabel,
   isLocalDate,
@@ -1395,11 +1396,20 @@ export function CustomFoodsClient() {
           value,
         );
       const mutation = parseDiaryMutation(value);
+      if (
+        !customFoodLogMatchesRequest(mutation, {
+          ...body,
+          customFoodId: customLog.food.id,
+          customFoodVersionNumber: customLog.food.currentVersion.versionNumber,
+          timeZone: session.profile.timeZone,
+        })
+      )
+        throw new TypeError("The server returned a diary entry for a different private-food log.");
       if (!ownsDraft()) return;
       if (operations.current.get(key) === exactOperationId) operations.current.delete(key);
       replaceCustomLog(null);
       setMessage(
-        `Pinned private food version logged to ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${mutation.entry?.localDate ?? customLog.localDate}.`,
+        `Pinned private food version logged to ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${mutation.entry.localDate}.`,
       );
     } catch (error) {
       if (!ownsLog()) return;
