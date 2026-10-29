@@ -80,6 +80,13 @@ Fresh controls allow editing again after the failure. A confirmed matching recei
 closes the editor and refreshes the affected day. Existing conflict recovery,
 owner checks, private-session closure and immutable entry history remain intact.
 
+Repeat today uses the actual click instant, including seconds and milliseconds,
+in the current profile's local day. This preserves the current occurrence during
+a repeated local minute. An uncertain repeat keeps that exact instant, request
+and operation identity across clock or date changes. A fresh repeat after a
+matching receipt uses the new click instant. Repeat to a different date retains
+the existing noon policy and explicit destination confirmation.
+
 ## Diary recorded times
 
 Each loaded entry shows its saved local clock with seconds, UTC offset and IANA

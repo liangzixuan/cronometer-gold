@@ -1525,12 +1525,12 @@ describe("Expand all diary meals", () => {
 
 describe("actual Diary Repeat retry identity", () => {
   it.each([
-    ["minute", "2026-08-15T18:00:59.000Z", "2026-08-15T18:01:01.000Z", "2026-08-15T18:00:00.000Z"],
+    ["minute", "2026-08-15T18:00:59.000Z", "2026-08-15T18:01:01.000Z", "2026-08-15T18:00:59.000Z"],
     [
       "local midnight",
       "2026-08-16T04:59:59.000Z",
       "2026-08-16T05:00:01.000Z",
-      "2026-08-16T04:59:00.000Z",
+      "2026-08-16T04:59:59.000Z",
     ],
   ])(
     "pins unresolved Repeat across a %s boundary",
@@ -1657,7 +1657,7 @@ describe("Diary Repeat envelope lifecycle", () => {
     await click("Repeat Apple 0 today");
     expect(writes).toHaveLength(6);
     expect(writes[5]?.body).toBe(
-      '{"occurredAt":"2026-08-16T05:05:00.000Z","mealSlot":"breakfast"}',
+      '{"occurredAt":"2026-08-16T05:05:01.000Z","mealSlot":"breakfast"}',
     );
     expect(writes[5]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
     expect(writes[5]?.url).toBe(writes[0]?.url);
@@ -1727,7 +1727,7 @@ describe("Diary Repeat envelope lifecycle", () => {
     await click("Repeat Apple 0 today");
     expect(writes).toHaveLength(2);
     expect(writes[1]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
-    expect(writes[1]?.body).toContain("2026-08-15T18:01:00.000Z");
+    expect(writes[1]?.body).toContain("2026-08-15T18:01:01.000Z");
   });
 
   it("retries the original envelope after a fresh same-owner source date, revision and zone change while rejecting old rendered controls", async () => {
@@ -1818,7 +1818,7 @@ describe("Diary Repeat envelope lifecycle", () => {
       vi.setSystemTime(new Date("2026-08-15T18:02:01.000Z"));
       await click("Repeat Apple 0 today");
       expect(writes).toHaveLength(2);
-      expect(writes[1]?.body).toContain("2026-08-15T18:02:00.000Z");
+      expect(writes[1]?.body).toContain("2026-08-15T18:02:01.000Z");
       expect(writes[1]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
       expect(writes[1]?.headers["if-match"]).toBe('"4"');
       expect(writes[1]?.headers["x-expected-profile-time-zone"]).toBe(
@@ -4590,5 +4590,99 @@ describe("Diary saved-time nutrient control names", () => {
     expect(nutrientControl(1).props["aria-expanded"]).toBe(true);
     expect(fetch.mock.calls).toHaveLength(requests);
     expect(JSON.stringify(fixture)).toBe(original);
+  });
+});
+
+describe("Diary Repeat today actual instant", () => {
+  it.each([
+    ["Earlier", "2026-11-01T06:30:45.123Z", "America/Chicago", "2026-11-01"],
+    ["Later", "2026-11-01T07:30:45.456Z", "America/Chicago", "2026-11-01"],
+    ["half-hour Later", "2026-04-04T15:15:45.789Z", "Australia/Lord_Howe", "2026-04-05"],
+    ["profile-local midnight", "2026-11-01T15:00:00.001Z", "Asia/Tokyo", "2026-11-02"],
+  ])(
+    "uses the full click instant at %s and a fresh instant for a later action",
+    async (_case, instant, zone, targetDate) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(instant));
+      const verified = session();
+      verified.data.profile.timeZone = zone;
+      const fixture = page([entry(0)]);
+      fixture.data.timeZone = zone;
+      const original = JSON.stringify(fixture);
+      const writes: CapturedRepeat[] = [];
+      const base = fetcher(fixture);
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return Response.json(verified);
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          const request = captureRepeat(url, init);
+          writes.push(request);
+          return Response.json(repeatReceipt(request));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      expect(text()).toContain("Apple 0");
+      const initialReads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?")).length;
+      await click("Repeat Apple 0 today");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.body).toBe(JSON.stringify({ occurredAt: instant, mealSlot: "breakfast" }));
+      expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe(zone);
+      expect(writes[0]?.headers["if-match"]).toBe('"3"');
+      expect(writes[0]?.url).toBe(
+        `/api/diary/entries/${entry(0).id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+      );
+      expect(text()).toContain(`Pinned entry version repeated in Breakfast for ${targetDate}.`);
+      const nextInstant = new Date(Date.parse(instant) + 500).toISOString();
+      vi.setSystemTime(new Date(nextInstant));
+      await click("Repeat Apple 0 today");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.body).toBe(
+        JSON.stringify({ occurredAt: nextInstant, mealSlot: "breakfast" }),
+      );
+      expect(writes[1]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+      expect(writes[1]?.url).toBe(writes[0]?.url);
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?")).length).toBe(
+        initialReads,
+      );
+      expect(JSON.stringify(fixture)).toBe(original);
+    },
+  );
+
+  it("keeps an uncertain Earlier instant across Later and a local-day boundary, then starts a fresh repeat", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const earlier = "2026-11-01T06:30:45.123Z";
+    vi.setSystemTime(new Date(earlier));
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        return writes.length < 3
+          ? Response.json({ error: "Response unavailable." }, { status: 503 })
+          : Response.json(repeatReceipt(request));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.body).toBe(JSON.stringify({ occurredAt: earlier, mealSlot: "breakfast" }));
+    expect(text()).toContain("same operation for 2026-11-01 safely.");
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.987Z"));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    const tomorrow = "2026-11-02T06:00:00.789Z";
+    vi.setSystemTime(new Date(tomorrow));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(3);
+    expect(writes[2]).toEqual(writes[0]);
+    expect(text()).toContain("Pinned entry version repeated in Breakfast for 2026-11-01.");
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(4);
+    expect(writes[3]?.body).toBe(JSON.stringify({ occurredAt: tomorrow, mealSlot: "breakfast" }));
+    expect(writes[3]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+    expect(text()).toContain("Pinned entry version repeated in Breakfast for 2026-11-02.");
   });
 });

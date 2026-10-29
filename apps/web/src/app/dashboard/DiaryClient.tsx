@@ -41,7 +41,6 @@ import {
   isLocalDate,
   isPositiveDecimal,
   localDateInTimeZone,
-  localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
   mealLabel,
@@ -1519,13 +1518,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       }
       let occurredAt: string;
       try {
-        occurredAt = destination
-          ? quickAddOccurredAt(targetDate, session.profile.timeZone, now)
-          : localDateTimeToInstant(
-              targetDate,
-              localTimeInTimeZone(now, session.profile.timeZone).slice(0, 5),
-              session.profile.timeZone,
-            );
+        occurredAt = quickAddOccurredAt(targetDate, session.profile.timeZone, now);
       } catch {
         setMessage(
           "That repeat date has no usable time in your profile time zone. Choose another date.",
