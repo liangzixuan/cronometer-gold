@@ -1952,3 +1952,293 @@ describe("Food recent diary days", () => {
     expect(pendingPosts(fetcher)).toHaveLength(1);
   });
 });
+
+describe("Public food optional local time", () => {
+  async function ready() {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST")
+        return Response.json({ error: "Lost confirmation" }, { status: 503 });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    return fetcher;
+  }
+
+  it.each(["search", "barcode"])(
+    "uses the shared explicit time when adding from %s",
+    async (instance) => {
+      const fetcher = await ready();
+      if (instance === "barcode") {
+        await change("food-barcode", "012345678905");
+        const form = elements().find((node) => node.props.className === "barcodeForm");
+        if (!form) throw new Error("Missing barcode form");
+        invoke(form, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+      }
+      await change("quick-add-time", "07:30");
+      await change("quick-add-meal", "lunch");
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      const controls = elements().find(
+        (node) =>
+          node.type === "fieldset" &&
+          elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+      );
+      const add = controls && elements(controls).find((node) => node.type === "button");
+      if (!add) throw new Error("Missing Add");
+      invoke(add);
+      await hooks.settle();
+      const posts = pendingPosts(fetcher);
+      expect(posts).toHaveLength(1);
+      expect(JSON.parse(String(posts[0]?.[1]?.body))).toMatchObject({
+        foodVersionId: "202",
+        mealSlot: "lunch",
+        occurredAt: "2026-09-24T12:30:00.000Z",
+      });
+      expect(field("quick-add-time").props.value).toBe("07:30");
+      expect(operationId).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ["2026-09-24", "07:30 ", "Invalid local"],
+    ["2026-03-08", "02:30", "does not exist"],
+    ["2026-11-01", "01:30", "Choose Earlier or Later"],
+  ])("rejects %s at %j before creating an operation", async (date, time, message) => {
+    const fetcher = await ready();
+    await change("quick-add-date", date);
+    await change("quick-add-time", time);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    expect(text()).toContain(message);
+    expect(field("quick-add-time").props.value).toBe(time);
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(operationId).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["Earlier occurrence · UTC−05:00", "2026-11-01T06:30:00.000Z"],
+    ["Later occurrence · UTC−06:00", "2026-11-01T07:30:00.000Z"],
+  ])("logs the explicitly selected %s", async (choice, instant) => {
+    const fetcher = await ready();
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    invoke(button(choice));
+    await hooks.settle();
+    expect(button(choice).props["aria-pressed"]).toBe(true);
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body)).occurredAt).toBe(instant);
+  });
+
+  it("keeps automatic and entered-time retries independent after changing the clock and time choice", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+    const fetcher = await ready();
+    await change("quick-add-date", "2026-11-01");
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    await change("quick-add-time", "01:30");
+    for (const choice of [
+      "Earlier occurrence · UTC−05:00",
+      "Later occurrence · UTC−06:00",
+      "Earlier occurrence · UTC−05:00",
+    ]) {
+      invoke(button(choice));
+      await hooks.settle();
+      invoke(button("Add 1 default serving of Apple Pie"));
+      await hooks.settle();
+    }
+    vi.setSystemTime(new Date("2026-11-01T08:55:00Z"));
+    await change("quick-add-time", "");
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(5);
+    expect(JSON.parse(String(posts[0]?.[1]?.body)).occurredAt).toBe("2026-11-01T07:30:45.123Z");
+    expect(posts[3]?.[1]?.body).toBe(posts[1]?.[1]?.body);
+    expect(posts[3]?.[1]?.headers).toEqual(posts[1]?.[1]?.headers);
+    expect(posts[4]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+    expect(posts[4]?.[1]?.headers).toEqual(posts[0]?.[1]?.headers);
+    expect(operationId).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["date", "time", "route", "unmount"])(
+    "retires a time choice across %s",
+    async (retirement) => {
+      const fetcher = await ready();
+      await change("quick-add-date", "2026-11-01");
+      await change("quick-add-time", "01:30");
+      invoke(button("Later occurrence · UTC−06:00"));
+      await hooks.settle();
+      const earlier = button("Earlier occurrence · UTC−05:00");
+      const oldTime = field("quick-add-time");
+      if (retirement === "date") {
+        await change("quick-add-date", "2026-11-02");
+        await change("quick-add-date", "2026-11-01");
+      }
+      if (retirement === "time") {
+        await change("quick-add-time", "01:31");
+        await change("quick-add-time", "01:30");
+      }
+      if (retirement === "route") {
+        route.query = "date=2026-11-01&meal=lunch";
+        hooks.renderWithoutEffects();
+      }
+      if (retirement === "unmount") hooks.unmount();
+      invoke(earlier);
+      if (retirement === "unmount") invoke(oldTime, "onChange", { target: { value: "02:00" } });
+      else if (retirement === "route") hooks.render();
+      await hooks.settle();
+      if (retirement === "unmount") expect(hooks.afterClose()).toBe(0);
+      else {
+        expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
+        expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+      }
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+    },
+  );
+
+  it("retains the occurrence after current no-op coordinate controls", async () => {
+    await ready();
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    invoke(button("Later occurrence · UTC−06:00"));
+    await hooks.settle();
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+  });
+
+  it("rejects an incomplete native time before an operation or write even when its value is blank", async () => {
+    const fetcher = await ready();
+    const ref = field("quick-add-time").props.ref as { current: unknown };
+    const focus = vi.fn();
+    ref.current = { validity: { valid: false }, focus };
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    expect(text()).toContain("Complete the local time");
+    expect(field("quick-add-time").props.value).toBe("");
+    expect(focus).toHaveBeenCalledOnce();
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(operationId).not.toHaveBeenCalled();
+  });
+
+  it("preserves the raw time but requires a new-zone occurrence and confirmation after a no-write conflict", async () => {
+    const fetcher = await ready();
+    const original = fetcher.getMockImplementation();
+    if (!original) throw new Error("Missing fetch fixture");
+    let posts = 0;
+    fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        posts += 1;
+        return Response.json(
+          posts === 1 ? { code: "DIARY_TIME_ZONE_CHANGED" } : { error: "Lost confirmation" },
+          { status: posts === 1 ? 409 : 503 },
+        );
+      }
+      return url === "/api/auth/me" && posts > 0
+        ? session("America/New_York")
+        : original(url, init);
+    });
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    invoke(button("Later occurrence · UTC−06:00"));
+    await hooks.settle();
+    const oldChoice = button("Earlier occurrence · UTC−05:00");
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    expect(field("quick-add-time").props.value).toBe("01:30");
+    expect(button("Earlier occurrence · UTC−04:00").props["aria-pressed"]).toBe(false);
+    expect(button("Later occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
+    invoke(oldChoice);
+    invoke(button("Confirm 2026-11-01 at 01:30 in America/New_York"));
+    await hooks.settle();
+    expect(text()).toContain("Choose Earlier or Later");
+    expect(button("Add 1 default serving of Apple Pie").props.disabled).toBe(true);
+    expect(operationId).toHaveBeenCalledOnce();
+    invoke(button("Later occurrence · UTC−05:00"));
+    await hooks.settle();
+    invoke(button("Confirm 2026-11-01 at 01:30 in America/New_York"));
+    await hooks.settle();
+    invoke(button("Add 1 default serving of Apple Pie"));
+    await hooks.settle();
+    const requests = pendingPosts(fetcher);
+    expect(requests).toHaveLength(2);
+    expect(JSON.parse(String(requests[1]?.[1]?.body)).occurredAt).toBe("2026-11-01T06:30:00.000Z");
+    expect(requests[1]?.[1]?.headers).toMatchObject({
+      "x-expected-profile-time-zone": "America/New_York",
+    });
+    expect(operationId).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["2026-09-24", "07:30", null, "2026-09-24T12:30:00.000Z"],
+    ["2026-11-01", "01:30", "Later occurrence · UTC−06:00", "2026-11-01T07:30:00.000Z"],
+  ])(
+    "accepts only the matching explicit receipt for %s %s and permits a later fresh Add",
+    async (date, time, choice, instant) => {
+      const fetcher = await ready();
+      const original = fetcher.getMockImplementation();
+      if (!original) throw new Error("Missing fetch fixture");
+      fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          const result = await savedMutation(init, date).json();
+          result.data.entry.localTime = `${time}:00`;
+          return Response.json(result);
+        }
+        return original(url, init);
+      });
+      await change("quick-add-date", date);
+      await change("quick-add-time", time);
+      if (choice) {
+        invoke(button(choice));
+        await hooks.settle();
+      }
+      invoke(button("Add 1 default serving of Apple Pie"));
+      await hooks.settle();
+      expect(text()).toContain(`was added to Dinner on ${date}`);
+      expect(field("quick-add-time").props.value).toBe(time);
+      invoke(button("Add 1 default serving of Apple Pie"));
+      await hooks.settle();
+      const posts = pendingPosts(fetcher);
+      expect(posts).toHaveLength(2);
+      for (const [, init] of posts) expect(JSON.parse(String(init?.body)).occurredAt).toBe(instant);
+      expect(new Headers(posts[1]?.[1]?.headers).get("idempotency-key")).not.toBe(
+        new Headers(posts[0]?.[1]?.headers).get("idempotency-key"),
+      );
+      expect(operationId).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["time", "occurrence"])(
+    "ignores an Add retained before a newer %s choice renders",
+    async (changeKind) => {
+      const fetcher = await ready();
+      if (changeKind === "occurrence") {
+        await change("quick-add-date", "2026-11-01");
+        await change("quick-add-time", "01:30");
+        invoke(button("Earlier occurrence · UTC−05:00"));
+        await hooks.settle();
+      }
+      const oldAdd = button("Add 1 default serving of Apple Pie");
+      if (changeKind === "time")
+        invoke(field("quick-add-time"), "onChange", { target: { value: "07:30" } });
+      else invoke(button("Later occurrence · UTC−06:00"));
+      invoke(oldAdd);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+      invoke(button("Add 1 default serving of Apple Pie"));
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body)).occurredAt).toBe(
+        changeKind === "time" ? "2026-09-24T12:30:00.000Z" : "2026-11-01T07:30:00.000Z",
+      );
+    },
+  );
+});

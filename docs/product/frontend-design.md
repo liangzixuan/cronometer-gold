@@ -216,6 +216,19 @@ while an addition is pending. An older route or closed page cannot change the
 date. A timezone conflict still requires confirmation of the chosen local day;
 Today and Yesterday do not supply that confirmation or discard an uncertain add.
 
+## Catalogue food logging time
+
+Catalogue search and barcode results share an optional local time beside their
+date and meal. Blank time keeps the current instant for today, including seconds,
+or local noon for another day. An entered minute uses the verified account zone.
+A repeated minute requires an explicit Earlier or Later choice; a skipped or
+incomplete minute must not send an addition. Keep the raw values for correction.
+
+Changing the day, time or verified zone retires an older occurrence. A no-op keeps
+it. Each automatic, entered and repeated-minute choice keeps its own exact retry
+request after an uncertain response. Timezone recovery preserves the entered time
+and requires review of the current day and time before a fresh explicit Add.
+
 ## Foods session recovery
 
 Foods keeps public search, suggestions and barcode lookup available while it

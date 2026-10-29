@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   defaultDiaryGroups,
@@ -1304,5 +1304,83 @@ describe("private-only recipe Diary sources", () => {
     { food: { name: "Food", brandName: null } },
   ])("keeps private recipe discriminants strict %#", (patch) => {
     expect(() => parseDiaryMutation(mutation({ ...recipeEntry, sources: [], ...patch }))).toThrow();
+  });
+});
+
+describe("Public quick-add optional time identity", () => {
+  const input = {
+    foodVersionId: "202",
+    portion: { kind: "grams" as const, grams: "25.500000" },
+    localDate: "2026-11-01",
+    mealSlot: "breakfast" as const,
+    timeZone: "America/Chicago",
+  };
+  const now = new Date("2026-11-01T07:30:45.123Z");
+  it.each([
+    ["2026-09-24", "07:30", null, "2026-09-24T12:30:00.000Z"],
+    ["2026-11-01", "01:30", "2026-11-01T06:30:00.000Z", "2026-11-01T06:30:00.000Z"],
+    ["2026-11-01", "01:30", "2026-11-01T07:30:00.000Z", "2026-11-01T07:30:00.000Z"],
+  ])("resolves %s at %s with exact occurrence", (date, time, choice, expected) => {
+    expect(quickAddOccurredAt(date, input.timeZone, now, time, choice)).toBe(expected);
+  });
+  it.each([
+    ["2026-09-24", "07:30 ", null],
+    ["2026-03-08", "02:30", null],
+    ["2026-11-01", "01:30", null],
+    ["2026-11-01", "01:30", "2026-11-01T09:30:00.000Z"],
+  ])(
+    "rejects invalid %s %s without allocating identity",
+    (localDate, localTime, selectedOccurredAt) => {
+      const allocate = vi.fn(() => "a7183708-7725-4b7c-a180-58e03ca01234");
+      expect(() =>
+        prepareQuickAddOperation(
+          new Map(),
+          { ...input, localDate, localTime, selectedOccurredAt },
+          now,
+          allocate,
+        ),
+      ).toThrow(RangeError);
+      expect(allocate).not.toHaveBeenCalled();
+    },
+  );
+  it("retains independent automatic, explicit Earlier and Later operation identities and bytes", () => {
+    const pending = new Map<string, ReturnType<typeof prepareQuickAddOperation>>();
+    const allocate = vi.fn(
+      () => `a7183708-7725-4b7c-a180-${String(allocate.mock.calls.length).padStart(12, "0")}`,
+    );
+    const automatic = prepareQuickAddOperation(pending, input, now, allocate);
+    pending.set(automatic.intentKey, automatic);
+    const choices = ["2026-11-01T06:30:00.000Z", "2026-11-01T07:30:00.000Z"];
+    const explicit = choices.map((selectedOccurredAt) => {
+      const value = prepareQuickAddOperation(
+        pending,
+        { ...input, localTime: "01:30", selectedOccurredAt },
+        now,
+        allocate,
+      );
+      pending.set(value.intentKey, value);
+      return value;
+    });
+    expect(new Set([automatic.operationId, ...explicit.map((v) => v.operationId)]).size).toBe(3);
+    expect(automatic.body.occurredAt).toBe(now.toISOString());
+    for (const [index, selectedOccurredAt] of choices.entries()) {
+      expect(
+        prepareQuickAddOperation(
+          pending,
+          {
+            ...input,
+            portion: { kind: "grams", grams: "25.5" },
+            localTime: "01:30",
+            selectedOccurredAt,
+          },
+          new Date("2026-11-01T08:44:00Z"),
+          allocate,
+        ),
+      ).toBe(explicit[index]);
+    }
+    expect(
+      prepareQuickAddOperation(pending, input, new Date("2026-11-01T09:00:00Z"), allocate),
+    ).toBe(automatic);
+    expect(allocate).toHaveBeenCalledTimes(3);
   });
 });

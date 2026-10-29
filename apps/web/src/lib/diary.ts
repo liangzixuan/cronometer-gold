@@ -1,3 +1,4 @@
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import { formatNutrientAmount } from "./nutrition-display";
 
 export const mealSlots = ["breakfast", "lunch", "dinner", "snacks"] as const;
@@ -1387,7 +1388,30 @@ export function diaryEditErrorMessage(error: unknown): string {
 }
 
 /** Preserve the real current instant, including the second DST fold occurrence. */
-export function quickAddOccurredAt(localDate: string, timeZone: string, now = new Date()): string {
+export function quickAddOccurredAt(
+  localDate: string,
+  timeZone: string,
+  now = new Date(),
+  localTime = "",
+  selectedOccurredAt?: string | null,
+): string {
+  if (localTime !== "") {
+    const resolution = resolveHydrationLocalMinute(localDate, localTime, timeZone);
+    if (resolution.kind === "invalid")
+      throw new RangeError("Invalid local diary time or profile time zone.");
+    if (resolution.kind === "gap")
+      throw new RangeError("This local diary time does not exist in your profile time zone.");
+    if (selectedOccurredAt != null) {
+      const selected = resolution.candidates.find(
+        (candidate) => candidate.occurredAt === selectedOccurredAt,
+      );
+      if (!selected) throw new RangeError("Choose an occurrence for the current local diary time.");
+      return selected.occurredAt;
+    }
+    if (resolution.kind === "ambiguous")
+      throw new RangeError("Choose Earlier or Later for this repeated local time.");
+    return resolution.candidates[0].occurredAt;
+  }
   return localDate === localDateInTimeZone(now, timeZone)
     ? now.toISOString()
     : localDateTimeToInstant(localDate, "12:00", timeZone);
@@ -1432,6 +1456,8 @@ export function prepareQuickAddOperation(
     readonly localDate: string;
     readonly mealSlot: MealSlot;
     readonly timeZone: string;
+    readonly localTime?: string;
+    readonly selectedOccurredAt?: string | null;
   },
   now: Date,
   operationIdFactory: () => string,
@@ -1449,9 +1475,25 @@ export function prepareQuickAddOperation(
           amount: canonicalQuantity,
         }
       : { kind: "grams" as const, grams: canonicalQuantity };
-  const intentKey = JSON.stringify([input.foodVersionId, portion, input.localDate, input.mealSlot]);
+  const localTime = input.localTime ?? "";
+  const selectedOccurredAt = localTime === "" ? null : (input.selectedOccurredAt ?? null);
+  const intentKey = JSON.stringify([
+    input.foodVersionId,
+    portion,
+    input.localDate,
+    input.mealSlot,
+    localTime,
+    selectedOccurredAt,
+  ]);
   const pending = pendingByIntent.get(intentKey);
   if (pending) return pending;
+  const occurredAt = quickAddOccurredAt(
+    input.localDate,
+    input.timeZone,
+    now,
+    localTime,
+    selectedOccurredAt,
+  );
   return {
     intentKey,
     operationId: operationIdFactory(),
@@ -1460,7 +1502,7 @@ export function prepareQuickAddOperation(
       foodVersionId: input.foodVersionId,
       portion,
       mealSlot: input.mealSlot,
-      occurredAt: quickAddOccurredAt(input.localDate, input.timeZone, now),
+      occurredAt,
     },
   };
 }

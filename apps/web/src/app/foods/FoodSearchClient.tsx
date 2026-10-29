@@ -1,9 +1,10 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createOperationId,
@@ -25,6 +26,7 @@ import {
   prepareQuickAddOperation,
   type QuickAddOperation,
   quickAddMatchesRequest,
+  quickAddOccurredAt,
   shiftLocalDate,
 } from "../../lib/diary";
 
@@ -225,6 +227,16 @@ export function FoodSearchClient() {
   const appliedDestination = useRef({ date: requestedDate, meal: requestedMeal });
   const [timeZone, setTimeZone] = useState<string | null>(null);
   const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
+  const [localTime, setLocalTime] = useState("");
+  const [selectedOccurredAt, setSelectedOccurredAt] = useState<string | null>(null);
+  const localTimeInput = useRef<HTMLInputElement | null>(null);
+  const timeResolution = useMemo(
+    () =>
+      timeZone && localTime !== ""
+        ? resolveHydrationLocalMinute(diaryDate, localTime, timeZone)
+        : null,
+    [diaryDate, localTime, timeZone],
+  );
   const [addState, setAddState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
   const [addMessage, setAddMessage] = useState("");
@@ -364,6 +376,7 @@ export function FoodSearchClient() {
       const session = parseSession(await responseJson(response));
       if (!isCurrent()) return;
       setTimeZone(session.profile.timeZone);
+      setSelectedOccurredAt(null);
       setDiaryGroups(session.profile.diaryGroups);
       const now = new Date();
       if (!(requestedDate && isLocalDate(requestedDate)) && !dateEdited.current) {
@@ -392,6 +405,7 @@ export function FoodSearchClient() {
 
   useEffect(() => {
     appliedSessionRoute.current = sessionRouteRevision;
+    setSelectedOccurredAt(null);
     confirmationGeneration.current += 1;
     setConfirmation(null);
     if (
@@ -619,6 +633,7 @@ export function FoodSearchClient() {
       if (!currentProfile()) return null;
       dayReviewGeneration.current += 1;
       setTimeZone(session.profile.timeZone);
+      setSelectedOccurredAt(null);
       setDiaryGroups(session.profile.diaryGroups);
       return session.profile.timeZone;
     } catch {
@@ -638,6 +653,7 @@ export function FoodSearchClient() {
     if (
       !mounted.current ||
       sessionStateRef.current !== "ready" ||
+      dayReviewGeneration.current !== renderedDayReviewGeneration ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       appliedSessionRoute.current !== sessionRouteRevision
     ) {
@@ -671,6 +687,7 @@ export function FoodSearchClient() {
       setAddMessage("Sign in before adding food to a private diary.");
       return;
     }
+    if (!validateLocalTimeInput()) return;
     let operation: QuickAddOperation;
     try {
       operation = prepareQuickAddOperation(
@@ -688,13 +705,19 @@ export function FoodSearchClient() {
           localDate: diaryDate,
           mealSlot,
           timeZone,
+          localTime,
+          selectedOccurredAt,
         },
         new Date(),
         createOperationId,
       );
-    } catch {
+    } catch (caught) {
       setAddState("error");
-      setAddMessage("That local date or time is not valid in your diary time zone.");
+      setAddMessage(
+        caught instanceof RangeError
+          ? caught.message
+          : "That local date or time is not valid in your diary time zone.",
+      );
       return;
     }
     pendingAdds.current.set(operation.intentKey, operation);
@@ -792,7 +815,7 @@ export function FoodSearchClient() {
     }
   }
 
-  function canChooseRecentDiaryDate() {
+  function canEditDiaryCoordinates() {
     return (
       mounted.current &&
       sessionStateRef.current === "ready" &&
@@ -805,13 +828,45 @@ export function FoodSearchClient() {
   }
 
   function chooseRecentDiaryDate(offset: 0 | -1) {
-    if (!canChooseRecentDiaryDate() || !timeZone) return;
+    if (!canEditDiaryCoordinates() || !timeZone) return;
     const today = localDateInTimeZone(new Date(), timeZone);
     const date = offset === 0 ? today : shiftLocalDate(today, offset);
     if (date === diaryDate) return;
     dateEdited.current = true;
     dayReviewGeneration.current += 1;
     setDiaryDate(date);
+    setSelectedOccurredAt(null);
+  }
+
+  function validateLocalTimeInput(): boolean {
+    if (localTimeInput.current?.validity?.valid === false) {
+      setAddState("error");
+      setAddMessage(
+        "Complete the local time, or clear every time segment to use the automatic time.",
+      );
+      localTimeInput.current.focus();
+      return false;
+    }
+    return true;
+  }
+
+  function changeLocalTime(value: string) {
+    if (!canEditDiaryCoordinates() || value === localTime) return;
+    dayReviewGeneration.current += 1;
+    setSelectedOccurredAt(null);
+    setLocalTime(value);
+  }
+
+  function chooseTimeOccurrence(occurredAt: string) {
+    if (
+      !canEditDiaryCoordinates() ||
+      timeResolution?.kind !== "ambiguous" ||
+      !timeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt) ||
+      selectedOccurredAt === occurredAt
+    )
+      return;
+    dayReviewGeneration.current += 1;
+    setSelectedOccurredAt(occurredAt);
   }
 
   function confirmDiaryDateReview() {
@@ -833,11 +888,21 @@ export function FoodSearchClient() {
       );
       return;
     }
+    if (!validateLocalTimeInput()) return;
+    try {
+      quickAddOccurredAt(diaryDate, timeZone, new Date(), localTime, selectedOccurredAt);
+    } catch (caught) {
+      setAddState("error");
+      setAddMessage(caught instanceof Error ? caught.message : "Review the local diary time.");
+      return;
+    }
     dayReviewGeneration.current += 1;
     setDateReviewRequired(false);
     setAddState("idle");
     setAddMessage(
-      `${diaryDate} is confirmed as a local diary day in ${timeZone}. Choose Add when ready.`,
+      localTime === ""
+        ? `${diaryDate} is confirmed as a local diary day in ${timeZone}. Choose Add when ready.`
+        : `${diaryDate} at ${localTime} is confirmed in ${timeZone}. Choose Add when ready.`,
     );
   }
 
@@ -1022,14 +1087,28 @@ export function FoodSearchClient() {
             <input
               id="quick-add-date"
               onChange={(event) => {
-                if (isLocalDate(event.target.value)) {
+                if (isLocalDate(event.target.value) && event.target.value !== diaryDate) {
                   dateEdited.current = true;
                   dayReviewGeneration.current += 1;
                   setDiaryDate(event.target.value);
+                  setSelectedOccurredAt(null);
                 }
               }}
               type="date"
               value={diaryDate}
+            />
+          </label>
+          <label htmlFor="quick-add-time">
+            Local time (optional)
+            <input
+              ref={localTimeInput}
+              id="quick-add-time"
+              type="time"
+              step={60}
+              value={localTime}
+              disabled={!canEditDiaryCoordinates()}
+              onChange={(event) => changeLocalTime(event.target.value)}
+              aria-describedby="quick-add-time-help"
             />
           </label>
           <label htmlFor="quick-add-meal">
@@ -1060,7 +1139,7 @@ export function FoodSearchClient() {
                 key={label}
                 aria-label={`Set diary date to ${label.toLowerCase()}`}
                 className="buttonQuiet"
-                disabled={!canChooseRecentDiaryDate()}
+                disabled={!canEditDiaryCoordinates()}
                 onClick={() => chooseRecentDiaryDate(offset)}
                 type="button"
               >
@@ -1069,6 +1148,28 @@ export function FoodSearchClient() {
             ))}
           </div>
           <Link href="/login">Account</Link>
+          <small id="quick-add-time-help">
+            Uses {timeZone ?? "your verified profile zone"}. Leave time blank for the current
+            instant today or noon on another day.
+          </small>
+          {timeResolution?.kind === "ambiguous" ? (
+            <fieldset className="entryActions" disabled={!canEditDiaryCoordinates()}>
+              <legend>Repeated food time</legend>
+              <small>Choose Earlier or Later for this repeated local minute.</small>
+              {timeResolution.candidates.map((candidate, index) => (
+                <button
+                  key={candidate.occurredAt}
+                  aria-pressed={selectedOccurredAt === candidate.occurredAt}
+                  className="buttonQuiet"
+                  disabled={!canEditDiaryCoordinates()}
+                  onClick={() => chooseTimeOccurrence(candidate.occurredAt)}
+                  type="button"
+                >
+                  {index === 0 ? "Earlier" : "Later"} occurrence · {candidate.utcOffsetLabel}
+                </button>
+              ))}
+            </fieldset>
+          ) : null}
           {dateReviewRequired ? (
             <button
               className="quickAddButton"
@@ -1076,7 +1177,9 @@ export function FoodSearchClient() {
               onClick={confirmDiaryDateReview}
               type="button"
             >
-              Confirm {diaryDate} as local day
+              {localTime !== "" && timeZone
+                ? `Confirm ${diaryDate} at ${localTime} in ${timeZone}`
+                : `Confirm ${diaryDate} as local day`}
             </button>
           ) : null}
         </fieldset>
