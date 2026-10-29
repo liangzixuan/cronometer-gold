@@ -4483,3 +4483,127 @@ describe("My foods exact saved log receipt", () => {
     },
   );
 });
+
+async function customConfirmationWorkspace() {
+  const { state, writes, fetcher } = workspace([food()]);
+  state.cursor = "next";
+  const reply = { value: (init: RequestInit) => Promise.resolve(logReceipt(init)) };
+  state.write = (_url, init) => reply.value(init);
+  await mount();
+  await prepareLog();
+  return { state, writes, fetcher, reply };
+}
+function confirmedCustomTime() {
+  return requiredCustom(elements().find((node) => node.type === "time"));
+}
+function requiredCustom<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Expected saved confirmation or submitted request.");
+  return value;
+}
+function confirmedCustomLink(day = "2026-09-09") {
+  return requiredCustom(
+    elements().find(
+      (node) => text(node) === `Open diary for ${day}` && typeof node.props.href === "string",
+    ),
+  );
+}
+
+describe("My foods saved-time confirmation", () => {
+  it.each([
+    ["Earlier occurrence · UTC−05:00", "2026-11-01T06:30:00.000Z", "01:30:00 GMT-05:00"],
+    ["Later occurrence · UTC−06:00", "2026-11-01T07:30:00.000Z", "01:30:00 GMT-06:00"],
+  ])("shows the saved %s clock and exact instant", async (choice, instant, clock) => {
+    const { writes } = await customConfirmationWorkspace();
+    await change("Local date", "2026-11-01");
+    await change("Local time", "01:30");
+    await click(choice);
+    await submit("Log exact version");
+    expect(confirmedCustomTime().props.dateTime).toBe(instant);
+    expect(text(confirmedCustomTime())).toBe(clock);
+    expect(text()).toContain("America/Chicago");
+    expect(text()).toContain("Saved food 1 v1");
+    expect(confirmedCustomLink("2026-11-01").props.href).toBe("/dashboard?date=2026-11-01");
+    expect(writes()).toHaveLength(1);
+    expect(
+      elements().filter(
+        (node) =>
+          (node.props["aria-live"] || node.props.role === "status") &&
+          text(node).includes("Recorded at"),
+      ),
+    ).toHaveLength(0);
+  });
+  it("shows the original instant after exact replay with an equivalent response offset", async () => {
+    const { writes, reply } = await customConfirmationWorkspace();
+    reply.value = async () => Response.json({ error: "Lost response" }, { status: 503 });
+    await submit("Log exact version");
+    reply.value = async (init) => {
+      const receipt = matchedLogData(init, true);
+      receipt.data.entry.occurredAt = "2026-09-09T13:14:00-05:00";
+      return Response.json(receipt);
+    };
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+    expect(text(confirmedCustomTime())).toBe("13:14:00 GMT-05:00");
+    expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+  });
+  it("keeps the saved time, name and link independent of new log/editor drafts and an uncertain write", async () => {
+    const { writes, reply } = await customConfirmationWorkspace();
+    await submit("Log exact version");
+    const savedTime = confirmedCustomTime().props.dateTime;
+    await click("Revise", card(food()));
+    await change("Name", "Unsaved later name");
+    await prepareLog();
+    await change("Local date", "2026-09-10");
+    await change("Local time", "17:45");
+    await change("Exact quantity", "3.5");
+    reply.value = async () => Response.json({ error: "Later response lost" }, { status: 503 });
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(2);
+    expect(confirmedCustomTime().props.dateTime).toBe(savedTime);
+    expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+    expect(field("Name").props.value).toBe("Unsaved later name");
+    expect(field("Local date").props.value).toBe("2026-09-10");
+    expect(text()).toContain("Saved food 1 v1");
+  });
+  it.each(["uncertain", "unrelated"])(
+    "creates no saved-time confirmation for an %s response",
+    async (kind) => {
+      const { reply } = await customConfirmationWorkspace();
+      reply.value = async (init) =>
+        kind === "uncertain"
+          ? Response.json({ error: "Lost" }, { status: 503 })
+          : Response.json({
+              ...matchedLogData(init),
+              data: { ...matchedLogData(init).data, entry: null },
+            });
+      await submit("Log exact version");
+      expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
+      expect(text()).not.toContain("Recorded at");
+    },
+  );
+  it("clears private confirmation when another account owns the next session", async () => {
+    const { state } = await customConfirmationWorkspace();
+    await submit("Log exact version");
+    expect(confirmedCustomTime()).toBeDefined();
+    state.owner = otherOwner;
+    state.continuation = () => page([]);
+    await click("Load more private foods");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
+    expect(text()).not.toContain("Recorded at");
+  });
+  it("ignores a matching delayed response after unmount", async () => {
+    const { writes, reply } = await customConfirmationWorkspace();
+    const pending = deferred<Response>();
+    reply.value = () => pending.promise;
+    await submit("Log exact version");
+    hooks.unmount();
+    const updates = hooks.afterClose();
+    pending.resolve(logReceipt(writes()[0]?.[1]));
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(updates);
+    expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
+  });
+});

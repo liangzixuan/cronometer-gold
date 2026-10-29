@@ -226,6 +226,11 @@ private food identity and version, portion, meal, exact instant, profile time zo
 and local day. Its affected-day receipt must identify that one day. An absent or
 unrelated receipt keeps the raw log draft and the exact request for explicit retry.
 A matching normal or replayed receipt closes the log form and retires that request.
+Keep its saved food name and version, meal, local day, clock, UTC offset and IANA
+zone visible after the form closes. The semantic time retains the exact submitted
+instant, and the diary link keeps the confirmed day. Later log or editor drafts
+and failed writes do not change this confirmation. Private-session closure clears
+it. Keep the existing live status announcement without a second live region.
 
 ## Food diary date choices
 

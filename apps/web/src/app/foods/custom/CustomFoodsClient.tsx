@@ -209,6 +209,22 @@ export function CustomFoodsClient() {
   const renderedRouteDestination = routeDestination.current;
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your personal foods…");
+  const [logConfirmation, setLogConfirmation] = useState<{
+    readonly occurredAt: string;
+    readonly timeZone: string;
+    readonly localDate: string;
+    readonly message: string;
+  } | null>(null);
+  const recordedLogTime = logConfirmation
+    ? new Intl.DateTimeFormat("en-GB", {
+        timeZone: logConfirmation.timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        timeZoneName: "longOffset",
+      }).format(new Date(logConfirmation.occurredAt))
+    : null;
   const [session, setSessionState] = useState<SessionSummary | null>(null);
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
   const nutrientRegistry = useRef<{
@@ -663,6 +679,7 @@ export function CustomFoodsClient() {
     profileRefreshController.current?.abort();
     ownerUserId.current = null;
     operations.current.clear();
+    setLogConfirmation(null);
     setSession(null);
     nutrientRegistry.current = null;
     setNutrients([]);
@@ -1408,6 +1425,12 @@ export function CustomFoodsClient() {
       if (!ownsDraft()) return;
       if (operations.current.get(key) === exactOperationId) operations.current.delete(key);
       replaceCustomLog(null);
+      setLogConfirmation({
+        occurredAt: body.occurredAt,
+        timeZone: session.profile.timeZone,
+        localDate: mutation.entry.localDate,
+        message: `${customLog.food.currentVersion.name} v${customLog.food.currentVersion.versionNumber} logged to ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${mutation.entry.localDate}.`,
+      });
       setMessage(
         `Pinned private food version logged to ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${mutation.entry.localDate}.`,
       );
@@ -1572,6 +1595,21 @@ export function CustomFoodsClient() {
         <p className={`diaryStatus diaryStatus--${state}`} role="status" aria-live="polite">
           {message}
         </p>
+        {logConfirmation ? (
+          <div className="foodAddConfirmation">
+            <p>{logConfirmation.message}</p>
+            <p>
+              Recorded at <time dateTime={logConfirmation.occurredAt}>{recordedLogTime}</time> in{" "}
+              {logConfirmation.timeZone}.
+            </p>
+            <Link
+              className="secondaryAction"
+              href={`/dashboard?date=${encodeURIComponent(logConfirmation.localDate)}`}
+            >
+              Open diary for {logConfirmation.localDate}
+            </Link>
+          </div>
+        ) : null}
         {state === "error" ? (
           <button className="secondaryAction" onClick={() => void loadFoods()} type="button">
             Retry private data
