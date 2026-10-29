@@ -216,6 +216,17 @@ while an addition is pending. An older route or closed page cannot change the
 date. A timezone conflict still requires confirmation of the chosen local day;
 Today and Yesterday do not supply that confirmation or discard an uncertain add.
 
+## Catalogue food meals
+
+Add uses the selected meal. A changed meal retires older Add and meal controls
+before the next view renders; restoring its old value does not revive them.
+Choosing the same meal keeps Add available. Meal edits keep the selected day,
+local time, repeated-minute choice and any required timezone review.
+
+The meal draft stays editable while the session loads or an earlier addition is
+pending. An unconfirmed addition keeps its original meal and exact retry request.
+An older route or closed page cannot replace the current meal.
+
 ## Catalogue food portions
 
 Logging uses the amount and unit currently displayed for that food. Older

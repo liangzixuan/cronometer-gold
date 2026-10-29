@@ -243,6 +243,8 @@ export function FoodSearchClient() {
   const sessionViewGeneration = sessionGeneration.current;
   const dateEdited = useRef(false);
   const mealEdited = useRef(false);
+  const mealGeneration = useRef(0);
+  const renderedMealGeneration = mealGeneration.current;
   const appliedDestination = useRef({ date: requestedDate, meal: requestedMeal });
   const [timeZone, setTimeZone] = useState<string | null>(null);
   const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
@@ -403,6 +405,7 @@ export function FoodSearchClient() {
         setDiaryDate(localDateInTimeZone(now, session.profile.timeZone));
       }
       if (!mealSlots.some((meal) => meal === requestedMeal) && !mealEdited.current) {
+        mealGeneration.current += 1;
         setMealSlot(
           defaultMealForHour(
             Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
@@ -676,6 +679,7 @@ export function FoodSearchClient() {
       (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== draftGeneration ||
       sessionStateRef.current !== "ready" ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
+      mealGeneration.current !== renderedMealGeneration ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       appliedSessionRoute.current !== sessionRouteRevision
     ) {
@@ -837,6 +841,20 @@ export function FoodSearchClient() {
         if (mounted.current) setAddingFoodVersion(null);
       }
     }
+  }
+
+  function changeDiaryMeal(value: MealSlot) {
+    if (
+      !mounted.current ||
+      sessionRoute.current.revision !== sessionRouteRevision ||
+      appliedSessionRoute.current !== sessionRouteRevision ||
+      mealGeneration.current !== renderedMealGeneration
+    )
+      return;
+    mealEdited.current = true;
+    if (value === mealSlot) return;
+    mealGeneration.current += 1;
+    setMealSlot(value);
   }
 
   function canEditDiaryCoordinates() {
@@ -1159,10 +1177,7 @@ export function FoodSearchClient() {
             Meal
             <select
               id="quick-add-meal"
-              onChange={(event) => {
-                mealEdited.current = true;
-                setMealSlot(event.target.value as MealSlot);
-              }}
+              onChange={(event) => changeDiaryMeal(event.target.value as MealSlot)}
               value={mealSlot}
             >
               {diaryGroups.map((group) => (

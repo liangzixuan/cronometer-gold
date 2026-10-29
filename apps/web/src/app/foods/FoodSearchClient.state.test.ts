@@ -2480,3 +2480,151 @@ describe("Current food portion draft actions", () => {
     });
   });
 });
+
+describe("Current food meal draft actions", () => {
+  async function ready() {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST")
+        return Response.json({ error: "Lost confirmation" }, { status: 503 });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("food-barcode", "012345678905");
+    const form = elements().find((node) => node.props.className === "barcodeForm");
+    if (!form) throw new Error("Missing barcode form");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    return fetcher;
+  }
+  function mealAdd(instance: string) {
+    const controls = elements().find(
+      (node) =>
+        node.type === "fieldset" &&
+        elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+    );
+    const add = controls && elements(controls).find((node) => node.type === "button");
+    if (!add) throw new Error("Missing Add");
+    return add;
+  }
+  it.each(["search", "barcode"])(
+    "rejects an old %s Add before a new meal renders",
+    async (instance) => {
+      const fetcher = await ready();
+      const oldAdd = mealAdd(instance);
+      invoke(field("quick-add-meal"), "onChange", { target: { value: "snacks" } });
+      invoke(oldAdd);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+      invoke(mealAdd(instance));
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body)).mealSlot).toBe("snacks");
+    },
+  );
+  it("retires an old meal input after editing and restoring its value", async () => {
+    await ready();
+    const oldMeal = field("quick-add-meal");
+    const initial = String(oldMeal.props.value);
+    await change("quick-add-meal", "snacks");
+    await change("quick-add-meal", initial);
+    invoke(oldMeal, "onChange", { target: { value: "snacks" } });
+    await hooks.settle();
+    expect(field("quick-add-meal").props.value).toBe(initial);
+  });
+  it.each(["route", "unmount"])("ignores meal actions retained across %s", async (retirement) => {
+    const fetcher = await ready();
+    const oldMeal = field("quick-add-meal");
+    const initial = oldMeal.props.value;
+    if (retirement === "route") {
+      route.query = "date=2026-09-25&meal=lunch";
+      hooks.renderWithoutEffects();
+    } else hooks.unmount();
+    invoke(oldMeal, "onChange", { target: { value: "snacks" } });
+    if (retirement === "route") hooks.render();
+    await hooks.settle();
+    expect(field("quick-add-meal").props.value).toBe(retirement === "route" ? "lunch" : initial);
+    expect(hooks.afterClose()).toBe(0);
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it("keeps same-value meal choices and the current Add usable", async () => {
+    const fetcher = await ready();
+    const add = mealAdd("search");
+    invoke(field("quick-add-meal"), "onChange", {
+      target: { value: field("quick-add-meal").props.value },
+    });
+    invoke(add);
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+  it("preserves the submitted meal and its exact retry while editing a pending meal draft", async () => {
+    const post = deferred<Response>();
+    const fetcher = await ready();
+    fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST")
+        return pendingPosts(fetcher).length === 1
+          ? post.promise
+          : Response.json({}, { status: 503 });
+      return publicResponse(url);
+    });
+    const initial = String(field("quick-add-meal").props.value);
+    invoke(mealAdd("search"));
+    await hooks.settle();
+    const original = pendingPosts(fetcher)[0]?.[1];
+    await change("quick-add-meal", "snacks");
+    expect(field("quick-add-meal").props.value).toBe("snacks");
+    post.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    await change("quick-add-meal", initial);
+    invoke(mealAdd("search"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(original?.body);
+    expect(posts[1]?.[1]?.headers).toEqual(original?.headers);
+    expect(JSON.parse(String(original?.body)).mealSlot).toBe(initial);
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+  it("keeps a meal selected while initial session discovery is pending", async () => {
+    route.query = "date=2026-09-24";
+    const auth = deferred<Response>();
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? auth.promise : publicResponse(url),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await change("quick-add-meal", "snacks");
+    auth.resolve(session());
+    await hooks.settle();
+    expect(field("quick-add-meal").props.value).toBe("snacks");
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it("keeps an explicitly chosen repeated minute after a meal edit", async () => {
+    const fetcher = await ready();
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    const later = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Later occurrence"),
+    );
+    if (!later) throw new Error("Missing Later occurrence");
+    invoke(later);
+    await hooks.settle();
+    await change("quick-add-meal", "snacks");
+    const chosen = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Later occurrence"),
+    );
+    expect(chosen?.props["aria-pressed"]).toBe(true);
+    invoke(mealAdd("search"));
+    await hooks.settle();
+    expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body))).toMatchObject({
+      mealSlot: "snacks",
+      occurredAt: "2026-11-01T07:30:00.000Z",
+    });
+  });
+});
