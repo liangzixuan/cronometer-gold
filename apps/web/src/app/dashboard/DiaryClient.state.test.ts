@@ -4340,7 +4340,9 @@ describe("Diary Delete admission", () => {
     vi.mocked(window.confirm).mockReturnValueOnce(false);
     const uuid = vi.spyOn(crypto, "randomUUID");
     await click("Delete Apple 0");
-    expect(window.confirm).toHaveBeenCalledWith("Delete Apple 0 from Breakfast?");
+    expect(window.confirm).toHaveBeenCalledWith(
+      "Delete Apple 0, 1.250000 × medium apple, from Breakfast on 2026-08-15 at 08:30:00 GMT-05:00 in America/Chicago?",
+    );
     expect(writes).toHaveLength(0);
     expect(uuid).not.toHaveBeenCalled();
     expect(button("Delete Apple 0").props.disabled).toBe(false);
@@ -4774,6 +4776,101 @@ describe("Diary saved-time More disclosure names", () => {
     expect(disclosures().map((node) => node.props.open)).toEqual([undefined, undefined]);
     expect(names()).toEqual(expected);
     expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+});
+
+describe("Diary deletion saved context", () => {
+  it.each([
+    ["2026-11-01T06:30:45.123456Z", "America/Chicago", "01:30:45 GMT-05:00", "1.250000"],
+    ["2026-11-01T07:30:45.123Z", "America/Chicago", "01:30:45 GMT-06:00", "2.500000"],
+    ["2026-11-01T12:30:45.000Z", "Asia/Tokyo", "21:30:45 GMT+09:00", "1.250000"],
+  ])(
+    "confirms saved %s in %s before allocating a deletion",
+    async (instant, zone, clock, amount) => {
+      route.date = "2026-11-01";
+      const saved = recordedDiaryEntry(0, instant, zone, clock.slice(0, 8));
+      saved.portion.amount = amount;
+      const fixture = page([saved], null, 1, "2026-11-01");
+      parseDiaryPage(fixture);
+      const original = JSON.stringify(fixture);
+      const fetch = await mount(fetcher(fixture));
+      const requests = fetch.mock.calls.length;
+      expect(text()).toContain("Apple 0");
+      vi.mocked(window.confirm).mockReturnValueOnce(false);
+      const uuid = vi.spyOn(crypto, "randomUUID");
+      await click("Delete Apple 0");
+      expect(window.confirm).toHaveBeenCalledExactlyOnceWith(
+        `Delete Apple 0, ${amount} × medium apple, from Breakfast on 2026-11-01 at ${clock} in ${zone}?`,
+      );
+      expect(uuid).not.toHaveBeenCalled();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(button("Delete Apple 0").props.disabled).toBe(false);
+      expect(JSON.stringify(fixture)).toBe(original);
+      uuid.mockRestore();
+    },
+  );
+
+  it("distinguishes duplicate Earlier and Later confirmations and keeps the selected retry exact", async () => {
+    route.date = "2026-11-01";
+    const sameName = { name: "Same food", brandName: null };
+    const early = {
+      ...recordedDiaryEntry(0, "2026-11-01T06:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: sameName,
+    };
+    const late = {
+      ...recordedDiaryEntry(1, "2026-11-01T07:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: sameName,
+    };
+    const fixture = page([early, late], null, 2, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const writes: { url: string; headers: Record<string, string> }[] = [];
+    const base = fetcher(fixture);
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        writes.push({ url, headers: Object.fromEntries(new Headers(init.headers)) });
+        return Response.json({ error: "Response unavailable." }, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const requests = fetch.mock.calls.length;
+    const controls = () =>
+      elements().filter(
+        (node) => node.type === "button" && node.props["aria-label"] === "Delete Same food",
+      );
+    const prompts = ["GMT-05:00", "GMT-06:00"].map(
+      (offset) =>
+        `Delete Same food, 1.250000 × medium apple, from Breakfast on 2026-11-01 at 01:30:00 ${offset} in America/Chicago?`,
+    );
+    const invokeControl = (index: number) => {
+      const control = controls()[index];
+      if (!control) throw new Error("Expected the selected deletion control.");
+      invoke(control);
+    };
+    expect(controls()).toHaveLength(2);
+    for (const index of [0, 1]) {
+      vi.mocked(window.confirm).mockReturnValueOnce(false);
+      invokeControl(index);
+      await hooks.settle();
+      expect(window.confirm).toHaveBeenLastCalledWith(prompts[index]);
+    }
+    expect(writes).toHaveLength(0);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    invokeControl(1);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.url).toBe(`/api/diary/entries/${late.id}?date=2026-11-01`);
+    expect(writes[0]?.headers["if-match"]).toBe('"3"');
+    expect(writes[0]?.headers["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(window.confirm).toHaveBeenLastCalledWith(prompts[1]);
+    invokeControl(1);
+    await hooks.settle();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(window.confirm).toHaveBeenLastCalledWith(prompts[1]);
+    expect(fetch.mock.calls).toHaveLength(requests + 2);
     expect(JSON.stringify(fixture)).toBe(original);
   });
 });

@@ -1317,7 +1317,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       !diary ||
       !canDeleteEntry(entry) ||
       !window.confirm(
-        `Delete ${entryName(entry)} from ${diaryGroupLabel(diaryGroups, entry.mealSlot)}?`,
+        `Delete ${entryName(entry)}, ${entryPortionLabel(entry)}, from ${diaryGroupLabel(diaryGroups, entry.mealSlot)} on ${entry.localDate} at ${entryRecordedTime(entry)} in ${entry.timeZone}?`,
       ) ||
       !canDeleteEntry(entry)
     ) {

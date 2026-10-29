@@ -106,6 +106,11 @@ IANA zone. Users can identify identical food entries before opening their action
 Keep native details/summary behavior and the existing forced-open repeat form;
 the label does not add requests or change the selected entry.
 
+Deletion confirmation names the food, saved portion, date, clock with seconds,
+UTC offset and IANA zone, with the configured meal name. Identical Earlier and
+Later entries remain distinct before deletion. Cancelling creates no request or
+operation identity; an uncertain deletion keeps its exact retry.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the
