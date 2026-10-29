@@ -2592,8 +2592,21 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                             <section
                                               className="entryEditor"
                                               aria-label={`Repeat destination for ${entryName(entry)}`}
+                                              aria-describedby={`entry-repeat-source-${entry.id}`}
                                             >
                                               <h3>Repeat {entryName(entry)} to…</h3>
+                                              <p
+                                                className="fieldHelp"
+                                                id={`entry-repeat-source-${entry.id}`}
+                                              >
+                                                Repeating {entryName(entry)},{" "}
+                                                {entryPortionLabel(entry)}, logged on{" "}
+                                                {entry.localDate} at{" "}
+                                                <time dateTime={entry.occurredAt}>
+                                                  {entryRecordedTime(entry)}
+                                                </time>{" "}
+                                                in {entry.timeZone}. Choose the destination below.
+                                              </p>
                                               <label>
                                                 Repeat date
                                                 <input

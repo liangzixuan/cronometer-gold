@@ -5070,3 +5070,104 @@ describe("Diary logout closed-page ownership", () => {
     expect(hooks.afterClose()).toBe(0);
   });
 });
+
+describe("Diary repeat saved source context", () => {
+  function savedContext(id: string) {
+    const section = elements().find(
+      (node) =>
+        node.type === "section" && node.props["aria-describedby"] === `entry-repeat-source-${id}`,
+    );
+    if (!section) throw new Error("Missing saved source context in Repeat destination.");
+    const summary = elements(section).find(
+      (node) => node.type === "p" && node.props.id === `entry-repeat-source-${id}`,
+    );
+    if (!summary) throw new Error("Missing visible repeat source summary.");
+    return { section, summary };
+  }
+
+  it.each([
+    ["2026-11-01T06:30:45.123456Z", "America/Chicago", "01:30:45 GMT-05:00"],
+    ["2026-11-01T07:30:45.123Z", "America/Chicago", "01:30:45 GMT-06:00"],
+    ["2026-11-01T12:30:45.000Z", "Asia/Tokyo", "21:30:45 GMT+09:00"],
+  ])("keeps saved %s in %s visible through destination changes", async (instant, zone, clock) => {
+    route.date = "2026-11-01";
+    const saved = recordedDiaryEntry(0, instant, zone, clock.slice(0, 8));
+    const fixture = page([saved], null, 1, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    await click("Repeat Apple 0 to another day or meal");
+    const { section, summary } = savedContext(saved.id);
+    const expected = `Repeating Apple 0, 1.250000 × medium apple, logged on 2026-11-01 at ${clock} in ${zone}. Choose the destination below.`;
+    expect(section.props["aria-label"]).toBe("Repeat destination for Apple 0");
+    expect(text(summary)).toBe(expected);
+    const time = elements(summary).find((node) => node.type === "time");
+    expect(time?.props.dateTime).toBe(instant);
+    expect(text(time ?? null)).toBe(clock);
+    expect(section.props["aria-live"]).toBeUndefined();
+    expect(summary.props.role).toBeUndefined();
+    await change("Repeat date", "2026-11-02");
+    await change("Repeat meal", "lunch");
+    expect(field("Repeat date").props.value).toBe("2026-11-02");
+    expect(field("Repeat meal").props.value).toBe("lunch");
+    expect(text(savedContext(saved.id).summary)).toBe(expected);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    await click("Cancel repeat destination");
+    expect(elements().some((node) => node.props.id === `entry-repeat-source-${saved.id}`)).toBe(
+      false,
+    );
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("keeps identical Earlier and Later sources distinct when switching repeat forms", async () => {
+    route.date = "2026-11-01";
+    const early = {
+      ...recordedDiaryEntry(0, "2026-11-01T06:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: { name: "Same food", brandName: null },
+    };
+    const late = {
+      ...recordedDiaryEntry(1, "2026-11-01T07:30:00.000Z", "America/Chicago", "01:30:00"),
+      food: { name: "Same food", brandName: null },
+    };
+    const fixture = page([early, late], null, 2, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    for (const [index, saved, offset] of [
+      [0, early, "GMT-05:00"],
+      [1, late, "GMT-06:00"],
+    ] as const) {
+      const actions = elements().filter(
+        (node) =>
+          node.type === "button" &&
+          node.props["aria-label"] === "Repeat Same food to another day or meal",
+      );
+      expect(actions).toHaveLength(2);
+      const action = actions[index];
+      if (!action) throw new Error("Missing source repeat action.");
+      invoke(action);
+      await hooks.settle();
+      const { summary } = savedContext(saved.id);
+      expect(text(summary)).toBe(
+        `Repeating Same food, 1.250000 × medium apple, logged on 2026-11-01 at 01:30:00 ${offset} in America/Chicago. Choose the destination below.`,
+      );
+      expect(elements(summary).find((node) => node.type === "time")?.props.dateTime).toBe(
+        saved.occurredAt,
+      );
+      expect(
+        elements().filter(
+          (node) => node.type === "p" && String(node.props.id).startsWith("entry-repeat-source-"),
+        ),
+      ).toHaveLength(1);
+      await click("Cancel repeat destination");
+      expect(elements().some((node) => node.props.id === `entry-repeat-source-${saved.id}`)).toBe(
+        false,
+      );
+    }
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+});

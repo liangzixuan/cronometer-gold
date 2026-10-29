@@ -124,6 +124,12 @@ a semantic time element retains the original precise instant. The summary uses
 the saved snapshot through draft changes and uncertain retries. Cancel restores
 the row without an extra request.
 
+The Repeat destination section names and describes its saved source above the
+new date and meal fields. Show the saved food, portion, date, clock with seconds,
+UTC offset and IANA zone, with the precise instant in semantic time. Destination
+changes cannot relabel that source. Identical Earlier and Later entries retain
+their own context; Cancel closes the form without a request.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the
