@@ -269,6 +269,8 @@ export function FoodSearchClient() {
   const dayReviewGeneration = useRef(0);
   const renderedDayReviewGeneration = dayReviewGeneration.current;
   const [query, setQuery] = useState("");
+  const searchDraftGeneration = useRef(0);
+  const renderedSearchDraftGeneration = searchDraftGeneration.current;
   const [intent, setIntent] = useState<FoodSearchIntent>("all");
   const [suggestions, setSuggestions] = useState<readonly FoodAutocompleteSuggestion[]>([]);
   const [suggestionState, setSuggestionState] = useState<LoadState>("idle");
@@ -556,9 +558,20 @@ export function FoodSearchClient() {
     setSuggestionState("idle");
   }
 
+  function currentSearchDraft() {
+    return mounted.current && searchDraftGeneration.current === renderedSearchDraftGeneration;
+  }
+
+  function changeQuery(value: string) {
+    if (!currentSearchDraft() || value === query) return;
+    autocompleteController.current?.abort();
+    searchDraftGeneration.current += 1;
+    setQuery(value);
+  }
+
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!mounted.current) return;
+    if (!currentSearchDraft()) return;
     closeSuggestions(query);
     void runSearch(query);
   }
@@ -578,14 +591,16 @@ export function FoodSearchClient() {
       selectedQuery += character;
     }
     selectedQuery = selectedQuery.trimEnd();
+    searchDraftGeneration.current += 1;
     closeSuggestions(selectedQuery);
     setQuery(selectedQuery);
     void runSearch(selectedQuery);
   }
 
   function chooseIntent(nextIntent: FoodSearchIntent) {
-    if (!mounted.current) return;
-    if (nextIntent !== intent) autocompleteController.current?.abort();
+    if (!currentSearchDraft() || nextIntent === intent) return;
+    searchDraftGeneration.current += 1;
+    autocompleteController.current?.abort();
     searchController.current?.abort();
     setIntent(nextIntent);
     setResults([]);
@@ -1120,11 +1135,7 @@ export function FoodSearchClient() {
                 autoComplete="off"
                 id="food-query"
                 maxLength={128}
-                onChange={(event) => {
-                  if (!mounted.current || event.target.value === query) return;
-                  autocompleteController.current?.abort();
-                  setQuery(event.target.value);
-                }}
+                onChange={(event) => changeQuery(event.target.value)}
                 placeholder="Try banana, lentils, or a brand"
                 type="search"
                 value={query}
@@ -1345,7 +1356,9 @@ export function FoodSearchClient() {
           <button
             className="loadMoreButton"
             disabled={searchState === "loading"}
-            onClick={() => void runSearch(lastSearchQuery, nextCursor)}
+            onClick={() => {
+              if (currentSearchDraft()) void runSearch(lastSearchQuery, nextCursor);
+            }}
             type="button"
           >
             {searchState === "loading" ? "Loading…" : "Load more results"}

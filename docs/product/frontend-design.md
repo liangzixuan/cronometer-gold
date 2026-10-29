@@ -286,6 +286,12 @@ and exact quantity. Do not parse the signed-out response or repeat the add.
 Profile responses from an older destination or closed page must not change the
 current timezone, diary groups or sign-in state.
 
+Manual Search uses the current raw query and food type. Changed query or type
+retires older forms, input/type controls and pagination before the next view
+renders, including after edit-and-restore. A suggestion selection also retires
+its previous manual form. Same-value query/type actions keep the current form,
+results and in-flight read available. Typing alone does not submit a search.
+
 A suggestion belongs to the query and food type that produced it. Changing either
 retires that suggestion before the next view renders; restoring the query does
 not revive it. A same-value query edit keeps it usable. Choosing a suggestion or

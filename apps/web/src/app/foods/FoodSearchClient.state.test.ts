@@ -2971,3 +2971,162 @@ describe("Current barcode draft actions", () => {
     expect(operationId).not.toHaveBeenCalled();
   });
 });
+
+describe("Current public search draft actions", () => {
+  function form() {
+    const result = elements().find(
+      (node) => node.type === "form" && node.props["aria-label"] === "Food search",
+    );
+    if (!result) throw new Error("Missing search form");
+    return result;
+  }
+  function submit(node: ElementNode) {
+    invoke(node, "onSubmit", { preventDefault() {} });
+  }
+  function radio(value: string) {
+    const result = elements().find(
+      (node) => node.props.name === "food-intent" && node.props.value === value,
+    );
+    if (!result) throw new Error("Missing intent");
+    return result;
+  }
+  function reads(fetcher: ReturnType<typeof vi.fn>) {
+    return fetcher.mock.calls.filter(([url]) => String(url).startsWith("/api/foods/search?"));
+  }
+  async function ready() {
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return session();
+      if (url.startsWith("/api/foods/search?"))
+        return Response.json({ data: [hit], page: { nextCursor: "draft_cursor" } });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await change("food-query", "apple");
+    return fetcher;
+  }
+  it("rejects an old search form before new text renders and uses the fresh form", async () => {
+    const fetcher = await ready();
+    const old = form();
+    invoke(field("food-query"), "onChange", { target: { value: "pear" } });
+    submit(old);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(0);
+    submit(form());
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(1);
+    expect(
+      new URL(String(reads(fetcher)[0]?.[0]), "https://fixture.invalid").searchParams.get("query"),
+    ).toBe("pear");
+  });
+  it("does not revive an old form after query edit-and-restore", async () => {
+    const fetcher = await ready();
+    const old = form();
+    await change("food-query", "pear");
+    await change("food-query", "apple");
+    submit(old);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(0);
+  });
+  it("does not let an old query input overwrite a restored draft", async () => {
+    await ready();
+    const old = field("food-query");
+    await change("food-query", "pear");
+    await change("food-query", "apple");
+    invoke(old, "onChange", { target: { value: "banana" } });
+    await hooks.settle();
+    expect(field("food-query").props.value).toBe("apple");
+  });
+  it("rejects an old form before a changed food type renders", async () => {
+    const fetcher = await ready();
+    const old = form();
+    invoke(radio("generic"), "onChange");
+    submit(old);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(0);
+    submit(form());
+    await hooks.settle();
+    expect(
+      new URL(String(reads(fetcher)[0]?.[0]), "https://fixture.invalid").searchParams.get("intent"),
+    ).toBe("generic");
+  });
+  it("does not revive an old type control after type edit-and-restore", async () => {
+    await ready();
+    const old = radio("generic");
+    invoke(old, "onChange");
+    await hooks.settle();
+    invoke(radio("all"), "onChange");
+    await hooks.settle();
+    invoke(old, "onChange");
+    await hooks.settle();
+    expect(radio("all").props.checked).toBe(true);
+  });
+  it("keeps a suggestion search from being replaced by its old manual form", async () => {
+    const fetcher = await ready();
+    const old = form();
+    for (const callback of timers.values()) callback();
+    timers.clear();
+    await hooks.settle();
+    const suggestion = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Apple Pie"),
+    );
+    if (!suggestion) throw new Error("Missing suggestion");
+    invoke(suggestion);
+    submit(old);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(1);
+    expect(
+      new URL(String(reads(fetcher)[0]?.[0]), "https://fixture.invalid").searchParams.get("query"),
+    ).toBe("Apple Pie");
+  });
+  it("ignores pagination retained before changing food type", async () => {
+    const fetcher = await ready();
+    submit(form());
+    await hooks.settle();
+    const old = button("Load more results");
+    invoke(radio("generic"), "onChange");
+    invoke(old);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(1);
+    expect(text()).not.toContain("1 result shown");
+  });
+  it("keeps results and current form after choosing the same food type", async () => {
+    const fetcher = await ready();
+    submit(form());
+    await hooks.settle();
+    const current = form();
+    invoke(radio("all"), "onChange");
+    await hooks.settle();
+    expect(text()).toContain("1 result shown");
+    submit(current);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(2);
+  });
+  it("keeps the form usable after a same-value query event", async () => {
+    const fetcher = await ready();
+    const current = form();
+    invoke(field("food-query"), "onChange", { target: { value: "apple" } });
+    submit(current);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(1);
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it("retires its manual form even when a chosen suggestion equals the typed query", async () => {
+    const fetcher = await ready();
+    await change("food-query", "Apple Pie");
+    for (const callback of timers.values()) callback();
+    timers.clear();
+    await hooks.settle();
+    const old = form();
+    const suggestion = elements().find(
+      (node) => node.type === "button" && text(node).startsWith("Apple Pie"),
+    );
+    if (!suggestion) throw new Error("Missing suggestion");
+    invoke(suggestion);
+    submit(old);
+    await hooks.settle();
+    expect(reads(fetcher)).toHaveLength(1);
+    expect(field("food-query").props.value).toBe("Apple Pie");
+  });
+});
