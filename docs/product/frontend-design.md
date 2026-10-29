@@ -73,6 +73,12 @@ sign-out still works during session recovery, and an unconfirmed attempt keeps
 the existing retry path. Restarted effects clear only a retired logout busy state
 so a fresh sign-out remains available.
 
+Load more belongs to the loaded page, selected route and verified account that
+presented it. Closed or replaced pages and completed or failed continuation
+attempts retire their old callbacks. A pending correction blocks pagination.
+Only a current continuation can append rows or handle session expiry; a fresh
+retry keeps the existing cursor and coherent-page checks.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

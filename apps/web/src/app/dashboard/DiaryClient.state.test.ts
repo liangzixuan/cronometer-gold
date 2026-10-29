@@ -5171,3 +5171,149 @@ describe("Diary repeat saved source context", () => {
     expect(JSON.stringify(fixture)).toBe(original);
   });
 });
+
+describe("Diary pagination owns current page", () => {
+  function firstPage(total = 21) {
+    const fixture = page(
+      Array.from({ length: 20 }, (_, index) => entry(index)),
+      "d1.next-page",
+      total,
+    );
+    parseDiaryPage(fixture);
+    return fixture;
+  }
+
+  it.each(["unmount", "confirmed closure"] as const)(
+    "ignores retained Load more after %s",
+    async (transition) => {
+      const base = fetcher(firstPage());
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url === "/api/auth/logout"
+          ? Promise.resolve(new Response(null, { status: 204 }))
+          : base(url, init),
+      );
+      await mount(fetch);
+      const old = button("Load more");
+      if (transition === "unmount") hooks.unmount();
+      else await click("Sign out");
+      const requests = fetch.mock.calls.length;
+      const before = text();
+      const routes = router.replace.mock.calls.slice();
+      invoke(old);
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(text()).toBe(before);
+      expect(router.replace.mock.calls).toEqual(routes);
+      expect(hooks.afterClose()).toBe(0);
+    },
+  );
+
+  it.each(["route", "owner"] as const)(
+    "rejects old Load more after %s replacement before effects",
+    async (transition) => {
+      const fetch = await mount(fetcher(firstPage()));
+      const old = button("Load more");
+      if (transition === "route") {
+        route.date = "2026-08-16";
+        hooks.renderWithoutEffects();
+      } else hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+      const requests = fetch.mock.calls.length;
+      const before = text();
+      invoke(old);
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(text()).toBe(before);
+    },
+  );
+
+  it("retires old callbacks after failure and append while fresh cursor retries keep working", async () => {
+    const base = fetcher(firstPage(41));
+    let calls = 0;
+    const urls: string[] = [];
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("cursor=")) {
+        urls.push(url);
+        calls += 1;
+        if (calls === 1) return Response.json({ error: "Retry page." }, { status: 503 });
+        return Response.json(
+          calls === 2
+            ? page(
+                Array.from({ length: 20 }, (_, index) => entry(index + 20)),
+                "d1.last-page",
+                41,
+              )
+            : page([entry(40)], null, 41),
+        );
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const old = button("Load more");
+    await click("Load more");
+    expect(text()).toContain("Loaded entries remain available");
+    invoke(old);
+    await hooks.settle();
+    expect(calls).toBe(1);
+    const retry = button("Retry load more");
+    await click("Retry load more");
+    expect(text()).toContain("40 of 41 entries loaded");
+    invoke(retry);
+    invoke(old);
+    await hooks.settle();
+    expect(calls).toBe(2);
+    await click("Load more");
+    expect(calls).toBe(3);
+    expect(urls[1]).toBe(urls[0]);
+    expect(new URL(urls[2] ?? "", "https://app.example.test").searchParams.get("cursor")).toBe(
+      "d1.last-page",
+    );
+    expect(text()).toContain("41 of 41 entries loaded");
+    expect(text()).toContain("Apple 40");
+  });
+
+  it.each([200, 401])(
+    "ignores pending continuation %s after owner replacement before effects",
+    async (status) => {
+      const pending = deferred<Response>();
+      const base = fetcher(firstPage());
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url.includes("cursor=") ? pending.promise : base(url, init),
+      );
+      await mount(fetch);
+      await click("Load more");
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+      const before = text();
+      const routes = router.replace.mock.calls.slice();
+      pending.resolve(
+        status === 200
+          ? Response.json(page([entry(20)], null, 21))
+          : new Response(null, { status: 401 }),
+      );
+      await hooks.settle();
+      expect(text()).toBe(before);
+      expect(router.replace.mock.calls).toEqual(routes);
+      expect(fetch.mock.calls.filter(([url]) => url.includes("cursor="))).toHaveLength(1);
+    },
+  );
+
+  it("does not let retained Load more interrupt a pending correction", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher(firstPage());
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      init?.method === "PATCH" ? pending.promise : base(url, init),
+    );
+    await mount(fetch);
+    const old = button("Load more");
+    await click("Edit Apple 0");
+    await changeEditorField("Quantity", "2.250000");
+    await click("Save changes to Apple 0");
+    const requests = fetch.mock.calls.length;
+    invoke(old);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(editorField("Quantity").props.value).toBe("2.250000");
+    pending.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(editorField("Quantity").props.value).toBe("2.250000");
+    expect(button("Save changes to Apple 0").props.disabled).toBe(false);
+  });
+});

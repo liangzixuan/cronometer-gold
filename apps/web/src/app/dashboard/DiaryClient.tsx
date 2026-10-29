@@ -999,7 +999,21 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   async function loadMore() {
     const current = diaryPage;
     const nextCursor = current?.page.nextCursor;
+    const ownsCurrentPage = () =>
+      sessionActive.current &&
+      !privateUiClosed.current &&
+      session !== null &&
+      sessionRef.current?.user.id === session.user.id &&
+      sessionRef.current?.profile.timeZone === session.profile.timeZone &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      viewEpoch.current === mealViewEpoch &&
+      explicitDateRef.current === explicitDate &&
+      dateRef.current === date &&
+      diaryPageRef.current === current;
     if (
+      !ownsCurrentPage() ||
+      requestGeneration.current !== mealRequestGeneration ||
+      activeMutation.current !== null ||
       !current ||
       current.data.localDate !== date ||
       nextCursor === null ||
@@ -1015,10 +1029,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const controller = new AbortController();
     loadController.current = controller;
     const isCurrent = () =>
+      ownsCurrentPage() &&
       requestGeneration.current === generation &&
       loadController.current === controller &&
-      !controller.signal.aborted &&
-      dateRef.current === requestedDate;
+      !controller.signal.aborted;
     setPageState("loading");
     setMessage(`Loading more entries for ${requestedDate}…`);
     try {
