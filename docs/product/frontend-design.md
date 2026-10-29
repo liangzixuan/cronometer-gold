@@ -80,6 +80,15 @@ Fresh controls allow editing again after the failure. A confirmed matching recei
 closes the editor and refreshes the affected day. Existing conflict recovery,
 owner checks, private-session closure and immutable entry history remain intact.
 
+## Diary recorded times
+
+Each loaded entry shows its saved local clock with seconds, UTC offset and IANA
+zone. Compute that clock from the immutable instant and saved zone. Keep the
+original precise timestamp in a semantic time element. Earlier and Later entries
+at the same local minute remain distinct; the current account or browser zone
+does not replace their saved context. This display does not change entries,
+ordering, totals or editing.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the

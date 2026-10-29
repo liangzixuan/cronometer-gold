@@ -4377,3 +4377,122 @@ describe("Diary Delete admission", () => {
     await hooks.settle();
   });
 });
+
+function recordedDiaryTimes() {
+  return elements().filter((node) => node.type === "time");
+}
+function recordedDiaryEntry(
+  number: number,
+  occurredAt: string,
+  timeZone: string,
+  localTime: string,
+) {
+  return { ...entry(number, "breakfast", "2026-11-01"), occurredAt, timeZone, localTime };
+}
+describe("Diary saved clock precision", () => {
+  it.each([
+    ["2026-11-01T06:30:45.123456Z", "America/Chicago", "01:30:45 GMT-05:00"],
+    ["2026-11-01T07:30:45.123Z", "America/Chicago", "01:30:45 GMT-06:00"],
+    ["2026-11-01T12:30:45.000Z", "Asia/Tokyo", "21:30:45 GMT+09:00"],
+    ["2026-11-01T12:30:45.000Z", "UTC", "12:30:45 GMT+00:00"],
+  ])("shows saved %s in %s with its offset", async (instant, zone, clock) => {
+    route.date = "2026-11-01";
+    const saved = recordedDiaryEntry(0, instant, zone, clock.slice(0, 8));
+    const fixture = page([saved], null, 1, "2026-11-01"),
+      original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    expect(text()).toContain("Apple 0");
+    expect(recordedDiaryTimes()).toHaveLength(1);
+    expect(recordedDiaryTimes()[0]?.props.dateTime).toBe(instant);
+    expect(text(recordedDiaryTimes()[0])).toBe(clock);
+    expect(text(group("breakfast"))).toContain(zone);
+    hooks.render();
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+  it("distinguishes simultaneous loaded Earlier and Later rows with the same local minute", async () => {
+    route.date = "2026-11-01";
+    const early = recordedDiaryEntry(0, "2026-11-01T06:30:00.000Z", "America/Chicago", "01:30:00");
+    const late = recordedDiaryEntry(1, "2026-11-01T07:30:00.000Z", "America/Chicago", "01:30:00");
+    await mount(fetcher(page([early, late], null, 2, "2026-11-01")));
+    expect(text()).toContain("Apple 0");
+    expect(text()).toContain("Apple 1");
+    expect(recordedDiaryTimes().map((node) => node.props.dateTime)).toEqual([
+      early.occurredAt,
+      late.occurredAt,
+    ]);
+    expect(recordedDiaryTimes().map(text)).toEqual(["01:30:00 GMT-05:00", "01:30:00 GMT-06:00"]);
+  });
+  it("keeps private-food and recipe snapshot instants and zones without changing diary data", async () => {
+    route.date = "2026-11-01";
+    const privateFood = {
+      ...recordedDiaryEntry(0, "2026-11-01T06:30:00.000Z", "America/Chicago", "01:30:00"),
+      source: null,
+      foodProvenance: {
+        kind: "private_custom",
+        customFoodId: "b8a7c76f-3c1d-445c-9160-152e57b29e42",
+        customFoodVersionNumber: 3,
+      },
+    };
+    const { foodProvenance: _provenance, ...recipeBase } = recordedDiaryEntry(
+      1,
+      "2026-11-01T07:30:00.000Z",
+      "America/Chicago",
+      "01:30:00",
+    );
+    const recipe = {
+      ...recipeBase,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId: "de1f6d0a-f7dc-4b25-b7b9-3eef1d44779a",
+      portion: { kind: "serving", amount: "1.250000", servingLabel: "bowl" },
+      food: null,
+      source: null,
+      sources: [source],
+      recipe: {
+        id: "df94a52f-e84a-4cd5-873e-227d1e213d62",
+        name: "Saved stew",
+        versionNumber: 2,
+        yieldGrams: "800",
+        yieldSource: "measured",
+        servingCount: "4",
+        servingLabel: "bowl",
+        calculationVersion: "recipe-v1",
+        retentionPolicy: {
+          code: "identity-retention-default",
+          version: "1",
+          assumption: "No cooking-retention factor was applied.",
+        },
+        warnings: [],
+      },
+    };
+    const base = page([], null, 0, "2026-11-01");
+    const fixture = {
+      ...base,
+      data: { ...base.data, entries: [privateFood, recipe] },
+      page: { nextCursor: null, totalEntries: 2 },
+    };
+    const parsed = parseDiaryPage(fixture),
+      original = JSON.stringify(fixture),
+      baseFetch = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.startsWith("/api/diary?")
+        ? Promise.resolve(Response.json(fixture))
+        : baseFetch(url, init),
+    );
+    await mount(fetch);
+    const requests = fetch.mock.calls.length;
+    expect(text()).toContain("Apple 0");
+    expect(text()).toContain("Saved stew");
+    expect(recordedDiaryTimes().map((node) => node.props.dateTime)).toEqual(
+      parsed.data.entries.map((entry) => entry.occurredAt),
+    );
+    expect(recordedDiaryTimes().map(text)).toEqual(["01:30:00 GMT-05:00", "01:30:00 GMT-06:00"]);
+    hooks.render();
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+});

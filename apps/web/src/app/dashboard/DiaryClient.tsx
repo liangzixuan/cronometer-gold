@@ -179,6 +179,17 @@ function editState(entry: DiaryEntry, day: DiaryDay, currentProfileTimeZone: str
   };
 }
 
+function entryRecordedTime(entry: DiaryEntry): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: entry.timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+    timeZoneName: "longOffset",
+  }).format(new Date(entry.occurredAt));
+}
+
 function entryName(entry: DiaryEntry): string {
   return entry.entryKind === "food" ? entry.food.name : entry.recipe.name;
 }
@@ -2401,10 +2412,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                                 <p>{entry.note}</p>
                                               </div>
                                             ) : null}
-                                            <small>Logged at {entry.localTime.slice(0, 5)}</small>
-                                            {entry.timeZone !== diary.timeZone ? (
-                                              <small>Logged in {entry.timeZone}</small>
-                                            ) : null}
+                                            <small>
+                                              Logged at{" "}
+                                              <time dateTime={entry.occurredAt}>
+                                                {entryRecordedTime(entry)}
+                                              </time>{" "}
+                                              in {entry.timeZone}
+                                            </small>
                                             {entry.entryKind === "food" ? (
                                               <small>
                                                 {entry.foodProvenance.kind === "private_custom"
