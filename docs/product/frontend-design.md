@@ -229,6 +229,13 @@ it. Each automatic, entered and repeated-minute choice keeps its own exact retry
 request after an uncertain response. Timezone recovery preserves the entered time
 and requires review of the current day and time before a fresh explicit Add.
 
+The inline saved receipt shows the confirmed local clock time, UTC offset and
+account zone. Earlier and Later additions remain distinct when a clock repeats.
+Its machine-readable time keeps the precise confirmed instant. Later draft edits
+cannot change this saved receipt or its diary-day link. An uncertain or unrelated
+response must not produce a recorded-time receipt. Keep the single existing live
+announcement; the inline receipt remains available for review.
+
 ## Foods session recovery
 
 Foods keeps public search, suggestions and barcode lookup available while it

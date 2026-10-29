@@ -149,6 +149,8 @@ export function quickAddTimeZoneReviewMessage(
 interface FoodAddSuccess {
   readonly foodVersionId: string;
   readonly localDate: string;
+  readonly occurredAt: string;
+  readonly timeZone: string;
   readonly message: string;
   readonly instance: "search" | "barcode";
   readonly context: string;
@@ -171,13 +173,30 @@ export function confirmedFoodAddDate(mutation: DiaryMutationResult, foodVersionI
 export function FoodAddConfirmation({
   confirmation,
 }: {
-  readonly confirmation: Pick<FoodAddSuccess, "localDate" | "message"> | null;
+  readonly confirmation: Pick<
+    FoodAddSuccess,
+    "localDate" | "message" | "occurredAt" | "timeZone"
+  > | null;
 }) {
+  const recordedTime = confirmation
+    ? new Intl.DateTimeFormat("en-GB", {
+        timeZone: confirmation.timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        timeZoneName: "longOffset",
+      }).format(new Date(confirmation.occurredAt))
+    : null;
   return (
     <div className="foodAddConfirmation" data-state={confirmation ? "ready" : "idle"}>
       {confirmation ? (
         <>
           <p>{confirmation.message}</p>
+          <p>
+            Recorded at <time dateTime={confirmation.occurredAt}>{recordedTime}</time> in{" "}
+            {confirmation.timeZone}.
+          </p>
           <Link
             className="secondaryAction"
             href={`/dashboard?date=${encodeURIComponent(confirmation.localDate)}`}
@@ -796,6 +815,8 @@ export function FoodSearchClient() {
         setConfirmation({
           foodVersionId: food.foodVersionId,
           localDate: loggedDate,
+          occurredAt: operation.body.occurredAt,
+          timeZone: operation.expectedTimeZone,
           message,
           instance,
           context,

@@ -161,7 +161,7 @@ vi.mock("../../lib/diary", async (importOriginal) => ({
   createOperationId: operationId,
 }));
 
-import { FoodSearchClient } from "./FoodSearchClient";
+import { FoodAddConfirmation, FoodSearchClient } from "./FoodSearchClient";
 
 interface ElementNode {
   readonly type: unknown;
@@ -2239,6 +2239,95 @@ describe("Public food optional local time", () => {
       expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body)).occurredAt).toBe(
         changeKind === "time" ? "2026-09-24T12:30:00.000Z" : "2026-11-01T07:30:00.000Z",
       );
+    },
+  );
+});
+
+describe("Food saved receipt clock", () => {
+  async function openReady(response: "success" | "503" | "wrong-instant" = "success") {
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST") {
+        if (response === "503")
+          return Response.json({ error: "Lost confirmation" }, { status: 503 });
+        const saved = await savedMutation(init, "2026-11-01").json();
+        saved.data.entry.localTime = "01:30:00";
+        if (response === "wrong-instant") saved.data.entry.occurredAt = "2026-11-01T08:30:00.000Z";
+        return Response.json(saved);
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("quick-add-date", "2026-11-01");
+    await change("quick-add-time", "01:30");
+    return fetcher;
+  }
+  function confirmedProps() {
+    return elements()
+      .filter((node) => node.type === FoodAddConfirmation)
+      .map((node) => node.props.confirmation)
+      .filter(Boolean) as Array<{
+      localDate: string;
+      occurredAt: string;
+      timeZone: string;
+      message: string;
+    }>;
+  }
+  it.each([
+    ["search", "Earlier occurrence · UTC−05:00", "2026-11-01T06:30:00.000Z"],
+    ["barcode", "Later occurrence · UTC−06:00", "2026-11-01T07:30:00.000Z"],
+  ])(
+    "keeps the matched %s receipt independent of later draft changes",
+    async (instance, choice, instant) => {
+      const fetcher = await openReady();
+      if (instance === "barcode") {
+        await change("food-barcode", "012345678905");
+        const form = elements().find((node) => node.props.className === "barcodeForm");
+        if (!form) throw new Error("Missing barcode form");
+        invoke(form, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+      }
+      invoke(button(choice));
+      await hooks.settle();
+      const controls = elements().find(
+        (node) =>
+          node.type === "fieldset" &&
+          elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+      );
+      const add = controls && elements(controls).find((node) => node.type === "button");
+      if (!add) throw new Error("Missing Add");
+      invoke(add);
+      await hooks.settle();
+      expect(confirmedProps()).toHaveLength(1);
+      expect(confirmedProps()[0]).toMatchObject({
+        localDate: "2026-11-01",
+        occurredAt: instant,
+        timeZone: "America/Chicago",
+      });
+      await change("quick-add-date", "2026-11-02");
+      await change("quick-add-time", "09:00");
+      expect(confirmedProps()[0]).toMatchObject({
+        localDate: "2026-11-01",
+        occurredAt: instant,
+        timeZone: "America/Chicago",
+      });
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+    },
+  );
+  it.each(["503", "wrong-instant"] as const)(
+    "shows no saved clock for an unconfirmed %s result",
+    async (response) => {
+      const fetcher = await openReady(response);
+      invoke(button("Later occurrence · UTC−06:00"));
+      await hooks.settle();
+      invoke(button("Add 1 default serving of Apple Pie"));
+      await hooks.settle();
+      expect(confirmedProps()).toHaveLength(0);
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(field("quick-add-time").props.value).toBe("01:30");
     },
   );
 });

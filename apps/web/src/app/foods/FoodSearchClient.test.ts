@@ -176,6 +176,8 @@ describe("confirmed food-add destination", () => {
       createElement(FoodAddConfirmation, {
         confirmation: {
           localDate,
+          occurredAt: "2026-09-23T17:00:00.000Z",
+          timeZone: "America/Chicago",
           message: "0.5 default servings of Banana was added to Dinner on 2026-09-23.",
         },
       }),
@@ -203,4 +205,27 @@ describe("food search presentation", () => {
     expect(markup).toContain('aria-label="Food search"');
     expect(markup).toContain('class="addStatus addStatus--idle" role="status" aria-live="polite"');
   });
+});
+
+describe("confirmed food-add clock time", () => {
+  it.each([
+    ["2026-11-01T06:30:00.000Z", "2026-11-01", "America/Chicago", "01:30:00 GMT-05:00"],
+    ["2026-11-01T07:30:00.000Z", "2026-11-01", "America/Chicago", "01:30:00 GMT-06:00"],
+    ["2026-01-01T00:30:00.000Z", "2025-12-31", "America/Los_Angeles", "16:30:00 GMT-08:00"],
+    ["2026-11-01T07:30:45.123Z", "2026-11-01", "America/Chicago", "01:30:45 GMT-06:00"],
+  ])(
+    "renders the confirmed instant %s in its saved zone",
+    (occurredAt, localDate, timeZone, expected) => {
+      const markup = renderToStaticMarkup(
+        createElement(FoodAddConfirmation, {
+          confirmation: { localDate, occurredAt, timeZone, message: "Food was added." },
+        }),
+      );
+      expect(markup).toContain(`<time dateTime="${occurredAt}">${expected}</time>`);
+      expect(markup).toContain(`in ${timeZone}`);
+      expect(markup).toContain(`href="/dashboard?date=${localDate}"`);
+      expect(markup).not.toContain('role="status"');
+      expect(markup).not.toContain("aria-live");
+    },
+  );
 });
