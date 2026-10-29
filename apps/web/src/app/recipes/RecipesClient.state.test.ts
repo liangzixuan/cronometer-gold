@@ -6003,3 +6003,130 @@ describe("Recipe log receipt request binding", () => {
     },
   );
 });
+
+async function recipeConfirmationWorkspace() {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+  const fetcher = nutritionFetcher(),
+    original = required(fetcher.getMockImplementation());
+  const state = {
+    reply: (init: RequestInit | undefined) => Promise.resolve(acceptedRecipeLog(init)),
+    differentOwner: false,
+  };
+  fetcher.mockImplementation((url, init) => {
+    if (url === "/api/auth/me" && state.differentOwner)
+      return Promise.resolve(session(secondRecipeId));
+    if (init?.method === "POST" && url.includes("/log?")) return state.reply(init);
+    return original(url, init);
+  });
+  await mountReady();
+  openSaved();
+  await hooks.settle();
+  await change("Local diary date", "2026-11-01");
+  return { fetcher, state };
+}
+function confirmedRecipeTime() {
+  return required(elements().find((node) => node.type === "time"));
+}
+function confirmedRecipeLink() {
+  return required(
+    elements().find(
+      (node) => text(node) === "Open diary for 2026-11-01" && typeof node.props.href === "string",
+    ),
+  );
+}
+
+describe("Recipe saved-time confirmation", () => {
+  it.each([
+    [earlierRecipeOccurrence, "2026-11-01T06:30:00.000Z", "01:30:00 GMT-05:00"],
+    [laterRecipeOccurrence, "2026-11-01T07:30:00.000Z", "01:30:00 GMT-06:00"],
+  ])("shows the confirmed %s instant and offset", async (choice, instant, clock) => {
+    const { fetcher } = await recipeConfirmationWorkspace();
+    await change(optionalTimeLabel, "01:30");
+    await click(choice);
+    await click("Log recipe");
+    expect(confirmedRecipeTime().props.dateTime).toBe(instant);
+    expect(text(confirmedRecipeTime())).toBe(clock);
+    expect(text()).toContain("America/Chicago");
+    expect(confirmedRecipeLink().props.href).toBe("/dashboard?date=2026-11-01");
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    expect(
+      elements().filter((node) => node.props["aria-live"] && text(node).includes("Recorded at")),
+    ).toHaveLength(0);
+  });
+  it("confirms the original automatic retry instant despite clock movement and equivalent response offsets", async () => {
+    const { fetcher, state } = await recipeConfirmationWorkspace();
+    state.reply = async () => Response.json({ error: "Lost response" }, { status: 503 });
+    await click("Log recipe");
+    vi.setSystemTime(new Date("2026-11-01T09:45:56.789Z"));
+    state.reply = async (init) => {
+      const receipt = matchedRecipeLog(init);
+      receipt.data.replayed = true;
+      receipt.data.entry.occurredAt = "2026-11-01T01:30:45.123-06:00";
+      return Response.json(receipt);
+    };
+    await click("Log recipe");
+    const posts = recipeLogPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+    expect(confirmedRecipeTime().props.dateTime).toBe("2026-11-01T07:30:45.123Z");
+    expect(text(confirmedRecipeTime())).toBe("01:30:45 GMT-06:00");
+    expect(confirmedRecipeLink().props.href).toBe("/dashboard?date=2026-11-01");
+  });
+  it("retains its recorded time and day link across later draft edits and an uncertain log", async () => {
+    const { fetcher, state } = await recipeConfirmationWorkspace();
+    await click("Log recipe");
+    const time = confirmedRecipeTime().props.dateTime;
+    const before = fetcher.mock.calls.length;
+    await change("Local diary date", "2026-11-02");
+    await change(optionalTimeLabel, "13:14");
+    await change("Meal", "lunch");
+    await change("Amount", "1.25");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    state.reply = async () => Response.json({ error: "Lost later response" }, { status: 503 });
+    await click("Log recipe");
+    expect(confirmedRecipeTime().props.dateTime).toBe(time);
+    expect(confirmedRecipeLink().props.href).toBe("/dashboard?date=2026-11-01");
+    expect(field("Local diary date").props.value).toBe("2026-11-02");
+    expect(recipeLogPosts(fetcher)).toHaveLength(2);
+  });
+  it.each(["uncertain", "unrelated"])(
+    "does not show a recorded time after an %s response",
+    async (kind) => {
+      const { state } = await recipeConfirmationWorkspace();
+      state.reply = async (init) =>
+        kind === "uncertain"
+          ? Response.json({ error: "Lost" }, { status: 503 })
+          : Response.json({
+              ...matchedRecipeLog(init),
+              data: { ...matchedRecipeLog(init).data, entry: null },
+            });
+      await click("Log recipe");
+      expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
+      expect(text()).not.toContain("Recorded at");
+    },
+  );
+  it("clears the private saved confirmation when the session belongs to another owner", async () => {
+    const { state } = await recipeConfirmationWorkspace();
+    await click("Log recipe");
+    expect(confirmedRecipeTime()).toBeDefined();
+    state.differentOwner = true;
+    openSaved();
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
+    expect(text()).not.toContain("Recorded at");
+  });
+  it("does not install a delayed saved confirmation after unmount", async () => {
+    const { fetcher, state } = await recipeConfirmationWorkspace();
+    const pending = deferred<Response>();
+    state.reply = () => pending.promise;
+    await click("Log recipe");
+    hooks.unmount();
+    const updates = hooks.afterClose();
+    pending.resolve(acceptedRecipeLog(recipeLogPosts(fetcher)[0]?.[1]));
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(updates);
+    expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
+  });
+});

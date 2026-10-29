@@ -381,6 +381,22 @@ export function RecipesClient() {
   const createDraftGeneration = useRef(0);
   const [state, setLoadState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Loading your private recipes…");
+  const [logConfirmation, setLogConfirmation] = useState<{
+    readonly occurredAt: string;
+    readonly timeZone: string;
+    readonly localDate: string;
+    readonly message: string;
+  } | null>(null);
+  const recordedLogTime = logConfirmation
+    ? new Intl.DateTimeFormat("en-GB", {
+        timeZone: logConfirmation.timeZone,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23",
+        timeZoneName: "longOffset",
+      }).format(new Date(logConfirmation.occurredAt))
+    : null;
   const [busy, setBusyState] = useState<string | null>(null);
   const [foodQuery, setFoodQuery] = useState({ route: filterScope, value: "" });
   const foodQueryRef = useRef(foodQuery);
@@ -736,6 +752,7 @@ export function RecipesClient() {
     ownerUserId.current = null;
     pendingSaves.current.clear();
     pendingLogs.current.clear();
+    setLogConfirmation(null);
     activeLog.current = null;
     setDate("");
     setTimeZone(null);
@@ -1689,6 +1706,12 @@ export function RecipesClient() {
       }
       pendingLogs.current.delete(operation.intentKey);
       const loggedDate = mutation.entry.localDate;
+      setLogConfirmation({
+        occurredAt: operation.body.occurredAt,
+        timeZone,
+        localDate: loggedDate,
+        message: `${selected.name} logged to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`,
+      });
       logDraftGeneration.current += 1;
       if (loggedDate !== date) setLogOccurrence(null);
       setDate(loggedDate);
@@ -1845,6 +1868,21 @@ export function RecipesClient() {
             <p className="workspaceStatus" data-state={state} aria-live="polite">
               {message}
             </p>
+            {logConfirmation ? (
+              <div className="foodAddConfirmation">
+                <p>{logConfirmation.message}</p>
+                <p>
+                  Recorded at <time dateTime={logConfirmation.occurredAt}>{recordedLogTime}</time>{" "}
+                  in {logConfirmation.timeZone}.
+                </p>
+                <Link
+                  className="secondaryAction"
+                  href={`/dashboard?date=${encodeURIComponent(logConfirmation.localDate)}`}
+                >
+                  Open diary for {logConfirmation.localDate}
+                </Link>
+              </div>
+            ) : null}
             {state === "error" ? (
               sessionVerifying ? (
                 <button className="buttonSecondary" onClick={retrySession} type="button">

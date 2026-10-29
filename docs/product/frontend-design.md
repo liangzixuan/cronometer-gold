@@ -212,6 +212,12 @@ entry keeps the original request and key for an explicit retry; do not show a
 successful log or change the selected day. Matching normal and replayed receipts
 close the request. Equivalent decimal spellings and timestamp offsets remain
 valid when they represent the same quantity and instant.
+The saved confirmation shows the recipe name, meal, confirmed local day and clock,
+UTC offset and IANA zone. Its semantic time keeps the exact submitted instant,
+including an automatic time confirmed by retry. The diary link uses that saved
+day. Later draft changes or failed writes leave this confirmation unchanged;
+private-session closure removes it. Keep the existing live status announcement
+and the saved confirmation available for review.
 
 ## My foods log confirmations
 
