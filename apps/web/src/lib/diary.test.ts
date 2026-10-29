@@ -34,6 +34,7 @@ import {
   prepareDiaryGroups,
   prepareQuickAddOperation,
   quickAddOccurredAt,
+  recipeLogMatchesRequest,
   resolveDiaryRouteDate,
   shiftLocalDate,
 } from "./diary";
@@ -1382,5 +1383,68 @@ describe("Public quick-add optional time identity", () => {
       prepareQuickAddOperation(pending, input, new Date("2026-11-01T09:00:00Z"), allocate),
     ).toBe(automatic);
     expect(allocate).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("Recipe log receipt matching", () => {
+  function expected() {
+    return {
+      recipeId: recipeEntry.recipe.id,
+      recipeVersionId: recipeEntry.recipeVersionId,
+      portion: { kind: "serving", amount: "1.000000" },
+      mealSlot: recipeEntry.mealSlot,
+      occurredAt: recipeEntry.occurredAt,
+      timeZone: recipeEntry.timeZone,
+    };
+  }
+  it.each([false, true])("accepts an exact canonical serving receipt replayed=%s", (replayed) => {
+    const receipt = parseDiaryMutation({
+      data: {
+        replayed,
+        entry: recipeEntry,
+        affectedDays: [{ localDate: recipeEntry.localDate, revision: "1" }],
+      },
+    });
+    expect(recipeLogMatchesRequest(receipt, expected())).toBe(true);
+  });
+  it("accepts an exact grams receipt and equivalent offset timestamp", () => {
+    const entry = {
+      ...recipeEntry,
+      portion: { kind: "grams", grams: "1.25" },
+      occurredAt: "2026-08-15T08:30:00-05:00",
+    };
+    const receipt = parseDiaryMutation({
+      data: {
+        replayed: false,
+        entry,
+        affectedDays: [{ localDate: entry.localDate, revision: "1" }],
+      },
+    });
+    expect(
+      recipeLogMatchesRequest(receipt, {
+        ...expected(),
+        portion: { kind: "grams", grams: "1.250000" },
+      }),
+    ).toBe(true);
+  });
+  it("rejects a non-recipe entry and invalid expected timezone", () => {
+    const receipt = parseDiaryMutation({
+      data: {
+        replayed: false,
+        entry,
+        affectedDays: [{ localDate: entry.localDate, revision: "1" }],
+      },
+    });
+    expect(recipeLogMatchesRequest(receipt, expected())).toBe(false);
+    const recipe = parseDiaryMutation({
+      data: {
+        replayed: false,
+        entry: recipeEntry,
+        affectedDays: [{ localDate: recipeEntry.localDate, revision: "1" }],
+      },
+    });
+    expect(recipeLogMatchesRequest(recipe, { ...expected(), timeZone: "Invalid/Zone" })).toBe(
+      false,
+    );
   });
 });

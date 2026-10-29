@@ -1549,6 +1549,41 @@ export function quickAddMatchesRequest(
   );
 }
 
+/** Keep an uncertain recipe log until its returned entry matches the submitted request. */
+export function recipeLogMatchesRequest(
+  mutation: DiaryMutationResult,
+  expected: {
+    readonly recipeId: string;
+    readonly recipeVersionId: string;
+    readonly portion: unknown;
+    readonly mealSlot: MealSlot;
+    readonly occurredAt: string;
+    readonly timeZone: string;
+  },
+): mutation is DiaryMutationResult & { readonly entry: DiaryRecipeEntry } {
+  const entry = mutation.entry;
+  if (entry?.entryKind !== "recipe") return false;
+  const instant =
+    /^(\d{4}-\d{2}-\d{2})T\d{2}:\d{2}:\d{2}(?:\.(\d{1,9}))?(?:Z|[+-]\d{2}:\d{2})$/u.exec(
+      entry.occurredAt,
+    );
+  if (!instant || !isLocalDate(instant[1] ?? "") || /[1-9]/u.test(instant[2]?.slice(3) ?? ""))
+    return false;
+  const localDate = correctionTargetLocalDate(expected.occurredAt, expected.timeZone);
+  return (
+    entry.recipe.id === expected.recipeId &&
+    entry.recipeVersionId === expected.recipeVersionId &&
+    sameDiaryPortionRequest(expected.portion, entry.portion) &&
+    entry.mealSlot === expected.mealSlot &&
+    Date.parse(entry.occurredAt) === Date.parse(expected.occurredAt) &&
+    entry.timeZone === expected.timeZone &&
+    localDate !== null &&
+    entry.localDate === localDate &&
+    mutation.affectedDays.length === 1 &&
+    mutation.affectedDays[0]?.localDate === localDate
+  );
+}
+
 export function isPositiveDecimal(value: string): boolean {
   return value.length <= 19 && API_POSITIVE_DECIMAL.test(value);
 }

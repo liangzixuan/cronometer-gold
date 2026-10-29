@@ -18,6 +18,7 @@ import {
   type MealSlot,
   parseDiaryMutation,
   parseSession,
+  recipeLogMatchesRequest,
   type SessionSummary,
   shiftLocalDate,
 } from "../../lib/diary";
@@ -1681,8 +1682,13 @@ export function RecipesClient() {
         throw new Error(responseMessage(body, "The recipe could not be logged."));
       }
       const mutation = parseDiaryMutation(body);
+      if (
+        !recipeLogMatchesRequest(mutation, { ...operation.body, recipeId: selected.id, timeZone })
+      ) {
+        throw new TypeError("The server returned a diary entry for a different recipe log.");
+      }
       pendingLogs.current.delete(operation.intentKey);
-      const loggedDate = mutation.entry?.localDate ?? date;
+      const loggedDate = mutation.entry.localDate;
       logDraftGeneration.current += 1;
       if (loggedDate !== date) setLogOccurrence(null);
       setDate(loggedDate);

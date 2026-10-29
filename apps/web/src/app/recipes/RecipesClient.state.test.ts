@@ -2859,14 +2859,8 @@ function recipeLogPosts(fetcher: ReturnType<typeof nutritionFetcher>) {
     ([url, init]) => init?.method === "POST" && url.includes("/log?"),
   );
 }
-function acceptedRecipeLog() {
-  return Response.json({
-    data: {
-      replayed: false,
-      entry: null,
-      affectedDays: [{ localDate: "2026-09-09", revision: "1" }],
-    },
-  });
+function acceptedRecipeLog(init: RequestInit | undefined) {
+  return Response.json(matchedRecipeLog(init));
 }
 
 async function recipeSessionInZone(timeZone: string, id = owner) {
@@ -3387,7 +3381,7 @@ describe("actual optional recipe log time", () => {
     invoke(more, "onClick");
     await hooks.settle();
     expect(fetcher.mock.calls.filter(([url]) => url.startsWith("/api/recipes?"))).toHaveLength(2);
-    pending.resolve(acceptedRecipeLog());
+    pending.resolve(acceptedRecipeLog(recipeLogPosts(fetcher)[0]?.[1]));
     await hooks.settle();
     expect(recipeLogPosts(fetcher)).toHaveLength(1);
     expect(text()).toContain("Recipe logged to");
@@ -3409,7 +3403,7 @@ describe("actual optional recipe log time", () => {
       fetcher.mockImplementation(async (url, init) => {
         if (init?.method === "POST" && url.includes("/log?")) {
           if (boundary === "fetch") return pendingFetch.promise;
-          const response = acceptedRecipeLog();
+          const response = acceptedRecipeLog(init);
           response.json = () => pendingJson.promise;
           return response;
         }
@@ -3424,7 +3418,7 @@ describe("actual optional recipe log time", () => {
       hooks.renderWithoutEffects();
       if (boundary === "fetch")
         pendingFetch.resolve(Response.json({ error: "Old expiry" }, { status: 401 }));
-      else pendingJson.resolve(await acceptedRecipeLog().json());
+      else pendingJson.resolve(await acceptedRecipeLog(recipeLogPosts(fetcher)[0]?.[1]).json());
       await Promise.resolve();
       await Promise.resolve();
       expect(router.replace).not.toHaveBeenCalled();
@@ -5613,7 +5607,7 @@ describe("actual explicit recipe repeated-time occurrence", () => {
     expect(button(laterRecipeOccurrence).props.disabled).toBe(true);
     expect(button(laterRecipeOccurrence).props["aria-pressed"]).toBe(true);
     expect(recipeLogPosts(fetcher)).toHaveLength(1);
-    pending.resolve(acceptedRecipeLog());
+    pending.resolve(acceptedRecipeLog(recipeLogPosts(fetcher)[0]?.[1]));
     await hooks.settle();
     expect(button(laterRecipeOccurrence).props["aria-pressed"]).toBe(true);
     expect(button(laterRecipeOccurrence).props.disabled).toBe(false);
@@ -5864,4 +5858,148 @@ describe("Saved recipe recent diary days", () => {
     const request = required(recipeLogPosts(fetcher)[0]);
     expect(JSON.parse(String(request[1]?.body)).occurredAt).toBe("2026-09-29T12:00:00.000Z");
   });
+});
+
+function matchedRecipeLog(init: RequestInit | undefined) {
+  const body = JSON.parse(String(init?.body));
+  const zone = new Headers(init?.headers).get("x-expected-profile-time-zone") ?? "America/Chicago";
+  const day = localDateInTimeZone(new Date(body.occurredAt), zone);
+  const saved = nutritionRecipe().currentVersion;
+  return {
+    data: {
+      replayed: false,
+      entry: {
+        id: "c8a7c76f-3c1d-445c-9160-152e57b29e40",
+        revision: "1",
+        entryKind: "recipe",
+        foodVersionId: null,
+        recipeVersionId: body.recipeVersionId,
+        portion:
+          body.portion.kind === "serving"
+            ? { ...body.portion, servingLabel: "bowl" }
+            : body.portion,
+        food: null,
+        source: null,
+        sources: [],
+        recipe: {
+          id: recipeId,
+          name: saved.name,
+          versionNumber: 1,
+          yieldGrams: "120",
+          yieldSource: "measured",
+          servingCount: "2",
+          servingLabel: "bowl",
+          calculationVersion: saved.calculationVersion,
+          retentionPolicy: saved.retentionPolicy,
+          warnings: [],
+        },
+        mealSlot: body.mealSlot,
+        resolvedGrams: "60",
+        note: null,
+        occurredAt: body.occurredAt,
+        localDate: day,
+        localTime: new Intl.DateTimeFormat("en-GB", {
+          timeZone: zone,
+          hourCycle: "h23",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).format(new Date(body.occurredAt)),
+        timeZone: zone,
+        position: 0,
+        nutrients: [],
+      },
+      affectedDays: [{ localDate: day, revision: "1" }],
+    },
+  };
+}
+
+describe("Recipe log receipt request binding", () => {
+  it.each([
+    "absent",
+    "recipe",
+    "version",
+    "portion",
+    "kind",
+    "meal",
+    "instant",
+    "zone",
+    "day",
+    "affected",
+    "extra",
+    "submillisecond",
+  ])("rejects a %s receipt and retains its exact request", async (kind) => {
+    const fetcher = nutritionFetcher(),
+      original = required(fetcher.getMockImplementation());
+    let attempt = 0;
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method !== "POST" || !url.includes("/log?")) return original(url, init);
+      const receipt = matchedRecipeLog(init);
+      if (++attempt === 1) {
+        if (kind === "absent") return Response.json({ data: { ...receipt.data, entry: null } });
+        if (kind === "recipe")
+          receipt.data.entry.recipe.id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        if (kind === "version")
+          receipt.data.entry.recipeVersionId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        if (kind === "portion")
+          receipt.data.entry.portion = { kind: "serving", amount: "9", servingLabel: "bowl" };
+        if (kind === "kind") receipt.data.entry.portion = { kind: "grams", grams: "60" };
+        if (kind === "meal") receipt.data.entry.mealSlot = "snacks";
+        if (kind === "instant") receipt.data.entry.occurredAt = "2026-09-09T13:00:00.000Z";
+        if (kind === "zone") receipt.data.entry.timeZone = "UTC";
+        if (kind === "day") receipt.data.entry.localDate = "2026-09-10";
+        if (kind === "affected") required(receipt.data.affectedDays[0]).localDate = "2026-09-10";
+        if (kind === "extra")
+          receipt.data.affectedDays.push({ localDate: "2026-09-10", revision: "1" });
+        if (kind === "submillisecond")
+          receipt.data.entry.occurredAt = receipt.data.entry.occurredAt.replace(
+            /(\.\d{3})Z$/,
+            "$11Z",
+          );
+      }
+      return Response.json(receipt);
+    });
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Amount", "1.000000");
+    await change("Meal", "lunch");
+    const day = field("Local diary date").props.value;
+    await click("Log recipe");
+    expect(text()).not.toContain("Recipe logged to");
+    expect(text()).toContain("Choose Log again to retry safely");
+    expect(field("Local diary date").props.value).toBe(day);
+    await click("Log recipe");
+    const posts = recipeLogPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+    expect(posts[1]?.[1]?.headers).toEqual(posts[0]?.[1]?.headers);
+    expect(text()).toContain("Recipe logged to");
+  });
+  it.each([false, true])(
+    "accepts a matching canonical recipe receipt with replayed=%s",
+    async (replayed) => {
+      const fetcher = nutritionFetcher(),
+        original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) => {
+        if (init?.method !== "POST" || !url.includes("/log?")) return original(url, init);
+        const receipt = matchedRecipeLog(init);
+        receipt.data.replayed = replayed;
+        receipt.data.entry.portion = { kind: "serving", amount: "1", servingLabel: "bowl" };
+        return Response.json(receipt);
+      });
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Amount", "1.000000");
+      await click("Log recipe");
+      expect(text()).toContain(replayed ? "was confirmed safely" : "Recipe logged to");
+      await click("Log recipe");
+      const posts = recipeLogPosts(fetcher);
+      expect(posts).toHaveLength(2);
+      expect(new Headers(posts[1]?.[1]?.headers).get("idempotency-key")).not.toBe(
+        new Headers(posts[0]?.[1]?.headers).get("idempotency-key"),
+      );
+    },
+  );
 });

@@ -203,6 +203,16 @@ retry; session recovery must never replay it or discard its retry information.
 Hydration sign-out remains available during session verification and prevents a
 late response from reopening private content.
 
+## Saved recipe log confirmations
+
+Report a saved recipe log only when its returned entry matches the submitted
+recipe and version, numeric portion, meal, exact instant, account zone and local
+day. Its affected-day receipt must identify that one day. An absent or unrelated
+entry keeps the original request and key for an explicit retry; do not show a
+successful log or change the selected day. Matching normal and replayed receipts
+close the request. Equivalent decimal spellings and timestamp offsets remain
+valid when they represent the same quantity and instant.
+
 ## Food diary date choices
 
 Catalogue food logging offers Today and Yesterday beside the diary destination.
