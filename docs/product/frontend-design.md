@@ -293,6 +293,12 @@ pressing Search consumes the old suggestions, so a retained click cannot issue
 a second search or replace newer typed text. Current selection still uses the
 full normalized food label within the query limit.
 
+Barcode lookup submits the current normalized digits. Changing those digits
+retires an older form and input before the next view renders, including after an
+edit-and-restore. A same-value event keeps the current form usable. Typing does
+not submit a lookup or cancel one already in flight; a fresh explicit lookup
+can replace that request through the existing cancellation path.
+
 Public food lookup stops when its page closes. Retained query or barcode edits,
 search submissions, suggestions, food-type choices and pagination cannot start
 another request or update the closed view. Open pages keep these public tools

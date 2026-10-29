@@ -278,6 +278,8 @@ export function FoodSearchClient() {
   const [searchState, setSearchState] = useState<LoadState>("idle");
   const [searchMessage, setSearchMessage] = useState("Search by food or brand name.");
   const [barcode, setBarcode] = useState("");
+  const barcodeDraftGeneration = useRef(0);
+  const renderedBarcodeDraftGeneration = barcodeDraftGeneration.current;
   const [barcodeResult, setBarcodeResult] = useState<FoodSearchHit | null>(null);
   const [barcodeState, setBarcodeState] = useState<BarcodeState>("idle");
   const [barcodeMessage, setBarcodeMessage] = useState(
@@ -593,9 +595,19 @@ export function FoodSearchClient() {
     setSearchMessage(`Search ${intentLabels[nextIntent].toLowerCase()} by food or brand name.`);
   }
 
+  function changeBarcode(value: string) {
+    if (!mounted.current || barcodeDraftGeneration.current !== renderedBarcodeDraftGeneration)
+      return;
+    const next = normalizeBarcodeInput(value);
+    if (next === barcode) return;
+    barcodeDraftGeneration.current += 1;
+    setBarcode(next);
+  }
+
   async function submitBarcode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!mounted.current) return;
+    if (!mounted.current || barcodeDraftGeneration.current !== renderedBarcodeDraftGeneration)
+      return;
     barcodeController.current?.abort();
     const controller = new AbortController();
     barcodeController.current = controller;
@@ -1360,9 +1372,7 @@ export function FoodSearchClient() {
               id="food-barcode"
               inputMode="numeric"
               maxLength={64}
-              onChange={(event) => {
-                if (mounted.current) setBarcode(normalizeBarcodeInput(event.target.value));
-              }}
+              onChange={(event) => changeBarcode(event.target.value)}
               pattern="(?:[0-9]{8}|[0-9]{12}|[0-9]{13}|[0-9]{14})"
               placeholder="012345678905"
               type="text"

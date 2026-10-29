@@ -2877,3 +2877,97 @@ describe("Current food suggestion ownership", () => {
     expect(field("food-query").props.value).toBe("Apple Pie");
   });
 });
+
+describe("Current barcode draft actions", () => {
+  function form() {
+    const result = elements().find((node) => node.props.className === "barcodeForm");
+    if (!result) throw new Error("Missing barcode form");
+    return result;
+  }
+  function submit(node: ElementNode) {
+    invoke(node, "onSubmit", { preventDefault() {} });
+  }
+  function barcodeReads(fetcher: ReturnType<typeof vi.fn>) {
+    return fetcher.mock.calls.filter(([url]) => String(url).startsWith("/api/foods/barcodes/"));
+  }
+  async function ready() {
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? session() : publicResponse(url),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await change("food-barcode", "012345678905");
+    return fetcher;
+  }
+  it("retires an old form before changed barcode digits render", async () => {
+    const fetcher = await ready();
+    const old = form();
+    invoke(field("food-barcode"), "onChange", { target: { value: "036000291452" } });
+    submit(old);
+    await hooks.settle();
+    expect(barcodeReads(fetcher)).toHaveLength(0);
+    expect(field("food-barcode").props.value).toBe("036000291452");
+    submit(form());
+    await hooks.settle();
+    expect(barcodeReads(fetcher)).toHaveLength(1);
+    expect(barcodeReads(fetcher)[0]?.[0]).toContain("036000291452");
+  });
+  it("does not revive an old form after editing and restoring the code", async () => {
+    const fetcher = await ready();
+    const old = form();
+    await change("food-barcode", "036000291452");
+    await change("food-barcode", "012345678905");
+    submit(old);
+    await hooks.settle();
+    expect(barcodeReads(fetcher)).toHaveLength(0);
+  });
+  it("does not let an old input overwrite newer restored digits", async () => {
+    await ready();
+    const old = field("food-barcode");
+    await change("food-barcode", "036000291452");
+    await change("food-barcode", "012345678905");
+    invoke(old, "onChange", { target: { value: "036000291452" } });
+    await hooks.settle();
+    expect(field("food-barcode").props.value).toBe("012345678905");
+  });
+  it("keeps a same-value barcode input and current form usable", async () => {
+    const fetcher = await ready();
+    const current = form();
+    invoke(field("food-barcode"), "onChange", { target: { value: "012345678905" } });
+    submit(current);
+    await hooks.settle();
+    expect(barcodeReads(fetcher)).toHaveLength(1);
+    expect(text()).toContain("Found Apple Pie.");
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it("keeps an earlier lookup owned until a fresh form replaces it", async () => {
+    const fetcher = await ready();
+    const held = deferred<Response>();
+    let firstSignal: AbortSignal | null | undefined;
+    fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes("012345678905")) {
+        firstSignal = init?.signal;
+        return held.promise;
+      }
+      return publicResponse(url);
+    });
+    const old = form();
+    submit(old);
+    await hooks.settle();
+    await change("food-barcode", "036000291452");
+    submit(old);
+    await hooks.settle();
+    expect(barcodeReads(fetcher)).toHaveLength(1);
+    expect(firstSignal?.aborted).toBe(false);
+    submit(form());
+    await hooks.settle();
+    expect(barcodeReads(fetcher)).toHaveLength(2);
+    expect(firstSignal?.aborted).toBe(true);
+    held.resolve(Response.json({ data: { ...hit, name: "Retired lookup" } }));
+    await hooks.settle();
+    expect(text()).not.toContain("Retired lookup");
+    expect(text()).toContain("Found Apple Pie.");
+    expect(operationId).not.toHaveBeenCalled();
+  });
+});
