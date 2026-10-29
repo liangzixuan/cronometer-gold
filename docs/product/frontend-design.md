@@ -111,6 +111,12 @@ UTC offset and IANA zone, with the configured meal name. Identical Earlier and
 Later entries remain distinct before deletion. Cancelling creates no request or
 operation identity; an uncertain deletion keeps its exact retry.
 
+The edit section keeps a visible saved-entry summary above the draft fields. It
+names the food, saved portion, date, clock with seconds, UTC offset and IANA zone;
+a semantic time element retains the original precise instant. The summary uses
+the saved snapshot through draft changes and uncertain retries. Cancel restores
+the row without an extra request.
+
 ## Personal foods
 
 Foods has two destinations: Catalogue for published foods and My foods for the

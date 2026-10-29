@@ -2297,57 +2297,79 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                   {entries.map((entry, entryIndex) => (
                                     <li key={entry.id}>
                                       {editor?.entryId === entry.id ? (
-                                        <DiaryEntryEditorForm
-                                          entryId={entry.id}
-                                          entryName={entryName(entry)}
-                                          editor={editor}
-                                          timeResolution={editorTimeResolution}
-                                          onOccurrenceSelect={selectEntryOccurrence}
-                                          diaryGroups={diaryGroups}
-                                          entryEditorControlsDisabled={entryEditorControlsDisabled}
-                                          clearDisabled={
-                                            entryEditorControlsDisabled || editor.note.length === 0
-                                          }
-                                          saveDisabled={
-                                            entryEditorControlsDisabled || diary.status === "locked"
-                                          }
-                                          saveLabel={mutationBusy === entry.id ? "Saving…" : "Save"}
-                                          onQuantityChange={(event) =>
-                                            changeEntryEditor({
-                                              ...editor,
-                                              quantity: event.target.value,
-                                            })
-                                          }
-                                          onMealChange={(event) =>
-                                            changeEntryEditor({
-                                              ...editor,
-                                              mealSlot: event.target.value as MealSlot,
-                                            })
-                                          }
-                                          onLocalDateChange={(event) =>
-                                            changeEntryEditor({
-                                              ...editor,
-                                              localDate: event.target.value,
-                                            })
-                                          }
-                                          onLocalTimeChange={(event) =>
-                                            changeEntryEditor({
-                                              ...editor,
-                                              localTime: event.target.value,
-                                            })
-                                          }
-                                          onNoteChange={(event) =>
-                                            changeEntryEditor({
-                                              ...editor,
-                                              note: event.target.value,
-                                            })
-                                          }
-                                          onClearNote={() =>
-                                            changeEntryEditor({ ...editor, note: "" })
-                                          }
-                                          onSave={() => void saveEntry()}
-                                          onCancel={() => changeEntryEditor(null)}
-                                        />
+                                        <section
+                                          aria-label={`Edit saved entry for ${entryName(entry)}`}
+                                          aria-describedby={`entry-edit-saved-${entry.id}`}
+                                        >
+                                          <p
+                                            className="fieldHelp"
+                                            id={`entry-edit-saved-${entry.id}`}
+                                          >
+                                            Editing {entryName(entry)}, {entryPortionLabel(entry)},
+                                            logged on {entry.localDate} at{" "}
+                                            <time dateTime={entry.occurredAt}>
+                                              {entryRecordedTime(entry)}
+                                            </time>{" "}
+                                            in {entry.timeZone}. Unsaved changes are below.
+                                          </p>
+                                          <DiaryEntryEditorForm
+                                            entryId={entry.id}
+                                            entryName={entryName(entry)}
+                                            editor={editor}
+                                            timeResolution={editorTimeResolution}
+                                            onOccurrenceSelect={selectEntryOccurrence}
+                                            diaryGroups={diaryGroups}
+                                            entryEditorControlsDisabled={
+                                              entryEditorControlsDisabled
+                                            }
+                                            clearDisabled={
+                                              entryEditorControlsDisabled ||
+                                              editor.note.length === 0
+                                            }
+                                            saveDisabled={
+                                              entryEditorControlsDisabled ||
+                                              diary.status === "locked"
+                                            }
+                                            saveLabel={
+                                              mutationBusy === entry.id ? "Saving…" : "Save"
+                                            }
+                                            onQuantityChange={(event) =>
+                                              changeEntryEditor({
+                                                ...editor,
+                                                quantity: event.target.value,
+                                              })
+                                            }
+                                            onMealChange={(event) =>
+                                              changeEntryEditor({
+                                                ...editor,
+                                                mealSlot: event.target.value as MealSlot,
+                                              })
+                                            }
+                                            onLocalDateChange={(event) =>
+                                              changeEntryEditor({
+                                                ...editor,
+                                                localDate: event.target.value,
+                                              })
+                                            }
+                                            onLocalTimeChange={(event) =>
+                                              changeEntryEditor({
+                                                ...editor,
+                                                localTime: event.target.value,
+                                              })
+                                            }
+                                            onNoteChange={(event) =>
+                                              changeEntryEditor({
+                                                ...editor,
+                                                note: event.target.value,
+                                              })
+                                            }
+                                            onClearNote={() =>
+                                              changeEntryEditor({ ...editor, note: "" })
+                                            }
+                                            onSave={() => void saveEntry()}
+                                            onCancel={() => changeEntryEditor(null)}
+                                          />
+                                        </section>
                                       ) : (
                                         <article className="diaryEntry ledgerEntryRow">
                                           <div className="ledgerRowName">

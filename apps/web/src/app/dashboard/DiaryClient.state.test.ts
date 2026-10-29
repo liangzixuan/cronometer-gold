@@ -4874,3 +4874,110 @@ describe("Diary deletion saved context", () => {
     expect(JSON.stringify(fixture)).toBe(original);
   });
 });
+
+describe("Diary editor saved context", () => {
+  function savedContext(id: string) {
+    const section = elements().find(
+      (node) =>
+        node.type === "section" && node.props["aria-describedby"] === `entry-edit-saved-${id}`,
+    );
+    if (!section) throw new Error("Missing saved entry context in the editor.");
+    const summary = elements(section).find(
+      (node) => node.type === "p" && node.props.id === `entry-edit-saved-${id}`,
+    );
+    if (!summary) throw new Error("Missing visible saved entry summary.");
+    return { section, summary };
+  }
+
+  it.each([
+    ["2026-11-01T06:30:45.123456Z", "America/Chicago", "01:30:45 GMT-05:00"],
+    ["2026-11-01T07:30:45.123Z", "America/Chicago", "01:30:45 GMT-06:00"],
+    ["2026-11-01T12:30:45.000Z", "Asia/Tokyo", "21:30:45 GMT+09:00"],
+  ])("keeps saved %s in %s visible when editing", async (instant, zone, clock) => {
+    route.date = "2026-11-01";
+    const saved = recordedDiaryEntry(0, instant, zone, clock.slice(0, 8));
+    const fixture = page([saved], null, 1, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const fetch = await mount(fetcher(fixture));
+    const requests = fetch.mock.calls.length;
+    await click("Edit Apple 0");
+    const { section, summary } = savedContext(saved.id);
+    expect(section.props["aria-label"]).toBe("Edit saved entry for Apple 0");
+    expect(text(summary)).toBe(
+      `Editing Apple 0, 1.250000 × medium apple, logged on 2026-11-01 at ${clock} in ${zone}. Unsaved changes are below.`,
+    );
+    const time = elements(summary).find((node) => node.type === "time");
+    expect(time?.props.dateTime).toBe(instant);
+    expect(text(time ?? null)).toBe(clock);
+    expect(section.props["aria-live"]).toBeUndefined();
+    expect(summary.props.role).toBeUndefined();
+    expect(editorField("Quantity").props.value).toBe("1.250000");
+    expect(fetch.mock.calls).toHaveLength(requests);
+    await click("Cancel editing Apple 0");
+    expect(elements().some((node) => node.props.id === `entry-edit-saved-${saved.id}`)).toBe(false);
+    expect(button("Edit Apple 0").props.disabled).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("keeps saved context through draft changes and uncertain exact retries", async () => {
+    route.date = "2026-11-01";
+    const saved = recordedDiaryEntry(
+      0,
+      "2026-11-01T07:30:45.123456Z",
+      "America/Chicago",
+      "01:30:45",
+    );
+    const fixture = page([saved], null, 1, "2026-11-01");
+    parseDiaryPage(fixture);
+    const original = JSON.stringify(fixture);
+    const writes: { url: string; body: string; headers: Record<string, string> }[] = [];
+    const base = fetcher(fixture);
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        writes.push({
+          url,
+          body: String(init.body),
+          headers: Object.fromEntries(new Headers(init.headers)),
+        });
+        return Response.json({ error: "Response unavailable." }, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const requests = fetch.mock.calls.length;
+    await click("Edit Apple 0");
+    const summary = text(savedContext(saved.id).summary);
+    await changeEditorField("Quantity", "2.250000");
+    await changeEditorField("Private note", "Draft note");
+    expect(text(savedContext(saved.id).summary)).toBe(summary);
+    await click("Save changes to Apple 0");
+    expect(text(savedContext(saved.id).summary)).toBe(summary);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.url).toBe(`/api/diary/entries/${saved.id}?date=2026-11-01`);
+    expect(JSON.parse(writes[0]?.body ?? "null")).toEqual({
+      portion: { kind: "serving", servingId: "303", amount: "2.250000" },
+      mealSlot: "breakfast",
+      note: "Draft note",
+    });
+    expect(writes[0]?.headers["if-match"]).toBe('"3"');
+    expect(writes[0]?.headers["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    await changeEditorField("Meal", "lunch");
+    await changeEditorField("Local date", "2026-11-02");
+    await changeEditorField("Local time", "11:45");
+    expect(text(savedContext(saved.id).summary)).toBe(summary);
+    expect(editorField("Local date").props.value).toBe("2026-11-02");
+    expect(editorField("Local time").props.value).toBe("11:45");
+    expect(editorField("Meal").props.value).toBe("lunch");
+    expect(fetch.mock.calls).toHaveLength(requests + 2);
+    await click("Cancel editing Apple 0");
+    expect(button("Edit Apple 0").props.disabled).toBe(false);
+    expect(elements().some((node) => node.props.id === `entry-edit-saved-${saved.id}`)).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests + 2);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+});
