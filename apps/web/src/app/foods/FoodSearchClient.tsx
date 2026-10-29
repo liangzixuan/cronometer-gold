@@ -260,6 +260,7 @@ export function FoodSearchClient() {
   const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
   const [addMessage, setAddMessage] = useState("");
   const [quickAddDrafts, setQuickAddDrafts] = useState<Readonly<Record<string, QuickAddDraft>>>({});
+  const quickAddDraftGeneration = useRef(new Map<string, number>());
   const pendingAdds = useRef(new Map<string, QuickAddOperation>());
   const activeAddOperation = useRef<string | null>(null);
   const [dateReviewRequired, setDateReviewRequired] = useState(false);
@@ -668,9 +669,11 @@ export function FoodSearchClient() {
     food: FoodSearchHit,
     draft: QuickAddDraft,
     instance: "search" | "barcode",
+    draftGeneration: number,
   ) {
     if (
       !mounted.current ||
+      (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== draftGeneration ||
       sessionStateRef.current !== "ready" ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       sessionRoute.current.revision !== sessionRouteRevision ||
@@ -927,15 +930,29 @@ export function FoodSearchClient() {
     );
   }
 
-  function updateQuickAddDraft(food: FoodSearchHit, patch: Partial<QuickAddDraft>) {
-    setQuickAddDrafts((current) => ({
-      ...current,
-      [food.foodVersionId]: { ...quickAddDraft(current, food), ...patch },
-    }));
+  function updateQuickAddDraft(
+    food: FoodSearchHit,
+    patch: Partial<QuickAddDraft>,
+    generation: number,
+  ) {
+    if (
+      !mounted.current ||
+      activeAddOperation.current !== null ||
+      sessionRoute.current.revision !== sessionRouteRevision ||
+      appliedSessionRoute.current !== sessionRouteRevision ||
+      (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== generation
+    )
+      return;
+    const currentDraft = quickAddDraft(quickAddDrafts, food);
+    const next = { ...currentDraft, ...patch };
+    if (next.kind === currentDraft.kind && next.amount === currentDraft.amount) return;
+    quickAddDraftGeneration.current.set(food.foodVersionId, generation + 1);
+    setQuickAddDrafts((current) => ({ ...current, [food.foodVersionId]: next }));
   }
 
   function quickAddControls(food: FoodSearchHit, instance: "barcode" | "search") {
     const draft = quickAddDraft(quickAddDrafts, food);
+    const draftGeneration = quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0;
     const amountIsValid = isPositiveDecimal(draft.amount);
     const servingAvailable = hasGramResolvedServing(food);
     const controlId = `quick-add-${instance}-${food.foodVersionId}`;
@@ -956,9 +973,13 @@ export function FoodSearchClient() {
               disabled={busy}
               id={`${controlId}-kind`}
               onChange={(event) =>
-                updateQuickAddDraft(food, {
-                  kind: event.target.value as QuickAddPortionKind,
-                })
+                updateQuickAddDraft(
+                  food,
+                  {
+                    kind: event.target.value as QuickAddPortionKind,
+                  },
+                  draftGeneration,
+                )
               }
               value={draft.kind}
             >
@@ -978,7 +999,9 @@ export function FoodSearchClient() {
               id={`${controlId}-amount`}
               inputMode="decimal"
               maxLength={19}
-              onChange={(event) => updateQuickAddDraft(food, { amount: event.target.value })}
+              onChange={(event) =>
+                updateQuickAddDraft(food, { amount: event.target.value }, draftGeneration)
+              }
               pattern="(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?"
               value={draft.amount}
             />
@@ -994,7 +1017,7 @@ export function FoodSearchClient() {
             aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
             className="quickAddButton"
             disabled={busy || sessionState !== "ready" || dateReviewRequired || !amountIsValid}
-            onClick={() => void addFood(food, draft, instance)}
+            onClick={() => void addFood(food, draft, instance, draftGeneration)}
             type="button"
           >
             {addingFoodVersion === food.foodVersionId

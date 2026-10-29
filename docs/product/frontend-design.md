@@ -216,6 +216,15 @@ while an addition is pending. An older route or closed page cannot change the
 date. A timezone conflict still requires confirmation of the chosen local day;
 Today and Yesterday do not supply that confirmation or discard an uncertain add.
 
+## Catalogue food portions
+
+Logging uses the amount and unit currently displayed for that food. Older
+controls cannot log a previous portion or overwrite newer edits, even when the
+raw values were changed and restored. A same-value choice keeps Add available.
+Search and barcode results share the draft for one saved food version; other
+foods keep their own quantities. While an addition is pending, keep its submitted
+portion fixed and ignore retained quantity or unit actions.
+
 ## Catalogue food logging time
 
 Catalogue search and barcode results share an optional local time beside their

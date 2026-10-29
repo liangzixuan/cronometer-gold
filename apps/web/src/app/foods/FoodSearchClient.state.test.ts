@@ -2331,3 +2331,152 @@ describe("Food saved receipt clock", () => {
     },
   );
 });
+
+describe("Current food portion draft actions", () => {
+  async function ready(twoFoods = false) {
+    const second = {
+      ...hit,
+      foodId: "403",
+      foodVersionId: "404",
+      name: "Other food",
+      defaultServing: { ...hit.defaultServing, servingId: "405" },
+    };
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST")
+        return Response.json({ error: "Lost confirmation" }, { status: 503 });
+      if (twoFoods && url.startsWith("/api/foods/search?"))
+        return Response.json({ data: [hit, second], page: { nextCursor: null } });
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("food-barcode", "012345678905");
+    const form = elements().find((node) => node.props.className === "barcodeForm");
+    if (!form) throw new Error("Missing barcode form");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    return fetcher;
+  }
+  function addFor(instance: string, id = "202") {
+    const controls = elements().find(
+      (node) =>
+        node.type === "fieldset" &&
+        elements(node).some((child) => child.props.id === `quick-add-${instance}-${id}-amount`),
+    );
+    const add = controls && elements(controls).find((node) => node.type === "button");
+    if (!add) throw new Error("Missing Add");
+    return add;
+  }
+  it.each([
+    ["search", "amount"],
+    ["search", "kind"],
+    ["barcode", "amount"],
+    ["barcode", "kind"],
+  ])("rejects a prior Add before a newer %s %s renders", async (instance, part) => {
+    const fetcher = await ready();
+    const oldAdd = addFor(instance);
+    invoke(field(`quick-add-${instance}-202-${part}`), "onChange", {
+      target: { value: part === "amount" ? "2.500000" : "grams" },
+    });
+    invoke(oldAdd);
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(operationId).not.toHaveBeenCalled();
+    invoke(addFor(instance));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0]?.[1]?.body)).portion).toEqual(
+      part === "amount"
+        ? { kind: "serving", servingId: "303", amount: "2.5" }
+        : { kind: "grams", grams: "1" },
+    );
+  });
+
+  it.each(["amount", "kind"])(
+    "retires an old %s control through an edit-and-restore cycle",
+    async (part) => {
+      await ready();
+      const id = `quick-add-search-202-${part}`;
+      const old = field(id);
+      await change(id, part === "amount" ? "2.500000" : "grams");
+      await change(id, part === "amount" ? "1" : "serving");
+      invoke(old, "onChange", { target: { value: part === "amount" ? "9" : "grams" } });
+      await hooks.settle();
+      expect(field(id).props.value).toBe(part === "amount" ? "1" : "serving");
+    },
+  );
+  it.each(["amount", "kind"])(
+    "keeps same-value %s controls and the current Add usable",
+    async (part) => {
+      const fetcher = await ready();
+      const add = addFor("search");
+      invoke(field(`quick-add-search-202-${part}`), "onChange", {
+        target: { value: part === "amount" ? "1" : "serving" },
+      });
+      invoke(add);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(operationId).toHaveBeenCalledOnce();
+    },
+  );
+  it("shares draft retirement between search and barcode", async () => {
+    const fetcher = await ready();
+    const oldBarcodeAdd = addFor("barcode");
+    invoke(field("quick-add-search-202-amount"), "onChange", { target: { value: "2.500000" } });
+    invoke(oldBarcodeAdd);
+    await hooks.settle();
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+    invoke(addFor("barcode"));
+    await hooks.settle();
+    expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body)).portion.amount).toBe("2.5");
+  });
+  it("keeps the submitted portion fixed when retained inputs fire before the pending view renders", async () => {
+    const fetcher = await ready();
+    const amount = field("quick-add-search-202-amount");
+    const kind = field("quick-add-search-202-kind");
+    invoke(addFor("search"));
+    invoke(amount, "onChange", { target: { value: "9" } });
+    invoke(kind, "onChange", { target: { value: "grams" } });
+    await hooks.settle();
+    expect(field("quick-add-search-202-amount").props.value).toBe("1");
+    expect(field("quick-add-search-202-kind").props.value).toBe("serving");
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body)).portion).toEqual({
+      kind: "serving",
+      servingId: "303",
+      amount: "1",
+    });
+  });
+  it.each(["route", "unmount"])("ignores portion input retained across %s", async (retirement) => {
+    const fetcher = await ready();
+    const old = field("quick-add-search-202-amount");
+    if (retirement === "route") {
+      route.query = "date=2026-09-25&meal=lunch";
+      hooks.renderWithoutEffects();
+    } else hooks.unmount();
+    invoke(old, "onChange", { target: { value: "9" } });
+    if (retirement === "route") hooks.render();
+    await hooks.settle();
+    expect(field("quick-add-search-202-amount").props.value).toBe("1");
+    expect(hooks.afterClose()).toBe(0);
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+  });
+  it("keeps a different pinned food's unchanged Add independent of an edited portion", async () => {
+    const fetcher = await ready(true);
+    const otherAdd = addFor("search", "404");
+    invoke(field("quick-add-search-202-amount"), "onChange", { target: { value: "2.500000" } });
+    invoke(otherAdd);
+    await hooks.settle();
+    expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(JSON.parse(String(pendingPosts(fetcher)[0]?.[1]?.body))).toMatchObject({
+      foodVersionId: "404",
+      portion: { kind: "serving", servingId: "405", amount: "1" },
+    });
+  });
+});
