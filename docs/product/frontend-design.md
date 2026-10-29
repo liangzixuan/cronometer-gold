@@ -124,6 +124,13 @@ operations; only an explicit save or log action can retry a write. Sign-out or a
 owner change closes the private workspace. Old retry callbacks and late responses
 cannot restore it after a route change or unmount.
 
+The saved-recipe logger offers Today and Yesterday in the verified profile's
+local calendar. Read the current date when the person clicks. Keep the selected
+revision, exact portion, meal, optional time and independent builder draft.
+Changing the date clears a repeated-minute choice; choosing the same date keeps
+it. Blank time stays automatic. These controls follow the existing pending-log
+rules and never submit a log or confirm a timezone change.
+
 ## Personal recipe ingredients
 
 The recipe builder offers My foods alongside public catalogue search. Load the

@@ -5689,3 +5689,179 @@ it("rejects a skipped recipe minute before UUID or POST while retaining the raw 
   expect(field("Meal").props.value).toBe("snacks");
   expect(text()).toContain("does not exist");
 });
+
+describe("Saved recipe recent diary days", () => {
+  async function openLog(zone = "UTC") {
+    const state = { zone };
+    const fetcher = retryableLogFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      url === "/api/auth/me" ? recipeSessionInZone(state.zone) : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    return { state, fetcher };
+  }
+
+  it.each([
+    ["America/Los_Angeles", "2026-01-01T00:30:00Z", "2025-12-31", "2025-12-30"],
+    ["Pacific/Kiritimati", "2026-01-01T12:30:00Z", "2026-01-02", "2026-01-01"],
+    ["America/Chicago", "2026-03-09T05:30:00Z", "2026-03-09", "2026-03-08"],
+    ["UTC", "2024-03-01T12:30:00Z", "2024-03-01", "2024-02-29"],
+  ])("uses the profile calendar in %s at %s", async (zone, now, today, yesterday) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(now));
+    const { fetcher } = await openLog(zone);
+    await change(optionalTimeLabel, "13:14");
+    await change("Amount", "2.500000");
+    await change("Meal", "snacks");
+    await click("Today");
+    expect(field("Local diary date").props.value).toBe(today);
+    await click("Yesterday");
+    expect(field("Local diary date").props.value).toBe(yesterday);
+    expect(field(optionalTimeLabel).props.value).toBe("13:14");
+    expect(field("Amount").props.value).toBe("2.500000");
+    expect(field("Meal").props.value).toBe("snacks");
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+  });
+
+  it("computes the date at click time and posts only after explicit Log", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T23:59:00Z"));
+    const { fetcher } = await openLog();
+    await change(optionalTimeLabel, "13:14");
+    await change("Portion", "grams");
+    await change("Amount", "25.500000");
+    const today = button("Today");
+    vi.setSystemTime(new Date("2026-10-01T00:01:00Z"));
+    invoke(today, "onClick");
+    await hooks.settle();
+    expect(field("Local diary date").props.value).toBe("2026-10-01");
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    await click("Log recipe");
+    const posts = recipeLogPosts(fetcher);
+    expect(posts).toHaveLength(1);
+    const body = JSON.parse(String(posts[0]?.[1]?.body));
+    expect(body.recipeVersionId).toBe(versionId);
+    expect(body.occurredAt).toBe("2026-10-01T13:14:00.000Z");
+    expect(body.portion).toEqual({ kind: "grams", grams: "25.500000" });
+  });
+
+  it("preserves the same-day repeated minute and retires it after a changed day", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T17:00:00Z"));
+    const { fetcher } = await openLog("America/Chicago");
+    await change("Local diary date", "2026-11-01");
+    await change(optionalTimeLabel, "01:30");
+    await click(laterRecipeOccurrence);
+    await click("Today");
+    expect(button(laterRecipeOccurrence).props["aria-pressed"]).toBe(true);
+    await click("Yesterday");
+    expect(field("Local diary date").props.value).toBe("2026-10-31");
+    await click("Today");
+    expect(recipeOccurrences().map((node) => node.props["aria-pressed"])).toEqual([false, false]);
+    await click("Log recipe");
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    expect(text()).toContain("Choose Earlier or Later");
+  });
+
+  it("blocks a retained shortcut while logging and preserves the exact retry after a date round trip", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const { fetcher } = await openLog();
+    await change("Name", "  Independent recipe draft  ");
+    await change("Local diary date", "2026-09-28");
+    await change(optionalTimeLabel, "13:14");
+    await change("Amount", "2.500000");
+    const original = required(fetcher.getMockImplementation());
+    const response = deferred<Response>();
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST" && url.includes("/log?") ? response.promise : original(url, init),
+    );
+    const today = button("Today");
+    invoke(button("Log recipe"), "onClick");
+    invoke(today, "onClick");
+    await hooks.settle();
+    expect(field("Local diary date").props.value).toBe("2026-09-28");
+    expect(button("Today").props.disabled).toBe(true);
+    const first = required(recipeLogPosts(fetcher)[0]);
+    response.resolve(Response.json({ error: "Lost confirmation" }, { status: 503 }));
+    await hooks.settle();
+    fetcher.mockImplementation(original);
+    await click("Yesterday");
+    expect(field("Local diary date").props.value).toBe("2026-09-29");
+    expect(field(optionalTimeLabel).props.value).toBe("13:14");
+    expect(field("Amount").props.value).toBe("2.500000");
+    expect(field("Name").props.value).toBe("  Independent recipe draft  ");
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    await change("Local diary date", "2026-09-28");
+    await click("Log recipe");
+    const posts = recipeLogPosts(fetcher);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(posts[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+  });
+
+  it.each(["raw-edit", "selection", "unmount"])(
+    "ignores a shortcut retained before %s",
+    async (retirement) => {
+      const { fetcher } = await openLog();
+      const today = button("Today");
+      if (retirement === "raw-edit") {
+        await change("Amount", "2.500000");
+        await change("Amount", "1");
+      }
+      if (retirement === "selection") await click("New recipe");
+      if (retirement === "unmount") hooks.unmount();
+      const before = editorValues();
+      invoke(today, "onClick");
+      await hooks.settle();
+      expect(editorValues()).toEqual(before);
+      if (retirement === "raw-edit")
+        expect(field("Local diary date").props.value).toBe("2026-09-09");
+      if (retirement === "unmount") expect(hooks.afterClose()).toBe(0);
+      expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    },
+  );
+
+  it("keeps the shortcut date under explicit timezone review", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T12:00:00Z"));
+    const { state, fetcher } = await openLog();
+    const original = required(fetcher.getMockImplementation());
+    await change("Local diary date", "2026-09-28");
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST" && url.includes("/log?")) {
+        state.zone = "America/New_York";
+        return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+      }
+      return original(url, init);
+    });
+    await click("Log recipe");
+    const oldReview = button("Confirm 2026-09-28 as local day");
+    await click("Yesterday");
+    invoke(oldReview, "onClick");
+    await hooks.settle();
+    expect(field("Local diary date").props.value).toBe("2026-09-29");
+    expect(button("Log recipe").props.disabled).toBe(true);
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    await click("Confirm 2026-09-29 as local day");
+    expect(button("Log recipe").props.disabled).toBe(false);
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+  });
+
+  it("retains blank automatic time when choosing a recent day", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-30T23:14:56.789Z"));
+    const { fetcher } = await openLog();
+    await click("Yesterday");
+    expect(field(optionalTimeLabel).props.value).toBe("");
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    await click("Log recipe");
+    const request = required(recipeLogPosts(fetcher)[0]);
+    expect(JSON.parse(String(request[1]?.body)).occurredAt).toBe("2026-09-29T12:00:00.000Z");
+  });
+});

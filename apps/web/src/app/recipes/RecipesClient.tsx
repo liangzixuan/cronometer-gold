@@ -19,6 +19,7 @@ import {
   parseDiaryMutation,
   parseSession,
   type SessionSummary,
+  shiftLocalDate,
 } from "../../lib/diary";
 import {
   buildSearchRequestPath,
@@ -1557,6 +1558,12 @@ export function RecipesClient() {
     install(next);
   }
 
+  function chooseRecentRecipeLogDate(offset: 0 | -1) {
+    if (!canEditLogSelection() || !timeZone) return;
+    const today = localDateInTimeZone(new Date(), timeZone);
+    changeLogField(date, offset === 0 ? today : shiftLocalDate(today, offset), setDate, true);
+  }
+
   function changeLogOccurrence(occurredAt: string) {
     if (
       !canEditLogSelection() ||
@@ -2403,6 +2410,25 @@ export function RecipesClient() {
                         ))}
                       </select>
                     </label>
+                  </div>
+                  <div className="entryActions">
+                    {(
+                      [
+                        ["Today", 0],
+                        ["Yesterday", -1],
+                      ] as const
+                    ).map(([label, offset]) => (
+                      <button
+                        key={label}
+                        aria-label={`Set recipe diary date to ${label.toLowerCase()}`}
+                        className="buttonQuiet"
+                        disabled={!timeZone || logControlsUnavailable}
+                        onClick={() => chooseRecentRecipeLogDate(offset)}
+                        type="button"
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                   <p className="fieldHelp">
                     Interpreted in {timeZone ?? "your verified profile zone"}. Leave time blank to
