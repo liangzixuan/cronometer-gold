@@ -7221,3 +7221,112 @@ describe("Diary date control page ownership", () => {
     });
   });
 });
+
+describe("Diary day response route ownership", () => {
+  async function start(response: Promise<Response>) {
+    const base = fetcher();
+    let reads = 0;
+    let view: "diary" | "overview" = "diary";
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/diary?") && ++reads === 1) return response;
+      return base(url, init);
+    });
+    vi.stubGlobal("fetch", fetch);
+    hooks.mount(() => DiaryClient({ view }));
+    await hooks.settle();
+    return {
+      fetch,
+      changeView: (next: "diary" | "overview") => {
+        view = next;
+        hooks.renderWithoutEffects();
+      },
+    };
+  }
+  async function settleBeforeEffects() {
+    for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+    hooks.renderWithoutEffects();
+  }
+  for (const transition of ["date replacement", "view return"] as const) {
+    it.each(["loaded", "failed", "expired", "decoded"])(
+      `ignores an old %s day response after ${transition} and loads the current route`,
+      async (kind) => {
+        const pending = deferred<Response>();
+        const body = deferred<ReturnType<typeof page>>();
+        const response =
+          kind === "loaded" || kind === "decoded"
+            ? Response.json(page())
+            : Response.json(
+                { error: "Departed day unavailable." },
+                { status: kind === "expired" ? 401 : 503 },
+              );
+        const decode = vi.spyOn(response, "json");
+        if (kind === "decoded") decode.mockImplementation(() => body.promise);
+        const { fetch, changeView } = await start(
+          kind === "decoded" ? Promise.resolve(response) : pending.promise,
+        );
+        expect(text()).toContain("Loading 2026-08-15");
+        if (kind === "decoded") expect(decode).toHaveBeenCalledTimes(1);
+        if (transition === "date replacement") {
+          route.date = "2026-08-16";
+          hooks.renderWithoutEffects();
+        } else {
+          changeView("overview");
+          changeView("diary");
+        }
+        const before = text(),
+          requests = fetch.mock.calls.length,
+          navigations = router.replace.mock.calls.length;
+        if (kind === "decoded") body.resolve(page());
+        else pending.resolve(response);
+        await settleBeforeEffects();
+        expect(text()).toBe(before);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toHaveLength(navigations);
+        if (kind !== "decoded") expect(decode).not.toHaveBeenCalled();
+        hooks.render();
+        await hooks.settle();
+        const target = transition === "date replacement" ? "2026-08-16" : "2026-08-15";
+        const reads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+        expect(reads).toHaveLength(2);
+        expect(
+          new URL(reads[1]?.[0] ?? "", "https://app.example.test").searchParams.get("date"),
+        ).toBe(target);
+        expect(reads[1]?.[1]?.cache).toBe("no-store");
+        expect(Object.fromEntries(new Headers(reads[1]?.[1]?.headers))).toEqual({
+          accept: "application/json",
+        });
+        expect(field("Local date").props.value).toBe(target);
+        expect(text()).toContain(transition === "date replacement" ? "Apple 2" : "Apple 0");
+        expect(router.replace).not.toHaveBeenCalledWith("/login");
+      },
+    );
+  }
+  it.each(["loaded", "failed", "expired"])(
+    "preserves the current %s day response",
+    async (kind) => {
+      const pending = deferred<Response>();
+      const { fetch } = await start(pending.promise);
+      pending.resolve(
+        kind === "loaded"
+          ? Response.json(page())
+          : Response.json(
+              { error: "Current day unavailable." },
+              { status: kind === "expired" ? 401 : 503 },
+            ),
+      );
+      await hooks.settle();
+      if (kind === "expired") expect(router.replace).toHaveBeenCalledWith("/login");
+      else if (kind === "loaded") {
+        expect(text()).toContain("2 of 2 entries loaded. Nutrition totals include all 2.");
+        expect(text()).toContain("Apple 0");
+      } else {
+        expect(text()).toContain("Current day unavailable.");
+        await click("Retry");
+        expect(text()).toContain("Apple 0");
+        const reads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+        expect(reads).toHaveLength(2);
+        expect(reads[1]?.[0]).toBe(reads[0]?.[0]);
+      }
+    },
+  );
+});

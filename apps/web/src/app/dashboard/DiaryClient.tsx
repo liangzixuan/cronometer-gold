@@ -296,6 +296,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const repeatOperations = useRef(new Map<string, RepeatOperation>());
   const renderedRepeatOperations = new Map(repeatOperations.current);
   const loadController = useRef<AbortController | null>(null);
+  const dayReadRoute = useRef<typeof sessionRoute | null>(null);
   const sessionController = useRef<AbortController | null>(null);
   const sessionRequestGeneration = useRef(0);
   const sessionActive = useRef(false);
@@ -640,6 +641,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         timeZone: sessionRef.current.profile.timeZone,
         closed: false,
       };
+      const requestRoute = sessionRouteRef.current;
+      dayReadRoute.current = requestRoute;
       const generation = requestGeneration.current + 1;
       requestGeneration.current = generation;
       loadController.current?.abort();
@@ -648,6 +651,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       loadController.current = controller;
       const isCurrent = () =>
         requestGeneration.current === generation &&
+        sessionRouteRef.current === requestRoute &&
         loadController.current === controller &&
         !controller.signal.aborted &&
         sessionActive.current &&
@@ -694,6 +698,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         setState("error");
         setMessage(error instanceof Error ? error.message : "The diary could not be loaded.");
         return false;
+      } finally {
+        if (isCurrent()) dayReadRoute.current = null;
       }
     },
     [signInAgain, setEditor, closeEntryNutrients],
@@ -952,6 +958,19 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       pageRequestBusy.current = false;
     };
   }, [date, loadDiary, sessionOwnerId]);
+
+  useEffect(() => {
+    if (
+      dayReadRoute.current !== null &&
+      dayReadRoute.current !== sessionRoute &&
+      sessionRouteRef.current === sessionRoute &&
+      resolveDiaryRouteDate(
+        sessionRoute.explicitDate,
+        sessionRef.current?.profile.timeZone ?? null,
+      ) === dateRef.current
+    )
+      void loadDiary(dateRef.current);
+  }, [loadDiary, sessionRoute]);
 
   useEffect(() => {
     if (session && isLocalDate(date)) {

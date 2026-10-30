@@ -78,6 +78,14 @@ callbacks. Selecting another date retires them before paint, so they cannot navi
 again or clear a later editor and its draft. Fresh controls remain available after
 the selected day loads.
 
+Each day read retains its initiating route. A route change retires its response
+before effects run, including sign-in redirects and JSON decoding. An unfinished
+read restarts on the current route even when it returns to the same selected day.
+An already loaded day stays in place during a same-date view change. Date
+transitions wait for that date to be committed before reading it, so they do not
+request the departed day again. Current failures still offer Retry; current
+expiry still requires sign-in.
+
 The day Retry action belongs to the failed read, account, route and mounted page
 that presented it. Starting a retry retires that callback before paint, so repeated
 activation cannot abort the new read. Recovery, account or route replacement and
