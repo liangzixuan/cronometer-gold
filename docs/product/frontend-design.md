@@ -496,6 +496,13 @@ and sign-out also retire older retries. A fresh control can retry another failur
 or recover after an unconfirmed sign-out. Each card keeps its own request and
 error state; retrying it does not reload the diary or the other summary.
 
+Dashboard water and activity responses also belong to their initiating route.
+A late summary or session-revalidation response cannot change or redirect a
+replaced route, including after JSON decoding. Returning to the same local day
+resumes each unfinished summary through its existing loading path. Completed
+summaries keep their result without another read, and one card's recovery does
+not reload the other card or the diary. Current expiry and retry behavior remain.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

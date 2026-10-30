@@ -7475,3 +7475,156 @@ describe("Dashboard card retry ownership", () => {
     });
   }
 });
+
+describe("Dashboard summary response route ownership", () => {
+  function cards() {
+    const node = elements().find((node) => node.type === TodayOverviewCards);
+    if (!node) throw new Error("Missing overview cards");
+    return node.props as unknown as Parameters<typeof TodayOverviewCards>[0];
+  }
+  async function beforeEffects() {
+    for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+    hooks.renderWithoutEffects();
+  }
+  for (const kind of ["hydration", "activity"] as const) {
+    const endpoint = kind === "hydration" ? "/api/hydration?" : "/api/activities?";
+    const day = (date = "2026-08-15") => ({
+      data: {
+        localDate: date,
+        timeZone: "America/Chicago",
+        revision: "2",
+        entries: [],
+        updatedAt: "2026-08-15T13:05:02.000Z",
+        ...(kind === "hydration" ? { totalMilliliters: 0 } : { totalDurationMinutes: 0 }),
+      },
+    });
+    for (const outcome of [
+      "loaded",
+      "failed",
+      "expired",
+      "decoded",
+      "session expiry",
+      "session decoded",
+    ] as const) {
+      it(`${kind} rejects old ${outcome} after a view return and recovers its summary`, async () => {
+        const pending = deferred<Response>();
+        const body = deferred<unknown>();
+        const response =
+          outcome === "expired" || outcome === "session expiry"
+            ? Response.json({}, { status: 401 })
+            : outcome === "failed"
+              ? Response.json({ error: "Departed summary failed." }, { status: 503 })
+              : Response.json(outcome === "session decoded" ? session(anotherOwner) : day());
+        const decode = vi.spyOn(response, "json");
+        if (outcome === "decoded" || outcome === "session decoded")
+          decode.mockImplementation(() => body.promise);
+        const base = fetcher();
+        let reads = 0,
+          sessionReads = 0;
+        let view: "overview" | "diary" = "overview";
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url.startsWith(endpoint)) {
+            reads += 1;
+            if (reads === 1) {
+              if (outcome.startsWith("session")) return Promise.resolve(Response.json(day()));
+              return outcome === "decoded" ? Promise.resolve(response) : pending.promise;
+            }
+            return Promise.resolve(Response.json(day()));
+          }
+          if (url === "/api/auth/me" && ++sessionReads === 2 && outcome.startsWith("session"))
+            return outcome === "session decoded" ? Promise.resolve(response) : pending.promise;
+          return base(url, init);
+        });
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        expect(cards()[kind].status).toBe("loading");
+        const otherKind = kind === "hydration" ? "activity" : "hydration";
+        const otherCard = cards()[otherKind];
+        if (outcome === "decoded" || outcome === "session decoded")
+          expect(decode).toHaveBeenCalledTimes(1);
+        view = "diary";
+        hooks.renderWithoutEffects();
+        view = "overview";
+        hooks.renderWithoutEffects();
+        const count = fetch.mock.calls.length;
+        if (outcome === "decoded") body.resolve(day());
+        else if (outcome === "session decoded") body.resolve(session(anotherOwner));
+        else pending.resolve(response);
+        await beforeEffects();
+        expect(cards()[kind].status).toBe("loading");
+        expect(cards()[otherKind]).toEqual(otherCard);
+        expect(fetch.mock.calls).toHaveLength(count);
+        expect(router.replace).not.toHaveBeenCalled();
+        if (outcome !== "decoded" && outcome !== "session decoded")
+          expect(decode).not.toHaveBeenCalled();
+        hooks.render();
+        await hooks.settle();
+        expect(cards()[kind]).toEqual({ status: "empty", count: 0, total: 0 });
+        expect(cards()[otherKind]).toEqual(otherCard);
+        const requests = fetch.mock.calls.filter(([url]) => url.startsWith(endpoint));
+        expect(requests).toHaveLength(2);
+        for (const [url, init] of requests) {
+          expect(url).toBe(`${endpoint}date=2026-08-15`);
+          expect(init?.cache).toBe("no-store");
+          expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+            accept: "application/json",
+            "x-expected-owner-user-id": owner,
+          });
+        }
+        const otherEndpoint = kind === "hydration" ? "/api/activities?" : "/api/hydration?";
+        expect(fetch.mock.calls.filter(([url]) => url.startsWith(otherEndpoint))).toHaveLength(1);
+        expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(1);
+        expect(router.replace).not.toHaveBeenCalled();
+      });
+    }
+
+    it(`${kind} ignores old expiry before a new route date commits`, async () => {
+      const pending = deferred<Response>();
+      const base = fetcher();
+      let reads = 0;
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (url.startsWith(endpoint)) {
+          if (++reads === 1) return pending.promise;
+          const date = new URL(url, "https://app.example.test").searchParams.get("date");
+          return Promise.resolve(Response.json(day(date ?? "")));
+        }
+        return base(url, init);
+      });
+      await mount(fetch, "overview");
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+      const count = fetch.mock.calls.length;
+      pending.resolve(Response.json({}, { status: 401 }));
+      await beforeEffects();
+      expect(fetch.mock.calls).toHaveLength(count);
+      expect(router.replace).not.toHaveBeenCalled();
+      hooks.render();
+      await hooks.settle();
+      expect(cards().date).toBe("2026-08-16");
+      expect(cards()[kind]).toEqual({ status: "empty", count: 0, total: 0 });
+      expect(reads).toBe(2);
+    });
+
+    it(`${kind} preserves a completed summary across same-day view changes`, async () => {
+      const base = fetcher();
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url.startsWith(endpoint) ? Promise.resolve(Response.json(day())) : base(url, init),
+      );
+      let view: "overview" | "diary" = "overview";
+      vi.stubGlobal("fetch", fetch);
+      hooks.mount(() => DiaryClient({ view }));
+      await hooks.settle();
+      expect(cards()[kind]).toEqual({ status: "empty", count: 0, total: 0 });
+      const count = fetch.mock.calls.length;
+      view = "diary";
+      hooks.render();
+      await hooks.settle();
+      view = "overview";
+      hooks.render();
+      await hooks.settle();
+      expect(cards()[kind]).toEqual({ status: "empty", count: 0, total: 0 });
+      expect(fetch.mock.calls).toHaveLength(count);
+    });
+  }
+});

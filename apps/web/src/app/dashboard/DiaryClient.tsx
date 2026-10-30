@@ -303,6 +303,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const renderedSessionRequestGeneration = sessionRequestGeneration.current;
   const hydrationOverviewController = useRef<AbortController | null>(null);
   const activityOverviewController = useRef<AbortController | null>(null);
+  const overviewReadRoutes = useRef<{
+    hydration: typeof sessionRoute | null;
+    activity: typeof sessionRoute | null;
+  }>({ hydration: null, activity: null });
   const profileController = useRef<AbortController | null>(null);
   const timeZoneRefreshController = useRef<AbortController | null>(null);
   const pageRequestBusy = useRef(false);
@@ -708,7 +712,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const loadOverviewCard = useCallback(
     async (kind: "hydration" | "activity", requestedDate: string) => {
       const initiatingSession = sessionRef.current;
+      const requestRoute = sessionRouteRef.current;
       if (
+        !sessionActive.current ||
         privateUiClosed.current ||
         !initiatingSession ||
         !isLocalDate(requestedDate) ||
@@ -742,11 +748,14 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           generationRef.current,
         );
       const isLocallyCurrent = () =>
+        sessionActive.current &&
+        sessionRouteRef.current === requestRoute &&
         controllerRef.current === controller &&
         !controller.signal.aborted &&
         !privateUiClosed.current &&
         dailyOverviewRequestMatches(expected, currentIdentity());
 
+      overviewReadRoutes.current[kind] = requestRoute;
       setCard(scopedDailyOverviewCard(expected, loadingDailyOverviewCard()));
       try {
         const endpoint =
@@ -848,7 +857,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         );
         return false;
       } finally {
-        if (controllerRef.current === controller) controllerRef.current = null;
+        if (controllerRef.current === controller) {
+          if (isLocallyCurrent()) overviewReadRoutes.current[kind] = null;
+          controllerRef.current = null;
+        }
       }
     },
     [signInAgain],
@@ -986,6 +998,22 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       activityOverviewController.current = null;
     };
   }, [date, loadOverviewCard, session]);
+
+  useEffect(() => {
+    if (
+      sessionRouteRef.current !== sessionRoute ||
+      resolveDiaryRouteDate(
+        sessionRoute.explicitDate,
+        sessionRef.current?.profile.timeZone ?? null,
+      ) !== dateRef.current
+    )
+      return;
+    for (const kind of ["hydration", "activity"] as const) {
+      const unfinishedRoute = overviewReadRoutes.current[kind];
+      if (unfinishedRoute !== null && unfinishedRoute !== sessionRoute)
+        void loadOverviewCard(kind, dateRef.current);
+    }
+  }, [loadOverviewCard, sessionRoute]);
 
   useEffect(() => {
     setProfileBusy((current) => (profileController.current === null ? false : current));
