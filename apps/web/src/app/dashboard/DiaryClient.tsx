@@ -1011,6 +1011,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   function chooseDate(next: string) {
+    if (activeMutation.current !== null || profileController.current !== null) return;
     transitionCommittedDate(next, true);
   }
 

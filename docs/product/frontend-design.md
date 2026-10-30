@@ -66,6 +66,12 @@ ready editor or replay a save. Session closure, route replacement and leaving th
 screen invalidate pending reads. An expired or replaced account requires signing
 in again; a failed sign-out attempt must leave a usable recovery path.
 
+Previous day, Next day, Today and Local date preserve the selected day while a
+diary mutation or meal-group save is pending. Their handlers enforce the disabled
+state before paint and ignore retained actions during the request. A failed save
+keeps its draft and exact retry request; fresh date controls work when the write
+settles. Route-driven date changes and server recovery keep their existing paths.
+
 The day Retry action belongs to the failed read, account, route and mounted page
 that presented it. Starting a retry retires that callback before paint, so repeated
 activation cannot abort the new read. Recovery, account or route replacement and

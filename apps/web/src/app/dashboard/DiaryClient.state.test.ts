@@ -7013,3 +7013,106 @@ describe("Diary day Retry ownership", () => {
     expect(router.replace).not.toHaveBeenCalledWith("/login");
   });
 });
+
+describe("Diary date controls during writes", () => {
+  const choices = ["Previous day", "Next day", "Today", "Local date"] as const;
+  function control(choice: (typeof choices)[number]) {
+    return choice === "Local date" ? field(choice) : button(choice);
+  }
+  function activate(node: ElementNode, choice: (typeof choices)[number]) {
+    if (choice === "Local date") invoke(node, "onChange", { target: { value: "2026-08-20" } });
+    else invoke(node);
+  }
+  function submitGroups() {
+    const form = elements().find(
+      (node) => node.type === "form" && text(node).includes("Save groups"),
+    );
+    if (!form) throw new Error("Missing diary settings form.");
+    invoke(form, "onSubmit", { preventDefault() {} });
+  }
+  for (const kind of ["edit", "profile"] as const) {
+    it.each(choices)(`keeps %s on the submitted day during a ${kind} write`, async (choice) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-08-16T18:00:00Z"));
+      const pending = deferred<Response>();
+      const base = fetcher();
+      const writes: ReturnType<typeof captureEditorSave>[] = [];
+      const requests: RequestInit[] = [];
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (
+          (kind === "profile" && url === "/api/profile") ||
+          (kind === "edit" && init?.method === "PATCH")
+        ) {
+          if (!init) throw new Error("Missing write request.");
+          writes.push(captureEditorSave(url, init));
+          requests.push(init);
+          return writes.length === 1
+            ? pending.promise
+            : Promise.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      if (kind === "edit") await prepareSaveLockDraft();
+      else {
+        await click("Customize diary groups");
+        await change("Group 1 label", "Submitted morning");
+        await click("Move group 1 down");
+      }
+      const draft =
+        kind === "edit"
+          ? editorValues()
+          : Array.from({ length: 4 }, (_, i) => field(`Group ${i + 1} label`).props.value);
+      const retained = control(choice),
+        navigations = router.replace.mock.calls.length;
+      if (kind === "edit") invoke(button("Save changes to Apple 0"));
+      else submitGroups();
+      expect(writes).toHaveLength(1);
+      const count = fetch.mock.calls.length;
+      activate(retained, choice);
+      await hooks.settle();
+      expect(router.replace.mock.calls).toHaveLength(navigations);
+      expect(fetch.mock.calls).toHaveLength(count);
+      expect(field("Local date").props.value).toBe("2026-08-15");
+      expect(control(choice).props.disabled).toBe(true);
+      activate(control(choice), choice);
+      await hooks.settle();
+      expect(router.replace.mock.calls).toHaveLength(navigations);
+      expect(fetch.mock.calls).toHaveLength(count);
+      expect(requests[0]?.signal?.aborted).not.toBe(true);
+      pending.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(text()).toContain("Save unavailable.");
+      expect(
+        kind === "edit"
+          ? editorValues()
+          : Array.from({ length: 4 }, (_, i) => field(`Group ${i + 1} label`).props.value),
+      ).toEqual(draft);
+      if (kind === "edit") await click("Save changes to Apple 0");
+      else {
+        submitGroups();
+        await hooks.settle();
+      }
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(writes[0]?.headers["if-match"]).toBe(kind === "edit" ? '"3"' : '"1"');
+      if (kind === "profile")
+        expect(JSON.parse(writes[0]?.body ?? "{}").expectedOwnerUserId).toBe(owner);
+      expect(control(choice).props.disabled).toBe(false);
+      activate(control(choice), choice);
+      const target =
+        choice === "Previous day"
+          ? "2026-08-14"
+          : choice === "Local date"
+            ? "2026-08-20"
+            : "2026-08-16";
+      route.date = target;
+      await hooks.settle();
+      expect(router.replace).toHaveBeenLastCalledWith(`/dashboard?date=${target}`, {
+        scroll: false,
+      });
+      expect(field("Local date").props.value).toBe(target);
+      expect(text()).toContain("Apple 2");
+    });
+  }
+});
