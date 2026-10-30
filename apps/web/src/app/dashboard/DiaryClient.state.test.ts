@@ -142,6 +142,7 @@ import {
   localDateInTimeZone,
   localTimeInTimeZone,
   type MealSlot,
+  moveDiaryGroup,
   nutrientDisplay,
   parseDiaryCorrectionMutation,
   parseDiaryPage,
@@ -5581,4 +5582,181 @@ describe("Diary meal-group draft pending save", () => {
       }
     },
   );
+});
+
+describe("Diary meal-group matched save confirmation", () => {
+  function form() {
+    const found = elements().find(
+      (node) =>
+        node.type === "form" &&
+        elements(node).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!found) throw new Error("Missing meal-group form.");
+    return found;
+  }
+  function draft() {
+    return elements(form())
+      .filter((node) => node.type === "input")
+      .map((node) => ({ id: node.props.id, value: node.props.value }));
+  }
+  async function submit() {
+    expect(button("Save groups").props.disabled).toBe(false);
+    invoke(form(), "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+  }
+  const renamed = defaultDiaryGroups.map((group) =>
+    group.mealSlot === "breakfast" ? { ...group, label: "Morning meal" } : group,
+  );
+  const reordered = moveDiaryGroup(renamed, 0, 1);
+
+  it.each(["label", "order"] as const)(
+    "rejects a parsed different %s and confirms only the matching retry",
+    async (mismatch) => {
+      const wrong =
+        mismatch === "label"
+          ? reordered.map((group) =>
+              group.mealSlot === "breakfast" ? { ...group, label: "Other morning" } : group,
+            )
+          : renamed;
+      parseSession(session(owner, wrong, "2"));
+      parseSession(session(owner, reordered, "2"));
+      const base = fetcher();
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (url === "/api/profile") {
+          if (!init) throw new Error("Missing profile write.");
+          writes.push(init);
+          return Promise.resolve(
+            Response.json({
+              data: {
+                profile: session(owner, writes.length === 1 ? wrong : reordered, "2").data.profile,
+              },
+            }),
+          );
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await click("Customize diary groups");
+      await change("Group 1 label", "Morning meal");
+      await click("Move group 1 down");
+      const submitted = draft();
+      await submit();
+      expect(text()).not.toContain("Diary group names and order saved everywhere");
+      expect(text()).toContain(
+        "The returned diary groups did not match your changes. Your edits are still here; try saving again.",
+      );
+      expect(draft()).toEqual(submitted);
+      expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
+      expect(writes).toHaveLength(1);
+      await submit();
+      expect(writes).toHaveLength(2);
+      expect(writes[0]?.body).toBe(
+        JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: reordered }),
+      );
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"1"');
+      expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+      expect(text()).toContain("Diary group names and order saved everywhere you log food.");
+      expect(elements().some((node) => node.props.id === "diary-group-settings")).toBe(false);
+      expect(button("Collapse Morning meal").props["aria-expanded"]).toBe(true);
+      expect(
+        elements()
+          .filter(
+            (node) =>
+              node.type === "section" && String(node.props["aria-labelledby"]).startsWith("meal-"),
+          )
+          .map((node) => node.props["aria-labelledby"]),
+      ).toEqual(["meal-lunch", "meal-breakfast", "meal-dinner", "meal-snacks"]);
+    },
+  );
+
+  it("accepts normalized labels matching the prepared request rather than raw draft text", async () => {
+    const normalized = defaultDiaryGroups.map((group) =>
+      group.mealSlot === "breakfast" ? { ...group, label: "Morning" } : group,
+    );
+    parseSession(session(owner, normalized, "2"));
+    const base = fetcher();
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/profile") {
+        if (!init) throw new Error("Missing profile write.");
+        writes.push(init);
+        return Promise.resolve(
+          Response.json({ data: { profile: session(owner, normalized, "2").data.profile } }),
+        );
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Customize diary groups");
+    await change("Group 1 label", "  Ｍorning  ");
+    expect(field("Group 1 label").props.value).toBe("  Ｍorning  ");
+    await submit();
+    expect(writes).toHaveLength(1);
+    expect(writes[0]?.body).toBe(
+      JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: normalized }),
+    );
+    expect(text()).toContain("Diary group names and order saved everywhere you log food.");
+    expect(elements().some((node) => node.props.id === "diary-group-settings")).toBe(false);
+    expect(button("Collapse Morning").props["aria-expanded"]).toBe(true);
+  });
+
+  it("keeps normal412 recovery and uses the refreshed revision on the next explicit save", async () => {
+    const freshGroups = defaultDiaryGroups.map((group) =>
+      group.mealSlot === "dinner" ? { ...group, label: "Evening" } : group,
+    );
+    const nextGroups = freshGroups.map((group) =>
+      group.mealSlot === "breakfast" ? { ...group, label: "Fresh morning" } : group,
+    );
+    parseSession(session(owner, freshGroups, "2"));
+    parseSession(session(owner, nextGroups, "3"));
+    const base = fetcher();
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/profile") {
+        if (!init) throw new Error("Missing profile write.");
+        writes.push(init);
+        return Promise.resolve(
+          writes.length === 2
+            ? Response.json({}, { status: 412 })
+            : Response.json({
+                data: {
+                  profile: session(
+                    owner,
+                    writes.length === 1 ? freshGroups : nextGroups,
+                    writes.length === 1 ? "2" : "3",
+                  ).data.profile,
+                },
+              }),
+        );
+      }
+      if (url === "/api/auth/me" && writes.length === 2)
+        return Promise.resolve(Response.json(session(owner, freshGroups, "2")));
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Customize diary groups");
+    await change("Group 1 label", "Morning meal");
+    await submit();
+    expect(field("Group 1 label").props.value).toBe("Morning meal");
+    expect(text()).not.toContain("Diary group names and order saved everywhere");
+    await submit();
+    expect(text()).toContain(
+      "Your profile changed elsewhere. Fresh diary group settings were loaded.",
+    );
+    expect(field("Group 1 label").props.value).toBe("Breakfast");
+    expect(field("Group 3 label").props.value).toBe("Evening");
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+    await change("Group 1 label", "Fresh morning");
+    await submit();
+    expect(writes).toHaveLength(3);
+    expect(new Headers(writes[2]?.headers).get("if-match")).toBe('"2"');
+    expect(writes[2]?.body).toBe(
+      JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: nextGroups }),
+    );
+    expect(text()).toContain("Diary group names and order saved everywhere you log food.");
+    expect(button("Collapse Fresh morning").props["aria-expanded"]).toBe(true);
+  });
 });

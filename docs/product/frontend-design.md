@@ -88,6 +88,10 @@ owner and profile revision through a failed save and retry. While the profile
 write is pending, retained label, reorder, Reset and Cancel actions cannot change
 or discard the submitted draft. A failed write keeps those names and that order
 available for retry; fresh controls allow changes again after the request settles.
+Confirm a save only when the returned profile matches the submitted normalized
+meal labels and stable-slot order. A mismatched response keeps the raw draft and
+original revision available with an unconfirmed-save message. An unchanged retry
+uses those same settings; normal revision-conflict recovery can load fresh settings.
 
 ## Diary entry saves
 

@@ -1855,6 +1855,17 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       }
       const profile = parseProfileResponse(body);
       if (!requestOwnsUi()) return;
+      if (
+        profile.diaryGroups.length !== prepared.body.diaryGroups.length ||
+        profile.diaryGroups.some((group, index) => {
+          const submitted = prepared.body.diaryGroups[index];
+          return group.mealSlot !== submitted?.mealSlot || group.label !== submitted?.label;
+        })
+      ) {
+        throw new Error(
+          "The returned diary groups did not match your changes. Your edits are still here; try saving again.",
+        );
+      }
       setSession((current) =>
         current?.user.id === initiatingOwnerUserId ? { ...current, profile } : current,
       );
