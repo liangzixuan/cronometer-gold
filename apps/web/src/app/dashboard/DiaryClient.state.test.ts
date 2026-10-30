@@ -8436,3 +8436,90 @@ describe("Diary meal control route ownership", () => {
     );
   }
 });
+
+describe("Diary nutrient control route ownership", () => {
+  for (const transition of [
+    "view replacement",
+    "same-day return before effects",
+    "same-day return after effects",
+  ] as const) {
+    it.each([false, true])(
+      `retires a retained disclosure with open=%s after ${transition} and preserves saved evidence`,
+      async (open) => {
+        const fixture = page([entry(0), entry(1, "lunch")], "d1.next-page", 24);
+        const original = JSON.stringify(fixture);
+        const parsed = parseDiaryPage(fixture);
+        const fetch = fetcher(fixture);
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        await prepareSaveLockDraft();
+        const draft = editorValues();
+        if (open) await toggleNutrients(0);
+        await toggleNutrients(1);
+        const neighbor = nutrientDetailText(1);
+        const retained = nutrientControl(0);
+        expect(retained.props["aria-expanded"]).toBe(open);
+        const evidence = () =>
+          elements()
+            .filter(
+              (node) =>
+                node.props.id === "diary-page-count" ||
+                node.props["aria-labelledby"] === "nutrition-summary-title",
+            )
+            .map((node) => text(node));
+        const totals = evidence();
+        const allocate = vi.fn();
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "same-day return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const before = text();
+        const requests = fetch.mock.calls.length;
+        const routes = router.replace.mock.calls.slice();
+        invoke(retained);
+        hooks.renderWithoutEffects();
+        expect(text()).toBe(before);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toEqual(routes);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        expect(nutrientControl(0).props["aria-expanded"]).toBe(open);
+        expect(nutrientControl(1).props["aria-expanded"]).toBe(true);
+        expect(nutrientDetailText(1)).toBe(neighbor);
+        expect(editorValues()).toEqual(draft);
+        expect(evidence()).toEqual(totals);
+        await toggleNutrients(0);
+        expect(nutrientControl(0).props["aria-expanded"]).toBe(!open);
+        await toggleNutrients(0);
+        expect(nutrientControl(0).props["aria-expanded"]).toBe(open);
+        if (!open) await toggleNutrients(0);
+        expect(nutrientDetailText(0)).toContain("Entry revision 3.");
+        expect(nutrientDetailText(0)).toContain("1.250000 × medium apple");
+        expect(detailsRows(0)).toEqual(
+          parsed.data.entries[0]?.nutrients.flatMap((row) => {
+            const display = nutrientDisplay(row);
+            return [`${row.name} (${row.unit})`, `${display.amount}${display.qualification}`];
+          }),
+        );
+        expect(nutrientDetailText(1)).toBe(neighbor);
+        expect(editorValues()).toEqual(draft);
+        expect(evidence()).toEqual(totals);
+        expect(text()).toContain("2 of 24 entries loaded");
+        expect(button("Load more").props.disabled).toBe(false);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(JSON.stringify(fixture)).toBe(original);
+      },
+    );
+  }
+});

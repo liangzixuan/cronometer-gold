@@ -552,6 +552,13 @@ chosen meal visibility, loaded rows, nutrient disclosures, whole-day totals and
 pagination controls. Fresh visibility controls work without a request or operation
 ID. Entry-editor controls keep the same route check through shared meal admission.
 
+Show and Hide nutrients actions belong to the route that rendered them. Retained
+actions cannot change an entry's disclosure after leaving the Diary or returning
+to the same day, before or after route effects. Current and neighboring disclosure
+choices remain intact on return. Fresh actions show the saved portion and nutrient
+rows without changing an unsaved editor draft, whole-day totals or pagination, and
+without a request or operation ID.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

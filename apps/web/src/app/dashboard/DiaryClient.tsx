@@ -415,6 +415,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const renderedChoice = entryNutrientChoices.get(entry);
     if (
       !canInspectEntryNutrients(entry) ||
+      sessionRouteRef.current !== sessionRoute ||
       mealVisibilityGeneration.current !== renderedMealVisibilityGeneration ||
       entryNutrientChoicesRef.current.get(entry) !== renderedChoice
     )
