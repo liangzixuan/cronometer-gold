@@ -5317,3 +5317,170 @@ describe("Diary pagination owns current page", () => {
     expect(button("Save changes to Apple 0").props.disabled).toBe(false);
   });
 });
+
+describe("Diary group save lifecycle ownership", () => {
+  function settingsForm() {
+    const form = elements().find(
+      (node) =>
+        node.type === "form" &&
+        elements(node).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!form) throw new Error("Missing diary group form.");
+    return form;
+  }
+  function submit(form = settingsForm()) {
+    invoke(form, "onSubmit", { preventDefault() {} });
+  }
+  async function editGroups() {
+    await click("Customize diary groups");
+    await change("Group 1 label", "Morning meal");
+    expect(button("Save groups").props.disabled).toBe(false);
+    return settingsForm();
+  }
+  const groups = defaultDiaryGroups.map((group) =>
+    group.mealSlot === "breakfast" ? { ...group, label: "Morning meal" } : group,
+  );
+
+  it.each(["unmount", "confirmed closure"] as const)(
+    "ignores retained Save groups after %s",
+    async (transition) => {
+      const base = fetcher();
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url === "/api/auth/logout"
+          ? Promise.resolve(new Response(null, { status: 204 }))
+          : base(url, init),
+      );
+      await mount(fetch);
+      const retained = await editGroups();
+      if (transition === "unmount") hooks.unmount();
+      else await click("Sign out");
+      const requests = fetch.mock.calls.length;
+      const routes = router.replace.mock.calls.slice();
+      const before = text();
+      submit(retained);
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(router.replace.mock.calls).toEqual(routes);
+      expect(text()).toBe(before);
+      expect(hooks.afterClose()).toBe(0);
+    },
+  );
+
+  it("rejects a retained form after owner replacement before effects", async () => {
+    const fetch = await mount(fetcher());
+    const retained = await editGroups();
+    hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    const requests = fetch.mock.calls.length;
+    const before = text();
+    submit(retained);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(text()).toBe(before);
+  });
+
+  it("retires an old form on effect replay while fresh settings retain exact retry preconditions", async () => {
+    const base = fetcher();
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/profile") {
+        if (!init) throw new Error("Missing profile request.");
+        writes.push(init);
+        return writes.length === 1
+          ? Response.json({ error: "Try saving again." }, { status: 503 })
+          : Response.json({ data: { profile: session(owner, groups, "2").data.profile } });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const retained = await editGroups();
+    hooks.replayEffects();
+    await hooks.settle();
+    const requests = fetch.mock.calls.length;
+    submit(retained);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(writes).toHaveLength(0);
+    await change("Group 1 label", "Morning meal");
+    expect(button("Save groups").props.disabled).toBe(false);
+    submit();
+    await hooks.settle();
+    expect(text()).toContain("Try saving again.");
+    expect(field("Group 1 label").props.value).toBe("Morning meal");
+    expect(button("Save groups").props.disabled).toBe(false);
+    submit();
+    await hooks.settle();
+    expect(writes).toHaveLength(2);
+    expect(writes[0]?.body).toBe(
+      JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: groups }),
+    );
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"1"');
+    expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+    expect(text()).toContain("Diary group names and order saved everywhere you log food.");
+    expect(button("Collapse Morning meal").props["aria-expanded"]).toBe(true);
+  });
+
+  it.each([200, 401])("ignores a pending profile %s after unmount", async (status) => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/profile" ? pending.promise : base(url, init),
+    );
+    await mount(fetch);
+    await editGroups();
+    submit();
+    await hooks.settle();
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/profile")).toHaveLength(1);
+    hooks.unmount();
+    const requests = fetch.mock.calls.length;
+    const routes = router.replace.mock.calls.slice();
+    pending.resolve(
+      status === 200
+        ? Response.json({ data: { profile: session(owner, groups, "2").data.profile } })
+        : new Response(null, { status }),
+    );
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(router.replace.mock.calls).toEqual(routes);
+    expect(hooks.afterClose()).toBe(0);
+  });
+
+  it("clears only the retired profile busy state on replay and preserves a fresh save from the late response", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    let writes = 0;
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/profile") {
+        writes += 1;
+        return writes === 1
+          ? pending.promise
+          : Promise.resolve(
+              Response.json({ data: { profile: session(owner, groups, "2").data.profile } }),
+            );
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await editGroups();
+    submit();
+    await hooks.settle();
+    expect(writes).toBe(1);
+    expect(button("Saving…").props.disabled).toBe(true);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(field("Group 1 label").props.disabled).toBe(false);
+    await change("Group 1 label", "Morning meal");
+    expect(button("Save groups").props.disabled).toBe(false);
+    submit();
+    await hooks.settle();
+    expect(writes).toBe(2);
+    expect(button("Collapse Morning meal").props["aria-expanded"]).toBe(true);
+    const requests = fetch.mock.calls.length;
+    const before = text();
+    const routes = router.replace.mock.calls.slice();
+    pending.resolve(new Response(null, { status: 401 }));
+    await hooks.settle();
+    expect(text()).toBe(before);
+    expect(router.replace.mock.calls).toEqual(routes);
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+});

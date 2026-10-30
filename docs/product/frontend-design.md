@@ -79,6 +79,13 @@ attempts retire their old callbacks. A pending correction blocks pagination.
 Only a current continuation can append rows or handle session expiry; a fresh
 retry keeps the existing cursor and coherent-page checks.
 
+Meal-group saves belong to the mounted private-page generation and verified
+account that presented the form. Retained submits cannot send a profile write
+after leaving the page, account replacement or effect replay. Pending receipts
+cannot update or navigate a retired page. Restarted effects clear a retired
+profile busy state so current settings can save again. Keep the draft's original
+owner and profile revision through a failed save and retry.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

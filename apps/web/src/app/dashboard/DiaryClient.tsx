@@ -969,6 +969,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }, [date, loadOverviewCard, session]);
 
   useEffect(() => {
+    setProfileBusy((current) => (profileController.current === null ? false : current));
     setMutationBusy((current) =>
       activeMutation.current === null && current === "logout" ? null : current,
     );
@@ -1773,7 +1774,16 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   async function saveDiaryGroups() {
-    if (!session || profileBusy || profileController.current || privateUiClosed.current) return;
+    if (
+      !sessionActive.current ||
+      !session ||
+      profileBusy ||
+      profileController.current ||
+      privateUiClosed.current ||
+      privateUiGeneration.current !== mealPrivateGeneration ||
+      sessionRef.current?.user.id !== session.user.id
+    )
+      return;
     const initiatingOwnerUserId = session.user.id;
     const generation = privateUiGeneration.current;
     let prepared: ReturnType<typeof prepareDiaryGroupDraftSave>;
@@ -1788,6 +1798,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const controller = new AbortController();
     profileController.current = controller;
     const requestOwnsUi = () =>
+      sessionActive.current &&
       profileController.current === controller &&
       !controller.signal.aborted &&
       !privateUiClosed.current &&
@@ -1857,6 +1868,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       if (profileController.current === controller) {
         profileController.current = null;
         if (
+          sessionActive.current &&
           !privateUiClosed.current &&
           privateUiGeneration.current === generation &&
           sessionRef.current?.user.id === initiatingOwnerUserId
