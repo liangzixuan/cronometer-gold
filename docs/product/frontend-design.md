@@ -92,6 +92,9 @@ The settings launcher also preserves the open form and submitted draft during a
 profile save. Active diary corrections block retained settings launchers and
 profile submits, matching the disabled controls. Fresh settings actions work
 again after the correction request settles.
+Move actions find their original stable meal group in the current draft. Repeated
+actions move that same group, keep its label and stop at the first or last position;
+they do not move a different group that now occupies the old position.
 Confirm a save only when the returned profile matches the submitted normalized
 meal labels and stable-slot order. A mismatched response keeps the raw draft and
 original revision available with an unconfirmed-save message. An unchanged retry

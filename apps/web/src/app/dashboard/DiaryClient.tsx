@@ -2907,7 +2907,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                   if (profileController.current) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
-                                    groups: moveDiaryGroup(current.groups, index, -1),
+                                    groups: moveDiaryGroup(
+                                      current.groups,
+                                      current.groups.findIndex(
+                                        (candidate) => candidate.mealSlot === group.mealSlot,
+                                      ),
+                                      -1,
+                                    ),
                                   }));
                                 }}
                                 type="button"
@@ -2923,7 +2929,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                   if (profileController.current) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
-                                    groups: moveDiaryGroup(current.groups, index, 1),
+                                    groups: moveDiaryGroup(
+                                      current.groups,
+                                      current.groups.findIndex(
+                                        (candidate) => candidate.mealSlot === group.mealSlot,
+                                      ),
+                                      1,
+                                    ),
                                   }));
                                 }}
                                 type="button"

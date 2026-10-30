@@ -5921,3 +5921,118 @@ describe("Diary meal-group busy admission", () => {
     expect(fields()).toEqual(before);
   });
 });
+
+describe("Diary stable meal-group moves", () => {
+  function form() {
+    const found = elements().find(
+      (node) =>
+        node.type === "form" &&
+        elements(node).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!found) throw new Error("Missing meal-group form.");
+    return found;
+  }
+  function fields() {
+    return elements(form())
+      .filter((node) => node.type === "input")
+      .map((node) => ({ id: node.props.id, value: node.props.value }));
+  }
+  const cases = [
+    {
+      direction: "down",
+      target: "breakfast",
+      initialIndex: 1,
+      boundaryIndex: 4,
+      opposite: "up",
+      label: "Morning meal",
+      twice: ["lunch", "dinner", "breakfast", "snacks"],
+      boundary: ["lunch", "dinner", "snacks", "breakfast"],
+    },
+    {
+      direction: "up",
+      target: "snacks",
+      initialIndex: 4,
+      boundaryIndex: 1,
+      opposite: "down",
+      label: "Small meals",
+      twice: ["breakfast", "snacks", "lunch", "dinner"],
+      boundary: ["snacks", "breakfast", "lunch", "dinner"],
+    },
+  ] as const;
+
+  for (const scenario of cases) {
+    it.each(["before-paint", "after-paint"] as const)(
+      `moves the same ${scenario.target} group ${scenario.direction} with retained actions %s`,
+      async (timing) => {
+        const base = fetcher();
+        const writes: RequestInit[] = [];
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url === "/api/profile") {
+            if (!init) throw new Error("Missing profile request.");
+            writes.push(init);
+            return Promise.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+          }
+          return base(url, init);
+        });
+        await mount(fetch);
+        await click("Customize diary groups");
+        await change(`Group ${scenario.initialIndex} label`, scenario.label);
+        const retained = button(`Move group ${scenario.initialIndex} ${scenario.direction}`);
+        expect(retained.props.disabled).toBe(false);
+        const requests = fetch.mock.calls.length;
+        invoke(retained);
+        if (timing === "after-paint") await hooks.settle();
+        invoke(retained);
+        await hooks.settle();
+        const expectedGroups = (slots: readonly MealSlot[]) =>
+          slots.map((mealSlot) => {
+            const original = defaultDiaryGroups.find((group) => group.mealSlot === mealSlot);
+            if (!original) throw new Error("Missing stable meal slot.");
+            return {
+              mealSlot,
+              label: mealSlot === scenario.target ? scenario.label : original.label,
+            };
+          });
+        const expectedFields = (slots: readonly MealSlot[]) =>
+          expectedGroups(slots).map((group) => ({
+            id: `diary-group-${group.mealSlot}`,
+            value: group.label,
+          }));
+        expect(fields()).toEqual(expectedFields(scenario.twice));
+        expect(fetch.mock.calls).toHaveLength(requests);
+        invoke(retained);
+        if (timing === "after-paint") await hooks.settle();
+        invoke(retained);
+        await hooks.settle();
+        expect(fields()).toEqual(expectedFields(scenario.boundary));
+        expect(
+          button(`Move group ${scenario.boundaryIndex} ${scenario.direction}`).props.disabled,
+        ).toBe(true);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(fields()).toEqual(expectedFields(scenario.boundary));
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes).toHaveLength(2);
+        expect(writes[0]?.body).toBe(
+          JSON.stringify({
+            expectedOwnerUserId: owner,
+            diaryGroups: expectedGroups(scenario.boundary),
+          }),
+        );
+        expect(writes[1]?.body).toBe(writes[0]?.body);
+        expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"1"');
+        expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+        const fresh = button(`Move group ${scenario.boundaryIndex} ${scenario.opposite}`);
+        expect(fresh.props.disabled).toBe(false);
+        const afterRetry = fetch.mock.calls.length;
+        invoke(fresh);
+        await hooks.settle();
+        expect(fields()).toEqual(expectedFields(scenario.twice));
+        expect(fetch.mock.calls).toHaveLength(afterRetry);
+      },
+    );
+  }
+});
