@@ -6431,3 +6431,140 @@ describe("Diary entry reorder lifecycle ownership", () => {
     }
   });
 });
+
+describe("Diary deletion response lifecycle ownership", () => {
+  function receipt(write: RequestInit | undefined) {
+    const operationId = new Headers(write?.headers).get("idempotency-key");
+    if (!operationId) throw new Error("Missing deletion operation id.");
+    const affectedDays = [{ localDate: "2026-08-15", revision: "9" }];
+    return {
+      data: {
+        replayed: false,
+        entry: null,
+        affectedDays,
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "delete",
+          expectedSubjects: [{ entryId: entry(0).id, revision: "3" }],
+          resultSubjects: [{ entryId: entry(0).id, revision: "4", state: "deleted" }],
+          affectedDays,
+        },
+      },
+    };
+  }
+  async function start(pending: Promise<Response>, reload?: Promise<Response>) {
+    const base = fetcher();
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") {
+        writes.push(init);
+        return pending;
+      }
+      if (writes.length > 0 && url.startsWith("/api/diary?") && reload) return reload;
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Delete Apple 0");
+    expect(writes).toHaveLength(1);
+    return { fetch, writes };
+  }
+  function replace(transition: string) {
+    if (transition === "account")
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    else {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+    }
+  }
+  async function settleBeforeEffects() {
+    for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+    hooks.renderWithoutEffects();
+  }
+  for (const transition of ["account", "route"]) {
+    it.each(["saved", "conflict", "failed"])(
+      `ignores a late %s deletion after ${transition} replacement`,
+      async (kind) => {
+        const pending = deferred<Response>();
+        const { fetch, writes } = await start(pending.promise);
+        const response =
+          kind === "saved"
+            ? Response.json(receipt(writes[0]))
+            : Response.json(
+                { error: "Old deletion unavailable." },
+                { status: kind === "conflict" ? 412 : 503 },
+              );
+        replace(transition);
+        const before = text(),
+          requests = fetch.mock.calls.length,
+          routes = router.replace.mock.calls.slice();
+        pending.resolve(response);
+        await settleBeforeEffects();
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(text()).toBe(before);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(writes).toHaveLength(1);
+      },
+    );
+    it(`retires a deletion while JSON decodes before ${transition} effects`, async () => {
+      const body = deferred<ReturnType<typeof receipt>>();
+      const response = Response.json({});
+      const decode = vi.spyOn(response, "json").mockImplementation(() => body.promise);
+      const { fetch, writes } = await start(Promise.resolve(response));
+      expect(decode).toHaveBeenCalledTimes(1);
+      replace(transition);
+      const before = text(),
+        requests = fetch.mock.calls.length;
+      body.resolve(receipt(writes[0]));
+      await settleBeforeEffects();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(text()).toBe(before);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    });
+  }
+  it.each(["saved", "failed"])(
+    "does not report deletion into a replaced account after a %s day reload",
+    async (kind) => {
+      const pending = deferred<Response>(),
+        reload = deferred<Response>();
+      const { fetch, writes } = await start(pending.promise, reload.promise);
+      const requests = fetch.mock.calls.length;
+      pending.resolve(Response.json(receipt(writes[0])));
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      replace("account");
+      const before = text();
+      reload.resolve(
+        kind === "saved"
+          ? Response.json(page([entry(1, "lunch")], null, 1, "2026-08-15", "9"))
+          : Response.json({ error: "Old reload unavailable." }, { status: 503 }),
+      );
+      await settleBeforeEffects();
+      expect(text()).toBe(before);
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+  it.each(["saved", "conflict"])("keeps the current %s deletion recovery", async (kind) => {
+    const pending = deferred<Response>();
+    const fresh = kind === "saved" ? page([entry(1, "lunch")], null, 1, "2026-08-15", "9") : page();
+    const { fetch, writes } = await start(pending.promise, Promise.resolve(Response.json(fresh)));
+    const requests = fetch.mock.calls.length;
+    pending.resolve(
+      kind === "saved" ? Response.json(receipt(writes[0])) : Response.json({}, { status: 412 }),
+    );
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests + 1);
+    expect(text()).toContain(
+      kind === "saved"
+        ? "Apple 0 deleted from Breakfast and totals refreshed."
+        : "The diary changed elsewhere. Fresh values were loaded; delete again if needed.",
+    );
+    expect(elements().some((node) => node.props["aria-label"] === "Delete Apple 0")).toBe(
+      kind === "conflict",
+    );
+    expect(button("Delete Apple 1").props.disabled).toBe(false);
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+    expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"3"');
+  });
+});

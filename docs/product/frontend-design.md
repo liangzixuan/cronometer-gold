@@ -122,6 +122,12 @@ state when no mutation is active, so a fresh move can start before an old respon
 arrives. Complete-day permutations, matching receipts and exact retries remain required.
 Collapsing a meal does not retire its otherwise valid Move control.
 
+Delete responses stay with the session, account and route that sent the request.
+Check that ownership before handling a response, after decoding its body and after
+reloading the affected day. A saved receipt, revision conflict or failure from a
+retired deletion cannot reload another page or replace its message. Current matching
+deletions and revision conflicts retain their normal reload and retry behavior.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

@@ -1359,6 +1359,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const requestSession = sessionRef.current;
     const requestRoute = sessionRouteRef.current;
     const owner = beginMutation(diary.localDate, entry.id);
+    const ownsPage = () =>
+      sessionActive.current &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      sessionRef.current === requestSession &&
+      sessionRouteRef.current === requestRoute;
+    const responseIsCurrent = () => ownsPage() && mutationIsCurrent(owner);
     setMessage("Deleting the diary entry…");
     try {
       const response = await fetch(
@@ -1373,21 +1380,15 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           cache: "no-store",
         },
       );
-      if (response.status === 401) {
-        if (
-          mutationIsCurrent(owner) &&
-          sessionRef.current === requestSession &&
-          sessionRouteRef.current === requestRoute
-        )
-          signInAgain();
-        return;
-      }
+      if (!responseIsCurrent()) return;
+      if (response.status === 401) return signInAgain();
       const body = await json(response);
+      if (!responseIsCurrent()) return;
       if (response.status === 412) {
         operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
+        if (!responseIsCurrent()) return;
         const reloaded = await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (responseIsCurrent()) {
           setMessage(
             reloaded
               ? "The diary changed elsewhere. Fresh values were loaded; delete again if needed."
@@ -1412,20 +1413,24 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         throw new TypeError("The server returned a correction receipt for a different deletion.");
       }
       operationIds.current.delete(key);
-      await reportMutationReceipt(
-        owner,
-        mutation,
-        `${entryName(entry)} deleted from ${diaryGroupLabel(diaryGroups, entry.mealSlot)} and totals refreshed.`,
-        "The entry was deleted, but fresh diary data could not be confirmed. Choose Retry.",
-      );
+      const reloaded = mutation.affectedDays.some((day) => day.localDate === owner.sourceDate)
+        ? await loadDiary(owner.sourceDate)
+        : true;
+      if (responseIsCurrent()) {
+        setMessage(
+          reloaded
+            ? `${entryName(entry)} deleted from ${diaryGroupLabel(diaryGroups, entry.mealSlot)} and totals refreshed.`
+            : "The entry was deleted, but fresh diary data could not be confirmed. Choose Retry.",
+        );
+      }
     } catch (error) {
-      if (mutationIsCurrent(owner)) {
+      if (responseIsCurrent()) {
         setMessage(
           `${error instanceof Error ? error.message : "The entry could not be deleted."} Choose Delete again to retry safely.`,
         );
       }
     } finally {
-      finishMutation(owner);
+      if (ownsPage()) finishMutation(owner);
     }
   }
 
