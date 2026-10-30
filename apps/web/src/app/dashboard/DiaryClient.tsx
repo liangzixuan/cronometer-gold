@@ -991,6 +991,25 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     };
   }, []);
 
+  function retryDiary() {
+    if (
+      state !== "error" ||
+      !sessionActive.current ||
+      privateUiClosed.current ||
+      session === null ||
+      sessionRef.current !== session ||
+      sessionRouteRef.current !== sessionRoute ||
+      privateUiGeneration.current !== mealPrivateGeneration ||
+      viewEpoch.current !== mealViewEpoch ||
+      requestGeneration.current !== mealRequestGeneration ||
+      dateRef.current !== date ||
+      activeMutation.current !== null ||
+      profileController.current !== null
+    )
+      return;
+    void loadDiary(date);
+  }
+
   function chooseDate(next: string) {
     transitionCommittedDate(next, true);
   }
@@ -2273,7 +2292,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           <button
             className="secondaryAction"
             disabled={!hasCommittedDate || mutationBusy !== null}
-            onClick={() => void loadDiary(date)}
+            onClick={retryDiary}
             type="button"
           >
             Retry

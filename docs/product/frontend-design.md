@@ -66,6 +66,13 @@ ready editor or replay a save. Session closure, route replacement and leaving th
 screen invalidate pending reads. An expired or replaced account requires signing
 in again; a failed sign-out attempt must leave a usable recovery path.
 
+The day Retry action belongs to the failed read, account, route and mounted page
+that presented it. Starting a retry retires that callback before paint, so repeated
+activation cannot abort the new read. Recovery, account or route replacement and
+effect replay also retire old callbacks. A retained action must not clear a recovered
+editor or its draft. A pending sign-out blocks retries; failed confirmation and a
+new failed day read leave a fresh Retry available with the same request contract.
+
 Sign-out actions retained from a closed page cannot send another request. A
 pending confirmation belongs to the mounted private-page generation that started
 it; a late response cannot navigate or update a closed or replaced page. Current

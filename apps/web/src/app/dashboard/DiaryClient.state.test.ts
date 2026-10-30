@@ -6873,3 +6873,143 @@ describe("Diary Repeat response page ownership", () => {
     expect(writes).toHaveLength(1);
   });
 });
+
+describe("Diary day Retry ownership", () => {
+  async function failedDay() {
+    const base = fetcher();
+    let read = 0;
+    let nextRead: (() => Promise<Response>) | undefined;
+    const logout = deferred<Response>();
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/auth/logout") return logout.promise;
+      if (url.startsWith("/api/diary?")) {
+        read += 1;
+        if (read === 1)
+          return Promise.resolve(Response.json({ error: "Day unavailable." }, { status: 503 }));
+        if (nextRead) return nextRead();
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    expect(text()).toContain("Day unavailable.");
+    return {
+      fetch,
+      logout,
+      retry: button("Retry"),
+      next: (response: () => Promise<Response>) => {
+        nextRead = response;
+      },
+    };
+  }
+
+  it("admits one retry before paint without aborting its request", async () => {
+    const { fetch, retry, next } = await failedDay();
+    const pending = deferred<Response>();
+    next(() => pending.promise);
+    invoke(retry);
+    const requests = fetch.mock.calls.length;
+    const signal = fetch.mock.calls.at(-1)?.[1]?.signal;
+    invoke(retry);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(signal?.aborted).toBe(false);
+    pending.resolve(Response.json(page()));
+    await hooks.settle();
+    expect(text()).toContain("Apple 0");
+  });
+
+  it("retires a failed attempt's control while a fresh retry keeps the exact day request", async () => {
+    const { fetch, retry, next } = await failedDay();
+    next(() => Promise.resolve(Response.json({ error: "Still unavailable." }, { status: 503 })));
+    await click("Retry");
+    expect(text()).toContain("Still unavailable.");
+    const requests = fetch.mock.calls.length;
+    invoke(retry);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    next(() => Promise.resolve(Response.json(page())));
+    await click("Retry");
+    const reads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+    expect(reads).toHaveLength(3);
+    expect(reads.map(([url]) => url)).toEqual(Array(3).fill(reads[0]?.[0]));
+    for (const [, init] of reads) {
+      expect(init?.cache).toBe("no-store");
+      expect(Object.fromEntries(new Headers(init?.headers))).toEqual({
+        accept: "application/json",
+      });
+    }
+    expect(text()).toContain("2 of 2 entries loaded. Nutrition totals include all 2.");
+  });
+
+  it("keeps a recovered editor and its exact draft when the old Retry is invoked", async () => {
+    const { fetch, retry } = await failedDay();
+    await click("Retry");
+    await prepareSaveLockDraft();
+    const values = editorValues(),
+      before = text(),
+      requests = fetch.mock.calls.length;
+    invoke(retry);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(text()).toBe(before);
+    expect(editorValues()).toEqual(values);
+  });
+
+  it.each([
+    "unmount",
+    "effect replay",
+    "account replacement",
+    "route replacement",
+    "route return",
+    "confirmed sign-out",
+  ])("rejects a retained Retry after %s", async (transition) => {
+    const { fetch, retry, logout } = await failedDay();
+    if (transition === "unmount") hooks.unmount();
+    else if (transition === "effect replay") {
+      hooks.replayEffects();
+      await hooks.settle();
+    } else if (transition === "account replacement")
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    else if (transition === "confirmed sign-out") {
+      logout.resolve(new Response(null, { status: 204 }));
+      await click("Sign out");
+    } else {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+      if (transition === "route return") {
+        route.date = "2026-08-15";
+        hooks.renderWithoutEffects();
+      }
+    }
+    const requests = fetch.mock.calls.length,
+      before = text(),
+      navigations = router.replace.mock.calls.length;
+    invoke(retry);
+    for (let pass = 0; pass < 16; pass += 1) await Promise.resolve();
+    if (transition !== "unmount") hooks.renderWithoutEffects();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+    expect(text()).toBe(before);
+    expect(router.replace.mock.calls).toHaveLength(navigations);
+    if (transition === "effect replay") {
+      await click("Edit Apple 0");
+      expect(editorField("Quantity").props.value).toBe("1.250000");
+    }
+  });
+
+  it("blocks Retry during sign-out and restores fresh recovery after failed confirmation", async () => {
+    const { fetch, retry, logout } = await failedDay();
+    invoke(button("Sign out"));
+    const requests = fetch.mock.calls.length;
+    invoke(retry);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(button("Retry").props.disabled).toBe(true);
+    logout.resolve(Response.json({ error: "Sign out unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Retry").props.disabled).toBe(false);
+    await click("Retry");
+    expect(text()).toContain("Apple 0");
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+  });
+});
