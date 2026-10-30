@@ -513,8 +513,13 @@ successful or failed save, with the same selected date and continuation contract
 Diary pagination actions also belong to the route that rendered them. Load more
 and Retry load more callbacks from an earlier view cannot start a continuation
 after leaving that view or returning to the same day. Current controls keep the
-loaded page and request the next cursor normally. This admission check uses the
-existing route identity and preserves response handling for reads already started.
+loaded page and request the next cursor normally. Continuation responses also
+retain their initiating route. A late response cannot append entries, report a
+failure, refresh page one or redirect to login after that route is replaced,
+including a return to the same day. Returning to a loaded day retires only its
+unfinished continuation and restores Load more without another automatic read.
+The loaded entries and cursor remain available. A newer continuation keeps its
+own loading state when the old response arrives.
 
 ## Responsive layout
 

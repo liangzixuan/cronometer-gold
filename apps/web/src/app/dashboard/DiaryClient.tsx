@@ -297,6 +297,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   const renderedRepeatOperations = new Map(repeatOperations.current);
   const loadController = useRef<AbortController | null>(null);
   const dayReadRoute = useRef<typeof sessionRoute | null>(null);
+  const paginationReadRoute = useRef<typeof sessionRoute | null>(null);
   const sessionController = useRef<AbortController | null>(null);
   const sessionRequestGeneration = useRef(0);
   const sessionActive = useRef(false);
@@ -647,6 +648,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       };
       const requestRoute = sessionRouteRef.current;
       dayReadRoute.current = requestRoute;
+      paginationReadRoute.current = null;
       const generation = requestGeneration.current + 1;
       requestGeneration.current = generation;
       loadController.current?.abort();
@@ -985,6 +987,30 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }, [loadDiary, sessionRoute]);
 
   useEffect(() => {
+    const current = diaryPageRef.current;
+    if (
+      paginationReadRoute.current === null ||
+      paginationReadRoute.current === sessionRoute ||
+      sessionRouteRef.current !== sessionRoute ||
+      !sessionActive.current ||
+      privateUiClosed.current ||
+      !current ||
+      current.data.localDate !== dateRef.current ||
+      resolveDiaryRouteDate(
+        sessionRoute.explicitDate,
+        sessionRef.current?.profile.timeZone ?? null,
+      ) !== dateRef.current
+    )
+      return;
+    paginationReadRoute.current = null;
+    requestGeneration.current += 1;
+    loadController.current = null;
+    pageRequestBusy.current = false;
+    setPageState("idle");
+    setMessage(loadedMessage(current));
+  }, [sessionRoute]);
+
+  useEffect(() => {
     if (session && isLocalDate(date)) {
       void loadOverviewCard("hydration", date);
       void loadOverviewCard("activity", date);
@@ -1106,10 +1132,12 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const generation = requestGeneration.current + 1;
     requestGeneration.current = generation;
     pageRequestBusy.current = true;
+    paginationReadRoute.current = sessionRoute;
     const controller = new AbortController();
     loadController.current = controller;
     const isCurrent = () =>
       ownsCurrentPage() &&
+      sessionRouteRef.current === sessionRoute &&
       requestGeneration.current === generation &&
       loadController.current === controller &&
       !controller.signal.aborted;
@@ -1148,6 +1176,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     } finally {
       if (requestGeneration.current === generation && loadController.current === controller) {
         pageRequestBusy.current = false;
+        if (sessionRouteRef.current === sessionRoute) paginationReadRoute.current = null;
       }
     }
   }

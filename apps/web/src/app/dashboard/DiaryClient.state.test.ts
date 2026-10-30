@@ -7816,3 +7816,117 @@ describe("Diary pagination route admission", () => {
     );
   }
 });
+
+describe("Diary pagination response route ownership", () => {
+  for (const timing of ["before effects", "during a new continuation"] as const) {
+    it.each(["loaded", "failed", "expired", "decoded", "stale", "rejected"])(
+      `ignores an old %s continuation after a same-day view return ${timing}`,
+      async (kind) => {
+        const first = page(
+          Array.from({ length: 20 }, (_, index) => entry(index)),
+          "d1.next-page",
+          21,
+        );
+        const base = fetcher(first);
+        const pending = deferred<Response>();
+        const fresh = deferred<Response>();
+        const body = deferred<ReturnType<typeof page>>();
+        const response =
+          kind === "loaded" || kind === "decoded"
+            ? Response.json(page([entry(20)], null, 21))
+            : Response.json(
+                kind === "stale"
+                  ? { code: "DIARY_PAGE_STALE" }
+                  : { error: "Departed continuation unavailable." },
+                { status: kind === "expired" ? 401 : kind === "stale" ? 409 : 503 },
+              );
+        const decode = vi.spyOn(response, "json");
+        if (kind === "decoded") decode.mockImplementation(() => body.promise);
+        const continuations: {
+          url: string;
+          cache: RequestCache | undefined;
+          headers: Record<string, string>;
+        }[] = [];
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url.includes("cursor=")) {
+            continuations.push({
+              url,
+              cache: init?.cache,
+              headers: Object.fromEntries(new Headers(init?.headers)),
+            });
+            return continuations.length === 1
+              ? kind === "decoded"
+                ? Promise.resolve(response)
+                : pending.promise.then((value) => {
+                    if (kind === "rejected") throw new TypeError("Departed continuation offline.");
+                    return value;
+                  })
+              : fresh.promise;
+          }
+          return base(url, init);
+        });
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        invoke(button("Load more"));
+        await hooks.settle();
+        if (kind === "decoded") expect(decode).toHaveBeenCalledTimes(1);
+        view = "overview";
+        hooks.renderWithoutEffects();
+        view = "diary";
+        hooks.renderWithoutEffects();
+        const dayReads = () =>
+          fetch.mock.calls.filter(
+            ([url]) => url.startsWith("/api/diary?") && !url.includes("cursor="),
+          );
+        if (timing === "during a new continuation") {
+          hooks.render();
+          await hooks.settle();
+          expect(text()).toContain("20 of 21 entries loaded");
+          expect(text()).not.toContain("Apple 20");
+          expect(button("Load more").props.disabled).toBe(false);
+          expect(continuations).toHaveLength(1);
+          expect(dayReads()).toHaveLength(1);
+          invoke(button("Load more"));
+          await hooks.settle();
+          expect(continuations).toHaveLength(2);
+        }
+        const before = text(),
+          requests = fetch.mock.calls.length,
+          routes = router.replace.mock.calls.slice();
+        if (kind === "decoded") body.resolve(page([entry(20)], null, 21));
+        else pending.resolve(response);
+        for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+        hooks.renderWithoutEffects();
+        expect(text()).toBe(before);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toEqual(routes);
+        if (kind !== "decoded") expect(decode).not.toHaveBeenCalled();
+        hooks.render();
+        await hooks.settle();
+        if (timing === "before effects") {
+          expect(text()).toContain("20 of 21 entries loaded");
+          expect(button("Load more").props.disabled).toBe(false);
+          expect(continuations).toHaveLength(1);
+          invoke(button("Load more"));
+          await hooks.settle();
+        }
+        expect(continuations).toHaveLength(2);
+        expect(button("Loading more…").props.disabled).toBe(true);
+        expect(continuations[1]).toEqual(continuations[0]);
+        expect(continuations[1]).toEqual({
+          url: "/api/diary?date=2026-08-15&limit=20&cursor=d1.next-page",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        fresh.resolve(Response.json(page([entry(20)], null, 21)));
+        await hooks.settle();
+        expect(text()).toContain("21 of 21 entries loaded");
+        expect(text()).toContain("Apple 20");
+        expect(dayReads()).toHaveLength(1);
+        expect(router.replace.mock.calls).toEqual(routes);
+      },
+    );
+  }
+});
