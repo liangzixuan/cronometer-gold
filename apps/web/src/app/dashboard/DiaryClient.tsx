@@ -2000,6 +2000,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     profileController.current = controller;
     const requestOwnsUi = () =>
       sessionActive.current &&
+      sessionRouteRef.current === sessionRoute &&
       profileController.current === controller &&
       !controller.signal.aborted &&
       !privateUiClosed.current &&

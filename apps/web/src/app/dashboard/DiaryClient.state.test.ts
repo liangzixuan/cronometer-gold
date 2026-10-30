@@ -8064,3 +8064,178 @@ describe("Diary group control route ownership", () => {
     );
   }
 });
+
+describe("Diary group save response route ownership", () => {
+  function form() {
+    const node = elements().find(
+      (candidate) =>
+        candidate.type === "form" &&
+        elements(candidate).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!node) throw new Error("Missing group settings form.");
+    return node;
+  }
+  function draft() {
+    return elements()
+      .filter((node) => node.type === "input" && String(node.props.id).startsWith("diary-group-"))
+      .map((node) => ({ id: node.props.id, value: node.props.value }));
+  }
+  const outcomes = [
+    "success",
+    "failure",
+    "expired",
+    "owner changed",
+    "conflict",
+    "network rejection",
+    "decoded profile",
+    "refreshed session",
+    "refresh expired",
+    "decoded session",
+  ] as const;
+  for (const transition of [
+    "view replacement",
+    "same-day return before effects",
+    "same-day return after effects",
+  ] as const) {
+    it.each(outcomes)(
+      `ignores late %s after ${transition} and releases only the existing save lock`,
+      async (outcome) => {
+        const pending = deferred<Response>();
+        const decoded = deferred<unknown>();
+        const base = fetcher();
+        const groups = moveDiaryGroup(
+          defaultDiaryGroups.map((group) =>
+            group.mealSlot === "breakfast" ? { ...group, label: "My morning" } : group,
+          ),
+          0,
+          1,
+        );
+        const saved = { data: { profile: session(owner, groups, "2").data.profile } };
+        const writes: RequestInit[] = [];
+        let sessionReads = 0;
+        const recovering = ["refreshed session", "refresh expired", "decoded session"].includes(
+          outcome,
+        );
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url === "/api/profile") {
+            if (!init) throw new Error("Missing profile request.");
+            writes.push(init);
+            if (writes.length > 1)
+              return Promise.resolve(
+                writes.length === 2
+                  ? Response.json({ error: "Fresh save unavailable." }, { status: 503 })
+                  : Response.json(saved),
+              );
+            if (recovering) return Promise.resolve(Response.json({}, { status: 412 }));
+            if (outcome === "decoded profile") {
+              const response = Response.json(saved);
+              vi.spyOn(response, "json").mockReturnValue(decoded.promise);
+              return Promise.resolve(response);
+            }
+            if (outcome === "network rejection")
+              return pending.promise.then(() => {
+                throw new Error("Retired network failure.");
+              });
+            return pending.promise;
+          }
+          if (url === "/api/auth/me") {
+            sessionReads += 1;
+            if (recovering && sessionReads > 1) {
+              if (outcome === "decoded session") {
+                const response = Response.json(session());
+                vi.spyOn(response, "json").mockReturnValue(decoded.promise);
+                return Promise.resolve(response);
+              }
+              return pending.promise;
+            }
+          }
+          return base(url, init);
+        });
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        await click("Customize diary groups");
+        await change("Group 1 label", "My morning");
+        await click("Move group 1 down");
+        const expectedDraft = draft();
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes).toHaveLength(1);
+        expect(button("Saving…").props.disabled).toBe(true);
+        expect(sessionReads).toBe(recovering ? 2 : 1);
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "same-day return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const requests = fetch.mock.calls.length;
+        const routes = router.replace.mock.calls.slice();
+        expect(writes[0]?.signal?.aborted).toBe(false);
+        if (transition !== "view replacement") {
+          expect(button("Saving…").props.disabled).toBe(true);
+          invoke(form(), "onSubmit", { preventDefault() {} });
+          expect(writes).toHaveLength(1);
+        }
+        if (outcome === "decoded profile") decoded.resolve(saved);
+        else if (outcome === "decoded session") decoded.resolve(session(anotherOwner));
+        else
+          pending.resolve(
+            outcome === "success"
+              ? Response.json(saved)
+              : outcome === "refreshed session"
+                ? Response.json(session(owner, defaultDiaryGroups, "2"))
+                : outcome === "expired" || outcome === "refresh expired"
+                  ? new Response(null, { status: 401 })
+                  : outcome === "owner changed"
+                    ? Response.json({ code: "PROFILE_OWNER_CHANGED" }, { status: 409 })
+                    : outcome === "conflict"
+                      ? Response.json({}, { status: 412 })
+                      : Response.json({ error: "Retired save failure." }, { status: 503 }),
+          );
+        for (let pass = 0; pass < 30; pass += 1) await Promise.resolve();
+        hooks.renderWithoutEffects();
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(text()).not.toContain("Retired save failure.");
+        expect(text()).not.toContain("Retired network failure.");
+        expect(text()).not.toContain("Diary group names and order saved everywhere");
+        expect(text()).not.toContain("Fresh diary group settings were loaded.");
+        expect(writes[0]?.signal?.aborted).toBe(false);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        expect(draft()).toEqual(expectedDraft);
+        expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
+        expect(button("Save groups").props.disabled).toBe(false);
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(text()).toContain("Fresh save unavailable.");
+        expect(draft()).toEqual(expectedDraft);
+        expect(button("Save groups").props.disabled).toBe(false);
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes).toHaveLength(3);
+        for (const write of writes) {
+          expect(write.method).toBe("PATCH");
+          expect(write.cache).toBe("no-store");
+          expect(write.body).toBe(
+            JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: groups }),
+          );
+          expect(Object.fromEntries(new Headers(write.headers))).toEqual({
+            accept: "application/json",
+            "content-type": "application/json",
+            "if-match": '"1"',
+          });
+        }
+        expect(button("Collapse My morning").props["aria-expanded"]).toBe(true);
+        expect(text()).toContain("Diary group names and order saved everywhere you log food.");
+      },
+    );
+  }
+});

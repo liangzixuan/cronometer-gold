@@ -527,8 +527,15 @@ view or returning to the same day retires retained open, rename, reorder, reset,
 cancel, close and save callbacks. They cannot change the draft or submit a write
 before or after route effects run. The unsaved labels and order remain available
 on return; fresh controls can edit and save them. Failed saves retain the draft
-and exact retry body and headers. This change affects control admission only;
-responses from writes already started keep their existing handling.
+and exact retry body and headers.
+
+Meal-group save responses also belong to the route that started the write.
+Leaving the view or returning to the same day retires response handling, including
+decoded profiles and conflict-recovery sessions. Late success, failure, expiry or
+owner changes cannot replace the draft, change the session, redirect the page or
+start another recovery read. The existing write lock stays held until completion;
+its existing cleanup then enables fresh controls. Unsaved labels and order remain
+available, and a fresh save keeps the same request and retry contract.
 
 ## Responsive layout
 
