@@ -1092,6 +1092,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       !ownsCurrentPage() ||
       requestGeneration.current !== mealRequestGeneration ||
       activeMutation.current !== null ||
+      profileController.current !== null ||
       !current ||
       current.data.localDate !== date ||
       nextCursor === null ||
@@ -3009,10 +3010,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                         aria-disabled={
                           diaryPage.page.nextCursor === null ||
                           pageState === "loading" ||
-                          mutationBusy !== null
+                          controlsBusy
                         }
                         className="secondaryAction"
-                        disabled={pageState === "loading" || mutationBusy !== null}
+                        disabled={pageState === "loading" || controlsBusy}
                         onClick={() => void loadMore()}
                         type="button"
                       >

@@ -7628,3 +7628,111 @@ describe("Dashboard summary response route ownership", () => {
     });
   }
 });
+
+describe("Diary pagination during group saves", () => {
+  for (const retryPage of [false, true]) {
+    it.each(["success", "failure"] as const)(
+      `blocks ${retryPage ? "Retry load more" : "Load more"} until group save %s settles`,
+      async (outcome) => {
+        const pending = deferred<Response>();
+        const first = page(
+          Array.from({ length: 20 }, (_, index) => entry(index)),
+          "d1.next-page",
+          21,
+        );
+        const base = fetcher(first);
+        const groups = defaultDiaryGroups.map((group) =>
+          group.mealSlot === "breakfast" ? { ...group, label: "Submitted morning" } : group,
+        );
+        const writes: ReturnType<typeof captureEditorSave>[] = [];
+        const writeRequests: RequestInit[] = [];
+        const continuations: { url: string; headers: Record<string, string> }[] = [];
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url === "/api/profile") {
+            if (!init) throw new Error("Missing profile request.");
+            writes.push(captureEditorSave(url, init));
+            writeRequests.push(init);
+            return writes.length === 1
+              ? pending.promise
+              : Promise.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+          }
+          if (url.includes("cursor=")) {
+            if (!init) throw new Error("Missing continuation request.");
+            continuations.push({ url, headers: Object.fromEntries(new Headers(init.headers)) });
+            return Promise.resolve(
+              retryPage && continuations.length === 1
+                ? Response.json({ error: "Page unavailable." }, { status: 503 })
+                : Response.json(page([entry(20)], null, 21)),
+            );
+          }
+          return base(url, init);
+        });
+        await mount(fetch);
+        if (retryPage) await click("Load more");
+        const label = retryPage ? "Retry load more" : "Load more";
+        await click("Customize diary groups");
+        await change("Group 1 label", "Submitted morning");
+        const retained = button(label);
+        const submit = () => {
+          const form = elements().find(
+            (node) => node.type === "form" && text(node).includes("Save groups"),
+          );
+          if (!form) throw new Error("Missing diary settings form.");
+          invoke(form, "onSubmit", { preventDefault() {} });
+        };
+        submit();
+        expect(writes).toHaveLength(1);
+        const count = fetch.mock.calls.length;
+        const pageCount = continuations.length;
+        const routes = router.replace.mock.calls.slice();
+        invoke(retained);
+        expect(fetch.mock.calls).toHaveLength(count);
+        await hooks.settle();
+        expect(button(label).props.disabled).toBe(true);
+        expect(button(label).props["aria-disabled"]).toBe(true);
+        invoke(button(label));
+        await hooks.settle();
+        expect(fetch.mock.calls).toHaveLength(count);
+        expect(continuations).toHaveLength(pageCount);
+        expect(writeRequests[0]?.signal?.aborted).not.toBe(true);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(field("Local date").props.value).toBe("2026-08-15");
+        expect(field("Group 1 label").props.value).toBe("Submitted morning");
+        expect(text()).toContain("20 of 21 entries loaded");
+        expect(text()).not.toContain("Apple 20");
+        pending.resolve(
+          outcome === "success"
+            ? Response.json({ data: { profile: session(owner, groups, "2").data.profile } })
+            : Response.json({ error: "Save unavailable." }, { status: 503 }),
+        );
+        await hooks.settle();
+        if (outcome === "failure") {
+          expect(text()).toContain("Save unavailable.");
+          expect(field("Group 1 label").props.value).toBe("Submitted morning");
+          submit();
+          await hooks.settle();
+          expect(writes).toHaveLength(2);
+          expect(writes[1]).toEqual(writes[0]);
+          expect(writes[0]?.headers["if-match"]).toBe('"1"');
+          expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual({
+            expectedOwnerUserId: owner,
+            diaryGroups: groups,
+          });
+        } else {
+          expect(text()).toContain("Diary group names and order saved everywhere you log food.");
+          expect(button("Collapse Submitted morning").props["aria-expanded"]).toBe(true);
+        }
+        expect(button(label).props.disabled).toBe(false);
+        await click(label);
+        expect(continuations).toHaveLength(pageCount + 1);
+        const request = continuations.at(-1);
+        expect(request?.url).toBe("/api/diary?date=2026-08-15&limit=20&cursor=d1.next-page");
+        expect(request?.headers).toEqual({ accept: "application/json" });
+        if (retryPage) expect(request).toEqual(continuations[0]);
+        expect(text()).toContain("21 of 21 entries loaded");
+        expect(text()).toContain("Apple 20");
+        expect(router.replace.mock.calls).toEqual(routes);
+      },
+    );
+  }
+});

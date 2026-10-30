@@ -503,6 +503,13 @@ resumes each unfinished summary through its existing loading path. Completed
 summaries keep their result without another read, and one card's recovery does
 not reload the other card or the diary. Current expiry and retry behavior remain.
 
+Diary Load more and Retry load more wait while meal-group settings are being
+saved. The handler checks the existing save controller before starting a read,
+and the button uses the shared busy state. Retained callbacks cannot fetch before
+paint or change the loaded entries during that save. A failed save keeps the
+submitted draft and exact retry request; fresh pagination works after either a
+successful or failed save, with the same selected date and continuation contract.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not
