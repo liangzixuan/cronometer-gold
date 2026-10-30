@@ -6711,3 +6711,165 @@ describe("Diary edit response lifecycle ownership", () => {
     expect(editorValues()).toEqual(draft);
   });
 });
+
+describe("Diary Repeat response page ownership", () => {
+  async function start(pending: Promise<Response>, reload?: Promise<Response>) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T18:00:59.000Z"));
+    const base = fetcher();
+    const writes: CapturedRepeat[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        writes.push(captureRepeat(url, init));
+        return pending;
+      }
+      if (writes.length > 0 && url.startsWith("/api/diary?") && reload) return reload;
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(1);
+    return { fetch, writes };
+  }
+  function receipt(writes: CapturedRepeat[]) {
+    const request = writes[0];
+    if (!request) throw new Error("Missing Repeat request.");
+    return repeatReceipt(request);
+  }
+  function replaceRoute() {
+    route.date = "2026-08-16";
+    hooks.renderWithoutEffects();
+  }
+  async function settleBeforeEffects() {
+    for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+    hooks.renderWithoutEffects();
+  }
+  it.each(["saved", "conflict", "timezone", "failed", "unauthorized"])(
+    "keeps a late %s Repeat response off a replacement route before effects",
+    async (kind) => {
+      const pending = deferred<Response>();
+      const { fetch, writes } = await start(pending.promise);
+      const response =
+        kind === "saved"
+          ? Response.json(receipt(writes))
+          : Response.json(
+              { error: "Old Repeat unavailable.", code: "DIARY_TIME_ZONE_CHANGED" },
+              {
+                status:
+                  kind === "conflict"
+                    ? 412
+                    : kind === "timezone"
+                      ? 409
+                      : kind === "unauthorized"
+                        ? 401
+                        : 503,
+              },
+            );
+      replaceRoute();
+      const before = text(),
+        requests = fetch.mock.calls.length,
+        routes = router.replace.mock.calls.slice();
+      pending.resolve(response);
+      await settleBeforeEffects();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(text()).toBe(before);
+      expect(router.replace.mock.calls).toEqual(routes);
+      expect(writes).toHaveLength(1);
+    },
+  );
+  it("keeps a decoded Repeat receipt off a route replaced during JSON decoding", async () => {
+    const body = deferred<ReturnType<typeof repeatReceipt>>();
+    const response = Response.json({});
+    const decode = vi.spyOn(response, "json").mockImplementation(() => body.promise);
+    const { fetch, writes } = await start(Promise.resolve(response));
+    expect(decode).toHaveBeenCalledTimes(1);
+    replaceRoute();
+    const before = text(),
+      requests = fetch.mock.calls.length;
+    body.resolve(receipt(writes));
+    await settleBeforeEffects();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(text()).toBe(before);
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+  });
+  it.each(["saved", "failed"])(
+    "does not report Repeat into a replaced account after a %s day reload",
+    async (kind) => {
+      const pending = deferred<Response>(),
+        reload = deferred<Response>();
+      const { fetch, writes } = await start(pending.promise, reload.promise);
+      const requests = fetch.mock.calls.length;
+      pending.resolve(Response.json(receipt(writes)));
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+      const before = text();
+      reload.resolve(
+        kind === "saved"
+          ? Response.json(
+              page(
+                [entry(0), entry(1, "lunch"), receipt(writes).data.entry],
+                null,
+                3,
+                "2026-08-15",
+                "9",
+              ),
+            )
+          : Response.json({ error: "Old reload unavailable." }, { status: 503 }),
+      );
+      await settleBeforeEffects();
+      expect(text()).toBe(before);
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+  it.each(["saved", "conflict"])("keeps the current %s Repeat recovery", async (kind) => {
+    const pending = deferred<Response>(),
+      reload = deferred<Response>();
+    const { fetch, writes } = await start(pending.promise, reload.promise);
+    const requests = fetch.mock.calls.length;
+    pending.resolve(
+      kind === "saved" ? Response.json(receipt(writes)) : Response.json({}, { status: 412 }),
+    );
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests + 1);
+    reload.resolve(
+      Response.json(
+        kind === "saved"
+          ? page(
+              [entry(0), entry(1, "lunch"), receipt(writes).data.entry],
+              null,
+              3,
+              "2026-08-15",
+              "9",
+            )
+          : page(),
+      ),
+    );
+    await hooks.settle();
+    expect(text()).toContain(
+      kind === "saved"
+        ? "Pinned entry version repeated in Breakfast with fresh authoritative totals."
+        : "The source entry changed. Fresh details were loaded; review before repeating.",
+    );
+    expect(button("Repeat Apple 0 today").props.disabled).toBe(false);
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+    expect(writes[0]?.headers["if-match"]).toBe('"3"');
+  });
+  it("keeps an uncertain current Repeat request exact on retry", async () => {
+    const { writes } = await start(
+      Promise.resolve(Response.json({ error: "Repeat unavailable." }, { status: 503 })),
+    );
+    expect(text()).toContain("retry the same operation for 2026-08-15 safely.");
+    expect(button("Repeat Apple 0 today").props.disabled).toBe(false);
+    vi.setSystemTime(new Date("2026-08-16T06:00:59.000Z"));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+  });
+  it("keeps current Repeat expiry routing", async () => {
+    const { writes } = await start(Promise.resolve(Response.json({}, { status: 401 })));
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(writes).toHaveLength(1);
+  });
+});

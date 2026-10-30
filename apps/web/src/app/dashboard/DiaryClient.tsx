@@ -1108,14 +1108,15 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     mutation: DiaryMutationResult,
     successMessage: string,
     reloadFailureMessage: string,
+    isCurrent: () => boolean,
   ): Promise<void> {
-    if (!mutationIsCurrent(owner)) return;
+    if (!isCurrent()) return;
     if (!mutation.affectedDays.some((day) => day.localDate === owner.sourceDate)) {
       setMessage(successMessage);
       return;
     }
     const reloaded = await loadDiary(owner.sourceDate);
-    if (!mutationIsCurrent(owner)) return;
+    if (!isCurrent()) return;
     setMessage(reloaded ? successMessage : reloadFailureMessage);
   }
 
@@ -1552,6 +1553,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     if (destination && !currentRepeatDestination(destination)) return;
     const ownerUserId = session.user.id;
     const privateGeneration = privateUiGeneration.current;
+    const requestRoute = sessionRouteRef.current;
     const slot = JSON.stringify([ownerUserId, entry.id]);
     let pending = repeatOperations.current.get(slot);
     if (retry && (pending !== retry || !canInspectEntryNutrients(entry))) return;
@@ -1618,6 +1620,11 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       operationIds.current.delete(operation.key);
     };
     const owner = beginMutation(diary.localDate, entry.id);
+    const pageIsCurrent = () =>
+      sessionActive.current &&
+      responseIsCurrent() &&
+      sessionRouteRef.current === requestRoute &&
+      mutationIsCurrent(owner);
     setMessage(`Repeating the pinned ${operation.entryName} version for ${operation.targetDate}…`);
     try {
       const response = await fetch(operation.url, {
@@ -1628,29 +1635,29 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       });
       if (!responseIsCurrent()) return;
       if (response.status === 401) {
-        if (requestIsCurrent()) return signInAgain();
-        if (mutationIsCurrent(owner)) setMessage(resolvedMessage);
+        if (requestIsCurrent() && pageIsCurrent()) return signInAgain();
+        if (pageIsCurrent()) setMessage(resolvedMessage);
         return;
       }
       const responseBody = await json(response);
       if (!responseIsCurrent()) return;
       if (!response.ok && !requestIsCurrent()) {
-        if (mutationIsCurrent(owner)) setMessage(resolvedMessage);
+        if (pageIsCurrent()) setMessage(resolvedMessage);
         return;
       }
       if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
         retireOperation();
-        if (!mutationIsCurrent(owner)) return;
+        if (!pageIsCurrent()) return;
         const refreshRoute = sessionRouteRef.current;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
         if (
-          !mutationIsCurrent(owner) ||
+          !pageIsCurrent() ||
           sessionRef.current?.user.id !== session?.user.id ||
           sessionRouteRef.current !== refreshRoute
         )
           return;
         await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (pageIsCurrent()) {
           setMessage(
             `Your profile time zone changed${currentTimeZone ? ` to ${currentTimeZone}` : ""}. Nothing was repeated; review the destination day before trying again.`,
           );
@@ -1659,9 +1666,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       }
       if (response.status === 412) {
         retireOperation();
-        if (!mutationIsCurrent(owner)) return;
+        if (!pageIsCurrent()) return;
         const reloaded = await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (pageIsCurrent()) {
           setMessage(
             reloaded
               ? "The source entry changed. Fresh details were loaded; review before repeating."
@@ -1696,9 +1703,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           ? `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, operation.body.mealSlot)} with fresh authoritative totals.`
           : `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, operation.body.mealSlot)} for ${repeatedDate}.`,
         "The entry was repeated, but fresh diary data could not be confirmed. Choose Retry.",
+        pageIsCurrent,
       );
     } catch (error) {
-      if (privateOwnerIsCurrent() && mutationIsCurrent(owner)) {
+      if (pageIsCurrent()) {
         if (requestIsCurrent()) {
           setMessage(
             `${error instanceof Error ? error.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation for ${operation.targetDate} safely.`,
@@ -1708,7 +1716,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         }
       }
     } finally {
-      if (privateOwnerIsCurrent()) finishMutation(owner);
+      if (pageIsCurrent()) finishMutation(owner);
     }
   }
 

@@ -148,6 +148,12 @@ Fresh controls allow editing again after the failure. A confirmed matching recei
 closes the editor and refreshes the affected day. Existing conflict recovery,
 owner checks, private-session closure and immutable entry history remain intact.
 
+Repeat may reconcile a matching receipt with its original account's pending
+operation after navigation. Page updates require the original active route and
+mutation: an old response cannot redirect, reload or replace another page's
+message. Check this ownership after decoding and after the day reload. Preserve
+matching overlapping retries and the exact unresolved request across date changes.
+
 Repeat today uses the actual click instant, including seconds and milliseconds,
 in the current profile's local day. This preserves the current occurrence during
 a repeated local minute. An uncertain repeat keeps that exact instant, request
