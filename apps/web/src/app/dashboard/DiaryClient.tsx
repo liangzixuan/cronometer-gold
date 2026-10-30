@@ -1090,6 +1090,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       diaryPageRef.current === current;
     if (
       !ownsCurrentPage() ||
+      sessionRouteRef.current !== sessionRoute ||
       requestGeneration.current !== mealRequestGeneration ||
       activeMutation.current !== null ||
       profileController.current !== null ||

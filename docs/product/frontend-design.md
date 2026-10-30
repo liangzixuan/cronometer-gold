@@ -510,6 +510,12 @@ paint or change the loaded entries during that save. A failed save keeps the
 submitted draft and exact retry request; fresh pagination works after either a
 successful or failed save, with the same selected date and continuation contract.
 
+Diary pagination actions also belong to the route that rendered them. Load more
+and Retry load more callbacks from an earlier view cannot start a continuation
+after leaving that view or returning to the same day. Current controls keep the
+loaded page and request the next cursor normally. This admission check uses the
+existing route identity and preserves response handling for reads already started.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

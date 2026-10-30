@@ -7736,3 +7736,83 @@ describe("Diary pagination during group saves", () => {
     );
   }
 });
+
+describe("Diary pagination route admission", () => {
+  for (const retryPage of [false, true]) {
+    it.each(["view replacement", "view return before effects", "view return after effects"])(
+      `retires ${retryPage ? "Retry load more" : "Load more"} on %s`,
+      async (transition) => {
+        const first = page(
+          Array.from({ length: 20 }, (_, index) => entry(index)),
+          "d1.next-page",
+          21,
+        );
+        const base = fetcher(first);
+        const continuations: {
+          url: string;
+          cache: RequestCache | undefined;
+          headers: Record<string, string>;
+        }[] = [];
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url.includes("cursor=")) {
+            continuations.push({
+              url,
+              cache: init?.cache,
+              headers: Object.fromEntries(new Headers(init?.headers)),
+            });
+            return Promise.resolve(
+              retryPage && continuations.length === 1
+                ? Response.json({ error: "Page unavailable." }, { status: 503 })
+                : Response.json(page([entry(20)], null, 21)),
+            );
+          }
+          return base(url, init);
+        });
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        if (retryPage) await click("Load more");
+        const label = retryPage ? "Retry load more" : "Load more";
+        const retained = button(label);
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "view return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const count = fetch.mock.calls.length;
+        const before = text();
+        const routes = router.replace.mock.calls.slice();
+        invoke(retained);
+        for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+        hooks.renderWithoutEffects();
+        expect(fetch.mock.calls).toHaveLength(count);
+        expect(text()).toBe(before);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(continuations).toHaveLength(retryPage ? 1 : 0);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        expect(text()).toContain("20 of 21 entries loaded");
+        expect(text()).not.toContain("Apple 20");
+        expect(button(label).props.disabled).toBe(false);
+        await click(label);
+        expect(continuations).toHaveLength(retryPage ? 2 : 1);
+        expect(continuations.at(-1)).toEqual({
+          url: "/api/diary?date=2026-08-15&limit=20&cursor=d1.next-page",
+          cache: "no-store",
+          headers: { accept: "application/json" },
+        });
+        if (retryPage) expect(continuations[1]).toEqual(continuations[0]);
+        expect(text()).toContain("21 of 21 entries loaded");
+        expect(text()).toContain("Apple 20");
+        expect(router.replace.mock.calls).toEqual(routes);
+      },
+    );
+  }
+});
