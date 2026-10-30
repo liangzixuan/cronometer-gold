@@ -114,6 +114,14 @@ redirect a closed or replaced page. Edit, Repeat and reorder recovery cannot rel
 account or route after the old refresh finishes. Current expired or replaced
 sessions still require sign-in; current timezone recovery keeps its normal path.
 
+Diary entry Move controls belong to their original account, route and page lifetime.
+Retained controls cannot start a reorder after that lifetime ends. Digest preparation,
+responses and decoded receipts must still belong to the current mutation before they
+change the page, require sign-in or reload the day. Effect replay clears retired busy
+state when no mutation is active, so a fresh move can start before an old response
+arrives. Complete-day permutations, matching receipts and exact retries remain required.
+Collapsing a meal does not retire its otherwise valid Move control.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

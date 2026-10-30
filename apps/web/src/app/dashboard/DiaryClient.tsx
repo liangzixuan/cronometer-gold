@@ -970,9 +970,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   useEffect(() => {
     setProfileBusy((current) => (profileController.current === null ? false : current));
-    setMutationBusy((current) =>
-      activeMutation.current === null && current === "logout" ? null : current,
-    );
+    setMutationBusy((current) => (activeMutation.current === null ? null : current));
     return () => {
       repeatOperations.current.clear();
       viewEpoch.current += 1;
@@ -1698,11 +1696,33 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   async function reorderEntry(entry: DiaryEntry, direction: "down" | "up") {
     const sourcePage = diaryPage;
+    const ownsPage = () =>
+      sessionActive.current &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      session !== null &&
+      sessionRef.current?.user.id === session.user.id &&
+      sessionRouteRef.current === sessionRoute;
+    if (
+      !ownsPage() ||
+      diaryPageRef.current !== sourcePage ||
+      viewEpoch.current !== mealViewEpoch ||
+      dateRef.current !== date ||
+      sessionRef.current?.profile.timeZone !== session?.profile.timeZone ||
+      activeMutation.current !== null ||
+      profileController.current !== null ||
+      pageRequestBusy.current ||
+      editorRef.current !== null ||
+      diary?.status === "locked" ||
+      !sourcePage?.data.entries.includes(entry)
+    )
+      return;
     if (!sourcePage || sourcePage.data.localDate !== date || !diary || !session) {
       setMessage("Your current profile time zone is required before changing diary order.");
       return;
     }
     const owner = beginMutation(diary.localDate, entry.id);
+    const responseIsCurrent = () => ownsPage() && mutationIsCurrent(owner);
     setMessage(`Moving ${entryName(entry)} ${direction}…`);
     try {
       const operation = await prepareDiaryDayReorderOperation(
@@ -1711,7 +1731,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         entry.id,
         direction,
       );
-      if (!mutationIsCurrent(owner) || diaryPageRef.current !== sourcePage) {
+      if (!responseIsCurrent()) return;
+      if (diaryPageRef.current !== sourcePage) {
         setMessage("The diary changed while the order was being prepared. Review the fresh day.");
         return;
       }
@@ -1733,13 +1754,15 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           cache: "no-store",
         },
       );
+      if (!responseIsCurrent()) return;
       if (response.status === 401) return signInAgain();
       const responseBody = await json(response);
+      if (!responseIsCurrent()) return;
       if (response.status === 412) {
         operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
+        if (!responseIsCurrent()) return;
         const reloaded = await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (responseIsCurrent()) {
           setMessage(
             reloaded
               ? "The diary order changed elsewhere. The complete day was refreshed; move it again if needed."
@@ -1750,17 +1773,17 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       }
       if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
         operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
+        if (!responseIsCurrent()) return;
         const refreshRoute = sessionRouteRef.current;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
         if (
-          !mutationIsCurrent(owner) ||
+          !responseIsCurrent() ||
           sessionRef.current?.user.id !== session?.user.id ||
           sessionRouteRef.current !== refreshRoute
         )
           return;
         await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (responseIsCurrent()) {
           setMessage(
             `Your profile time zone changed${currentTimeZone ? ` to ${currentTimeZone}` : ""}. The order was not changed; review this day before trying again.`,
           );
@@ -1783,7 +1806,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       }
       operationIds.current.delete(key);
       const reloaded = await loadDiary(owner.sourceDate);
-      if (mutationIsCurrent(owner)) {
+      if (responseIsCurrent()) {
         setMessage(
           reloaded
             ? `${entryName(entry)} moved ${direction}; the complete authoritative day was refreshed.`
@@ -1791,13 +1814,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         );
       }
     } catch (error) {
-      if (mutationIsCurrent(owner)) {
+      if (responseIsCurrent()) {
         setMessage(
           `${error instanceof Error ? error.message : "The diary order could not be saved."} Choose Move again to retry safely.`,
         );
       }
     } finally {
-      finishMutation(owner);
+      if (ownsPage()) finishMutation(owner);
     }
   }
 

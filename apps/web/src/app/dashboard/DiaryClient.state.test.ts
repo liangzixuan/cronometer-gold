@@ -6236,3 +6236,198 @@ describe("Diary timezone refresh lifecycle ownership", () => {
     },
   );
 });
+
+describe("Diary entry reorder lifecycle ownership", () => {
+  async function fixture() {
+    const value = page([entry(0), entry(1)]);
+    const orderGroup = (mealSlot: MealSlot) => ({
+      mealSlot,
+      entries: value.data.entries
+        .filter((row) => row.mealSlot === mealSlot)
+        .map((row) => ({
+          entryId: row.id,
+          entryRevision: row.revision,
+          position: row.position,
+        })),
+    });
+    value.data.orderDigest = await diaryDayOrderDigest(value.data.localDate, value.data.timeZone, [
+      orderGroup("breakfast"),
+      orderGroup("lunch"),
+      orderGroup("dinner"),
+      orderGroup("snacks"),
+    ]);
+    return value;
+  }
+  async function start(pending: Promise<Response>, begin = true) {
+    const value = await fixture();
+    const base = fetcher(value);
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        writes.push(init);
+        return writes.length === 1
+          ? pending
+          : Promise.resolve(Response.json({ error: "Fresh move unavailable." }, { status: 503 }));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    if (begin) {
+      await click("Move Apple 0 down within Breakfast");
+      expect(writes).toHaveLength(1);
+    }
+    return { fetch, writes, value };
+  }
+  async function saved(value: Awaited<ReturnType<typeof fixture>>, write: RequestInit | undefined) {
+    const operationId = new Headers(write?.headers).get("idempotency-key");
+    if (!operationId) throw new Error("Missing reorder operation id.");
+    const groups = [
+      {
+        mealSlot: "breakfast",
+        entries: [
+          { entryId: entry(1).id, entryRevision: "4", position: 0 },
+          { entryId: entry(0).id, entryRevision: "4", position: 1 },
+        ],
+      },
+      { mealSlot: "lunch", entries: [] },
+      { mealSlot: "dinner", entries: [] },
+      { mealSlot: "snacks", entries: [] },
+    ] as const;
+    return {
+      data: {
+        replayed: false,
+        receipt: {
+          operationId,
+          localDate: value.data.localDate,
+          timeZone: value.data.timeZone,
+          expectedDayRevision: "8",
+          resultingDayRevision: "9",
+          previousOrderDigest: value.data.orderDigest,
+          orderDigest: await diaryDayOrderDigest(value.data.localDate, value.data.timeZone, groups),
+          groups,
+        },
+      },
+    };
+  }
+  async function retire(transition: string) {
+    if (transition === "unmount") hooks.unmount();
+    else if (transition === "effect replay") {
+      hooks.replayEffects();
+      await hooks.settle();
+    } else if (transition === "route replacement") {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+    } else hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+  }
+  async function settleRetired(transition: string) {
+    if (transition === "owner replacement" || transition === "route replacement") {
+      for (let pass = 0; pass < 16; pass += 1) await Promise.resolve();
+      hooks.renderWithoutEffects();
+    } else await hooks.settle();
+  }
+  it.each(["unmount", "effect replay", "owner replacement"])(
+    "rejects a retained reorder control after %s",
+    async (transition) => {
+      const { fetch } = await start(Promise.resolve(Response.json({}, { status: 503 })), false);
+      const move = button("Move Apple 0 down within Breakfast");
+      await retire(transition);
+      const before = text(),
+        requests = fetch.mock.calls.length;
+      invoke(move);
+      await settleRetired(transition);
+      expect(hooks.afterClose()).toBe(0);
+      expect(text()).toBe(before);
+      expect(fetch.mock.calls).toHaveLength(requests);
+    },
+  );
+  it("allows a fresh reorder after effect replay before the retired response arrives", async () => {
+    const pending = deferred<Response>();
+    const { fetch, writes } = await start(pending.promise);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(button("Move Apple 0 down within Breakfast").props.disabled).toBe(false);
+    await click("Move Apple 0 down within Breakfast");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(Object.fromEntries(new Headers(writes[1]?.headers))).toEqual(
+      Object.fromEntries(new Headers(writes[0]?.headers)),
+    );
+    expect(text()).toContain("Fresh move unavailable.");
+    const before = text(),
+      requests = fetch.mock.calls.length;
+    pending.resolve(Response.json({}, { status: 401 }));
+    await hooks.settle();
+    expect(text()).toBe(before);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+  });
+  it("retires reorder digest preparation without a request or state write", async () => {
+    const { fetch } = await start(Promise.resolve(Response.json({}, { status: 503 })), false);
+    const requests = fetch.mock.calls.length;
+    invoke(button("Move Apple 0 down within Breakfast"));
+    hooks.unmount();
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+  for (const transition of ["unmount", "effect replay", "owner replacement", "route replacement"]) {
+    it.each(["expired", "saved"])(
+      `ignores a late %s reorder response after ${transition}`,
+      async (kind) => {
+        const pending = deferred<Response>();
+        const { fetch, value, writes } = await start(pending.promise);
+        const response =
+          kind === "expired"
+            ? Response.json({}, { status: 401 })
+            : Response.json(await saved(value, writes[0]));
+        await retire(transition);
+        const before = text(),
+          requests = fetch.mock.calls.length,
+          routes = router.replace.mock.calls.slice();
+        pending.resolve(response);
+        await settleRetired(transition);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(text()).toBe(before);
+        expect(hooks.afterClose()).toBe(0);
+      },
+    );
+  }
+  it("retires a reorder receipt while its response body is decoding", async () => {
+    const body = deferred<Awaited<ReturnType<typeof saved>>>();
+    const response = Response.json({});
+    const decode = vi.spyOn(response, "json").mockImplementation(() => body.promise);
+    const { fetch, value, writes } = await start(Promise.resolve(response));
+    expect(decode).toHaveBeenCalledTimes(1);
+    const receipt = await saved(value, writes[0]);
+    hooks.unmount();
+    const requests = fetch.mock.calls.length;
+    body.resolve(receipt);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+  });
+  it.each(["expired", "saved"])("handles the current %s reorder response", async (kind) => {
+    const pending = deferred<Response>();
+    const { fetch, value, writes } = await start(pending.promise);
+    const requests = fetch.mock.calls.length;
+    pending.resolve(
+      kind === "expired"
+        ? Response.json({}, { status: 401 })
+        : Response.json(await saved(value, writes[0])),
+    );
+    await hooks.settle();
+    if (kind === "expired") {
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(text()).toContain("Closing your private diary");
+      expect(fetch.mock.calls).toHaveLength(requests);
+    } else {
+      expect(text()).toContain("Apple 0 moved down; the complete authoritative day was refreshed.");
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      expect(fetch.mock.calls.at(-1)?.[0]).toContain("/api/diary?date=2026-08-15");
+      expect(button("Move Apple 0 down within Breakfast").props.disabled).toBe(false);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    }
+  });
+});
