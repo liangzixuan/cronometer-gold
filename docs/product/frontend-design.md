@@ -107,6 +107,13 @@ Fresh controls remain usable, including exact retries after a failed profile sav
 The pending-save guard and stable-slot movement still apply. Focused component
 checks cover these transitions; browser and concurrent React acceptance remain open.
 
+A timezone-conflict refresh belongs to the account, route and active diary
+operation that requested it. Check ownership before handling session expiry and
+after decoding the response. Late expired or foreign-account responses cannot
+redirect a closed or replaced page. Edit, Repeat and reorder recovery cannot reload a new
+account or route after the old refresh finishes. Current expired or replaced
+sessions still require sign-in; current timezone recovery keeps its normal path.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

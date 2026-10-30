@@ -1126,25 +1126,35 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const controller = new AbortController();
     timeZoneRefreshController.current = controller;
     const originalUserId = sessionRef.current?.user.id ?? null;
+    const generation = privateUiGeneration.current;
+    const requestRoute = sessionRouteRef.current;
+    const requestOwnsUi = () =>
+      sessionActive.current &&
+      timeZoneRefreshController.current === controller &&
+      !controller.signal.aborted &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === generation &&
+      sessionRouteRef.current === requestRoute &&
+      originalUserId !== null &&
+      sessionRef.current?.user.id === originalUserId &&
+      mutationIsCurrent(owner);
     try {
       const response = await fetch("/api/auth/me", {
         headers: { accept: "application/json" },
         cache: "no-store",
         signal: controller.signal,
       });
+      if (!requestOwnsUi()) return null;
       if (response.status === 401) {
         signInAgain();
         return null;
       }
       const body = await json(response);
+      if (!requestOwnsUi()) return null;
       if (!response.ok) return null;
       const nextSession = parseSession(body);
-      if (
-        controller.signal.aborted ||
-        !mutationIsCurrent(owner) ||
-        (originalUserId !== null && nextSession.user.id !== originalUserId)
-      ) {
-        if (originalUserId !== null && nextSession.user.id !== originalUserId) signInAgain();
+      if (nextSession.user.id !== originalUserId) {
+        signInAgain();
         return null;
       }
       setSession(nextSession);
@@ -1264,8 +1274,14 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         operationIds.current.delete(key);
         if (!mutationIsCurrent(owner)) return;
         setEditor(null);
+        const refreshRoute = sessionRouteRef.current;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
-        if (!mutationIsCurrent(owner)) return;
+        if (
+          !mutationIsCurrent(owner) ||
+          sessionRef.current?.user.id !== session?.user.id ||
+          sessionRouteRef.current !== refreshRoute
+        )
+          return;
         await loadDiary(owner.sourceDate);
         if (mutationIsCurrent(owner)) {
           setMessage(
@@ -1609,8 +1625,14 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
         retireOperation();
         if (!mutationIsCurrent(owner)) return;
+        const refreshRoute = sessionRouteRef.current;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
-        if (!mutationIsCurrent(owner)) return;
+        if (
+          !mutationIsCurrent(owner) ||
+          sessionRef.current?.user.id !== session?.user.id ||
+          sessionRouteRef.current !== refreshRoute
+        )
+          return;
         await loadDiary(owner.sourceDate);
         if (mutationIsCurrent(owner)) {
           setMessage(
@@ -1729,8 +1751,14 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
         operationIds.current.delete(key);
         if (!mutationIsCurrent(owner)) return;
+        const refreshRoute = sessionRouteRef.current;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
-        if (!mutationIsCurrent(owner)) return;
+        if (
+          !mutationIsCurrent(owner) ||
+          sessionRef.current?.user.id !== session?.user.id ||
+          sessionRouteRef.current !== refreshRoute
+        )
+          return;
         await loadDiary(owner.sourceDate);
         if (mutationIsCurrent(owner)) {
           setMessage(

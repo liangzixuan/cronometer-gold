@@ -6158,3 +6158,81 @@ describe("Diary group control lifecycle ownership", () => {
     expect(router.replace.mock.calls).toEqual(routes);
   });
 });
+
+describe("Diary timezone refresh lifecycle ownership", () => {
+  async function startRefresh(pending: Promise<Response>) {
+    const base = fetcher();
+    let conflict = false;
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        conflict = true;
+        return Promise.resolve(Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 }));
+      }
+      if (conflict && url === "/api/auth/me") return pending;
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Repeat Apple 0 today");
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(2);
+    return fetch;
+  }
+  function lateResponse(kind: string) {
+    return kind === "expired"
+      ? Response.json({}, { status: 401 })
+      : Response.json(session(anotherOwner));
+  }
+  for (const transition of ["unmount", "effect replay", "owner replacement"] as const) {
+    it.each(["expired", "foreign owner"])(
+      `ignores a late %s timezone refresh after ${transition}`,
+      async (kind) => {
+        const pending = deferred<Response>();
+        const fetch = await startRefresh(pending.promise);
+        if (transition === "unmount") hooks.unmount();
+        else if (transition === "effect replay") {
+          hooks.replayEffects();
+          await hooks.settle();
+        } else hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+        const before = text();
+        const requests = fetch.mock.calls.length;
+        const routes = router.replace.mock.calls.slice();
+        pending.resolve(lateResponse(kind));
+        if (transition === "owner replacement") {
+          for (let pass = 0; pass < 12; pass += 1) await Promise.resolve();
+          hooks.renderWithoutEffects();
+        } else await hooks.settle();
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(text()).toBe(before);
+        expect(hooks.afterClose()).toBe(0);
+      },
+    );
+  }
+  it("retires a timezone refresh while its response body is decoding", async () => {
+    const body = deferred<ReturnType<typeof session>>();
+    const response = Response.json({});
+    const decode = vi.spyOn(response, "json").mockImplementation(() => body.promise);
+    const fetch = await startRefresh(Promise.resolve(response));
+    expect(decode).toHaveBeenCalledTimes(1);
+    hooks.unmount();
+    const requests = fetch.mock.calls.length;
+    const routes = router.replace.mock.calls.slice();
+    body.resolve(session(anotherOwner));
+    await hooks.settle();
+    expect(router.replace.mock.calls).toEqual(routes);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+  });
+  it.each(["expired", "foreign owner"])(
+    "closes the current diary for a %s timezone refresh",
+    async (kind) => {
+      const pending = deferred<Response>();
+      const fetch = await startRefresh(pending.promise);
+      const requests = fetch.mock.calls.length;
+      pending.resolve(lateResponse(kind));
+      await hooks.settle();
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(text()).toContain("Closing your private diary");
+      expect(fetch.mock.calls).toHaveLength(requests);
+    },
+  );
+});
