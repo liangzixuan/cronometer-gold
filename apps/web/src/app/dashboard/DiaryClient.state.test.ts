@@ -3562,7 +3562,7 @@ describe("Dashboard saved-target day recovery controls", () => {
     expect(fetch.mock.calls).toHaveLength(count);
   });
 
-  it("does not interrupt a profile write initiated by a retained diary form", async () => {
+  it("does not interrupt a profile write started before leaving the diary", async () => {
     const pending = deferred<Response>();
     const base = fetcher();
     const fetch = vi.fn((url: string, init?: RequestInit) =>
@@ -3578,11 +3578,11 @@ describe("Dashboard saved-target day recovery controls", () => {
       (node) => node.type === "form" && text(node).includes("Save groups"),
     );
     if (!form) throw new Error("Missing profile form");
+    invoke(form, "onSubmit", { preventDefault() {} });
     view = "overview";
     hooks.render();
     await hooks.settle();
     const props = recoveryOverviewProps();
-    invoke(form, "onSubmit", { preventDefault() {} });
     const count = fetch.mock.calls.length;
     expect(fetch.mock.calls.filter(([url]) => url === "/api/profile")).toHaveLength(1);
     props.onReloadDay();
@@ -7925,6 +7925,140 @@ describe("Diary pagination response route ownership", () => {
         expect(text()).toContain("21 of 21 entries loaded");
         expect(text()).toContain("Apple 20");
         expect(dayReads()).toHaveLength(1);
+        expect(router.replace.mock.calls).toEqual(routes);
+      },
+    );
+  }
+});
+
+describe("Diary group control route ownership", () => {
+  function form() {
+    const node = elements().find(
+      (candidate) =>
+        candidate.type === "form" &&
+        elements(candidate).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!node) throw new Error("Missing group settings form.");
+    return node;
+  }
+  function draft() {
+    return elements()
+      .filter((node) => node.type === "input" && String(node.props.id).startsWith("diary-group-"))
+      .map((node) => ({ id: node.props.id, value: node.props.value }));
+  }
+  const actions = [
+    "open",
+    "rename",
+    "Move group 2 up",
+    "Move group 1 down",
+    "Reset defaults",
+    "Cancel",
+    "Close diary group settings",
+    "save",
+  ];
+  for (const transition of [
+    "view replacement",
+    "view return before effects",
+    "view return after effects",
+  ]) {
+    it.each(actions)(
+      `retires retained %s after ${transition} while fresh settings remain usable`,
+      async (action) => {
+        const base = fetcher();
+        const groups = defaultDiaryGroups.map((group) =>
+          group.mealSlot === "breakfast" ? { ...group, label: "Fresh morning" } : group,
+        );
+        const writes: RequestInit[] = [];
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (url === "/api/profile") {
+            if (!init) throw new Error("Missing profile request.");
+            writes.push(init);
+            return Promise.resolve(
+              writes.length === 1
+                ? Response.json({ error: "Save unavailable." }, { status: 503 })
+                : Response.json({ data: { profile: session(owner, groups, "2").data.profile } }),
+            );
+          }
+          return base(url, init);
+        });
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        const opening = button("Customize diary groups");
+        await click("Customize diary groups");
+        await change("Group 1 label", "My morning");
+        const expectedDraft = draft();
+        const retained =
+          action === "open"
+            ? opening
+            : action === "rename"
+              ? field("Group 1 label")
+              : action === "save"
+                ? form()
+                : button(action);
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "view return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const before = text(),
+          requests = fetch.mock.calls.length,
+          routes = router.replace.mock.calls.slice();
+        if (action === "rename")
+          invoke(retained, "onChange", { target: { value: "Retired label" } });
+        else if (action === "save") invoke(retained, "onSubmit", { preventDefault() {} });
+        else invoke(retained);
+        for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+        hooks.renderWithoutEffects();
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(text()).toBe(before);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(writes).toHaveLength(0);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        expect(draft()).toEqual(expectedDraft);
+        await click("Move group 1 down");
+        expect(draft()[1]?.id).toBe("diary-group-breakfast");
+        expect(draft()[1]?.value).toBe("My morning");
+        await click("Move group 2 up");
+        expect(draft()).toEqual(expectedDraft);
+        await click("Reset defaults");
+        expect(field("Group 1 label").props.value).toBe("Breakfast");
+        await click("Cancel");
+        expect(draft()).toEqual([]);
+        await click("Customize diary groups");
+        await change("Group 1 label", "Fresh morning");
+        expect(button("Save groups").props.disabled).toBe(false);
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(text()).toContain("Save unavailable.");
+        expect(field("Group 1 label").props.value).toBe("Fresh morning");
+        expect(button("Save groups").props.disabled).toBe(false);
+        invoke(form(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes).toHaveLength(2);
+        expect(writes[0]?.method).toBe("PATCH");
+        expect(writes[0]?.cache).toBe("no-store");
+        expect(writes[0]?.body).toBe(
+          JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: groups }),
+        );
+        expect(writes[1]?.body).toBe(writes[0]?.body);
+        expect(Object.fromEntries(new Headers(writes[0]?.headers))).toEqual({
+          accept: "application/json",
+          "content-type": "application/json",
+          "if-match": '"1"',
+        });
+        expect(Object.fromEntries(new Headers(writes[1]?.headers))).toEqual(
+          Object.fromEntries(new Headers(writes[0]?.headers)),
+        );
+        expect(text()).toContain("Diary group names and order saved everywhere you log food.");
         expect(router.replace.mock.calls).toEqual(routes);
       },
     );

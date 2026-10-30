@@ -521,6 +521,15 @@ unfinished continuation and restores Load more without another automatic read.
 The loaded entries and cursor remain available. A newer continuation keeps its
 own loading state when the old response arrives.
 
+
+Meal-group settings controls belong to the route that rendered them. Leaving the
+view or returning to the same day retires retained open, rename, reorder, reset,
+cancel, close and save callbacks. They cannot change the draft or submit a write
+before or after route effects run. The unsaved labels and order remain available
+on return; fresh controls can edit and save them. Failed saves retain the draft
+and exact retry body and headers. This change affects control admission only;
+responses from writes already started keep their existing handling.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

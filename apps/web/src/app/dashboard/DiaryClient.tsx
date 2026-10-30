@@ -1963,6 +1963,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   function canUseDiaryGroupControls() {
     return (
       sessionActive.current &&
+      sessionRouteRef.current === sessionRoute &&
       session !== null &&
       !profileController.current &&
       !privateUiClosed.current &&
@@ -1974,6 +1975,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   async function saveDiaryGroups() {
     if (
       !sessionActive.current ||
+      sessionRouteRef.current !== sessionRoute ||
       !session ||
       profileBusy ||
       profileController.current ||
