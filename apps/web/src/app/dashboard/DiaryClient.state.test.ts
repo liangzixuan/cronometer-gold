@@ -6036,3 +6036,125 @@ describe("Diary stable meal-group moves", () => {
     );
   }
 });
+
+describe("Diary group control lifecycle ownership", () => {
+  const actions = [
+    "rename",
+    "Move group 2 up",
+    "Move group 1 down",
+    "Reset defaults",
+    "Cancel",
+    "Close diary group settings",
+  ];
+  function retainedAction(name: string) {
+    const node = name === "rename" ? field("Group 1 label") : button(name);
+    return () =>
+      name === "rename"
+        ? invoke(node, "onChange", { target: { value: "Retired label" } })
+        : invoke(node);
+  }
+  function snapshot() {
+    return {
+      text: text(),
+      fields: elements()
+        .filter((node) => node.type === "input" && String(node.props.id).startsWith("diary-group-"))
+        .map((node) => ({ id: node.props.id, value: node.props.value })),
+    };
+  }
+  async function openDraft() {
+    await click("Customize diary groups");
+    await change("Group 1 label", "Morning meal");
+  }
+  for (const transition of ["unmount", "owner replacement"] as const) {
+    it.each(actions)(`rejects retained %s after ${transition}`, async (name) => {
+      const fetch = await mount(fetcher());
+      await openDraft();
+      const act = retainedAction(name);
+      if (transition === "unmount") hooks.unmount();
+      else hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+      const before = snapshot();
+      const requests = fetch.mock.calls.length;
+      const routes = router.replace.mock.calls.slice();
+      act();
+      if (transition === "owner replacement") hooks.renderWithoutEffects();
+      expect(snapshot()).toEqual(before);
+      expect(hooks.afterClose()).toBe(0);
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(router.replace.mock.calls).toEqual(routes);
+    });
+  }
+  it("retires settings controls on effect replay and keeps fresh exact save retries", async () => {
+    const base = fetcher();
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (url === "/api/profile") {
+        if (!init) throw new Error("Missing profile request.");
+        writes.push(init);
+        return Promise.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await openDraft();
+    const retired = actions.map(retainedAction);
+    hooks.replayEffects();
+    await hooks.settle();
+    const before = snapshot();
+    const requests = fetch.mock.calls.length;
+    for (const act of retired) {
+      act();
+      await hooks.settle();
+      expect(snapshot()).toEqual(before);
+    }
+    expect(fetch.mock.calls).toHaveLength(requests);
+    await change("Group 1 label", "Fresh morning");
+    expect(field("Group 1 label").props.value).toBe("Fresh morning");
+    const form = elements().find(
+      (node) =>
+        node.type === "form" &&
+        elements(node).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!form) throw new Error("Missing group settings form.");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes).toHaveLength(2);
+    expect(writes[0]?.body).toBe(
+      JSON.stringify({
+        expectedOwnerUserId: owner,
+        diaryGroups: defaultDiaryGroups.map((group) =>
+          group.mealSlot === "breakfast" ? { ...group, label: "Fresh morning" } : group,
+        ),
+      }),
+    );
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"1"');
+    expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+    expect(field("Group 1 label").props.value).toBe("Fresh morning");
+    expect(button("Save groups").props.disabled).toBe(false);
+  });
+  it("keeps confirmed sign-out closed through retained settings controls", async () => {
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/auth/logout"
+        ? Promise.resolve(new Response(null, { status: 204 }))
+        : base(url, init),
+    );
+    await mount(fetch);
+    const opening = button("Customize diary groups");
+    await openDraft();
+    const retired = actions.map(retainedAction);
+    await click("Sign out");
+    const before = snapshot();
+    const requests = fetch.mock.calls.length;
+    const routes = router.replace.mock.calls.slice();
+    for (const act of [() => invoke(opening), ...retired]) {
+      act();
+      await hooks.settle();
+      expect(snapshot()).toEqual(before);
+    }
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(router.replace.mock.calls).toEqual(routes);
+  });
+});

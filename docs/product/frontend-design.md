@@ -100,6 +100,13 @@ meal labels and stable-slot order. A mismatched response keeps the raw draft and
 original revision available with an unconfirmed-save message. An unchanged retry
 uses those same settings; normal revision-conflict recovery can load fresh settings.
 
+Diary group settings controls belong to the active account and page generation.
+After sign-out, unmount, account replacement or effect replay, retained launcher,
+rename, move, reset and cancel actions cannot change the form or status message.
+Fresh controls remain usable, including exact retries after a failed profile save.
+The pending-save guard and stable-slot movement still apply. Focused component
+checks cover these transitions; browser and concurrent React acceptance remain open.
+
 ## Diary entry saves
 
 Keep the submitted quantity, meal, local date, local time and private note visible

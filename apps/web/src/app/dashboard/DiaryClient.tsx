@@ -1773,6 +1773,17 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     }
   }
 
+  function canUseDiaryGroupControls() {
+    return (
+      sessionActive.current &&
+      session !== null &&
+      !profileController.current &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      sessionRef.current?.user.id === session.user.id
+    );
+  }
+
   async function saveDiaryGroups() {
     if (
       !sessionActive.current ||
@@ -2840,7 +2851,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                       className="secondaryAction"
                       disabled={!session || controlsBusy}
                       onClick={() => {
-                        if (profileController.current || activeMutation.current !== null) return;
+                        if (!canUseDiaryGroupControls() || activeMutation.current !== null) return;
                         const opening = !diaryGroupSettingsOpen;
                         if (opening && session) setDiaryGroupDraft(createDiaryGroupDraft(session));
                         setDiaryGroupSettingsOpen(opening);
@@ -2885,7 +2896,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                 id={`diary-group-${group.mealSlot}`}
                                 maxLength={120}
                                 onChange={(event) => {
-                                  if (profileController.current) return;
+                                  if (!canUseDiaryGroupControls()) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
                                     groups: current.groups.map((candidate) =>
@@ -2904,7 +2915,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                 aria-label={`Move group ${index + 1} up`}
                                 disabled={profileBusy || index === 0}
                                 onClick={() => {
-                                  if (profileController.current) return;
+                                  if (!canUseDiaryGroupControls()) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
                                     groups: moveDiaryGroup(
@@ -2926,7 +2937,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                   profileBusy || index === diaryGroupDraft.groups.length - 1
                                 }
                                 onClick={() => {
-                                  if (profileController.current) return;
+                                  if (!canUseDiaryGroupControls()) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
                                     groups: moveDiaryGroup(
@@ -2954,7 +2965,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                         <button
                           disabled={profileBusy}
                           onClick={() => {
-                            if (profileController.current) return;
+                            if (!canUseDiaryGroupControls()) return;
                             setDiaryGroupDraft((current) => ({
                               ...current,
                               groups: defaultDiaryGroups,
@@ -2970,7 +2981,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                         <button
                           disabled={profileBusy}
                           onClick={() => {
-                            if (profileController.current) return;
+                            if (!canUseDiaryGroupControls()) return;
                             setDiaryGroupDraft(createDiaryGroupDraft(session));
                             setDiaryGroupSettingsOpen(false);
                           }}
