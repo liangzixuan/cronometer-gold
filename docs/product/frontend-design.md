@@ -559,6 +559,14 @@ choices remain intact on return. Fresh actions show the saved portion and nutrie
 rows without changing an unsaved editor draft, whole-day totals or pagination, and
 without a request or operation ID.
 
+Repeat controls belong to the route that rendered them. Retained Repeat today,
+destination open/date/meal/cancel/confirm and retry actions cannot change or submit
+a repeat after leaving the Diary or returning to the same day, before or after
+route effects. The chosen destination and any uncertain request remain intact.
+Fresh controls work, and retries keep the exact body, headers and operation ID.
+Shared mutation admission keeps the existing Delete route check. Responses from
+already-started writes retain their existing handling.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

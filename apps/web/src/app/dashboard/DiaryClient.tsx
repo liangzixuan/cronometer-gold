@@ -1463,7 +1463,6 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   function canDeleteEntry(entry: DiaryEntry) {
     return (
       canStartEntryMutation(entry) &&
-      sessionRouteRef.current === sessionRoute &&
       mutationSequence.current === renderedEditorMutationSequence &&
       diary?.status !== "locked"
     );
@@ -1562,6 +1561,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
 
   function canStartEntryMutation(entry: DiaryEntry) {
     return !(
+      sessionRouteRef.current !== sessionRoute ||
       editorRef.current !== null ||
       !session ||
       !diary ||

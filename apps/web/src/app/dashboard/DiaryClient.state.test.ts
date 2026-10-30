@@ -8523,3 +8523,189 @@ describe("Diary nutrient control route ownership", () => {
     );
   }
 });
+
+describe("Diary Repeat control route ownership", () => {
+  for (const transition of [
+    "view replacement",
+    "same-day return before effects",
+    "same-day return after effects",
+  ] as const) {
+    it.each([
+      "today",
+      "open",
+      "date",
+      "meal",
+      "cancel",
+      "confirm",
+      "retry today",
+      "retry custom",
+    ] as const)(
+      `retires retained %s after ${transition} and keeps fresh exact retries`,
+      async (action) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-08-20T18:25:37.456Z"));
+        const allocate = vi.fn(() => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        const fixture = page([entry(0), entry(1, "lunch")], "d1.next-page", 24);
+        const original = JSON.stringify(fixture);
+        const writes: CapturedRepeat[] = [];
+        const base = fetcher(fixture);
+        let succeed = false;
+        const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+          if (init?.method === "POST" && url.includes("/repeat?")) {
+            const request = captureRepeat(url, init);
+            writes.push(request);
+            return succeed
+              ? Response.json(repeatReceipt(request))
+              : Response.json({ error: "The response may have been lost." }, { status: 503 });
+          }
+          return base(url, init);
+        });
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        await toggleNutrients(1);
+        const neighbor = nutrientDetailText(1);
+        const composer = ["date", "meal", "cancel", "confirm"].includes(action);
+        const custom = composer || action === "retry custom";
+        if (custom) {
+          await click("Repeat Apple 0 to another day or meal");
+          await change("Repeat date", "2026-08-21");
+          await change("Repeat meal", "dinner");
+        }
+        if (action === "retry custom") await click("Confirm repeat destination");
+        if (action === "retry today") await click("Repeat Apple 0 today");
+        const control =
+          action === "date"
+            ? field("Repeat date")
+            : action === "meal"
+              ? field("Repeat meal")
+              : button(
+                  action === "open"
+                    ? "Repeat Apple 0 to another day or meal"
+                    : action === "cancel"
+                      ? "Cancel repeat destination"
+                      : action === "confirm"
+                        ? "Confirm repeat destination"
+                        : action === "retry custom"
+                          ? "Retry repeat for Apple 0"
+                          : "Repeat Apple 0 today",
+                );
+        const evidence = () =>
+          elements()
+            .filter(
+              (node) =>
+                node.props.id === "diary-page-count" ||
+                node.props["aria-labelledby"] === "nutrition-summary-title",
+            )
+            .map((node) => text(node));
+        const totals = evidence();
+        const initialWrites = writes.length;
+        const allocated = allocate.mock.calls.length;
+        const requests = fetch.mock.calls.length;
+        const routes = router.replace.mock.calls.slice();
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "same-day return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const before = text();
+        if (action === "date" || action === "meal")
+          invoke(control, "onChange", {
+            target: { value: action === "date" ? "2026-08-24" : "snacks" },
+          });
+        else invoke(control);
+        hooks.renderWithoutEffects();
+        expect(writes).toHaveLength(initialWrites);
+        expect(allocate).toHaveBeenCalledTimes(allocated);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(text()).toBe(before);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        expect(
+          elements().some((node) => node.props["aria-label"] === "Repeat destination for Apple 0"),
+        ).toBe(composer);
+        if (composer) {
+          expect(field("Repeat date").props.value).toBe("2026-08-21");
+          expect(field("Repeat meal").props.value).toBe("dinner");
+        }
+        expect(nutrientDetailText(1)).toBe(neighbor);
+        expect(evidence()).toEqual(totals);
+        expect(button("Load more").props.disabled).toBe(false);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        vi.setSystemTime(new Date("2026-08-23T18:25:37.456Z"));
+        let retryLabel =
+          action === "retry custom" ? "Retry repeat for Apple 0" : "Repeat Apple 0 today";
+        if (action === "open") await click("Repeat Apple 0 to another day or meal");
+        if (composer || action === "open") {
+          await change("Repeat date", "2026-08-22");
+          await change("Repeat meal", "lunch");
+          expect(field("Repeat date").props.value).toBe("2026-08-22");
+          expect(field("Repeat meal").props.value).toBe("lunch");
+          if (action === "cancel") {
+            await click("Cancel repeat destination");
+            expect(
+              elements().some(
+                (node) => node.props["aria-label"] === "Repeat destination for Apple 0",
+              ),
+            ).toBe(false);
+            await click("Repeat Apple 0 to another day or meal");
+            await change("Repeat date", "2026-08-22");
+            await change("Repeat meal", "lunch");
+          }
+          await click("Confirm repeat destination");
+          retryLabel = "Retry repeat for Apple 0";
+        } else await click(retryLabel);
+        expect(writes).toHaveLength(initialWrites + 1);
+        const request = writes[0];
+        if (!request) throw new Error("Missing Repeat request");
+        expect(request.url).toBe(
+          `/api/diary/entries/${entry(0).id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+        );
+        expect(request.headers["if-match"]).toBe('"3"');
+        expect(request.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+        expect(request.headers["idempotency-key"]).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+        expect(request.body).toBe(
+          JSON.stringify({
+            occurredAt:
+              action === "retry today"
+                ? "2026-08-20T18:25:37.456Z"
+                : action === "retry custom"
+                  ? "2026-08-21T17:00:00.000Z"
+                  : composer || action === "open"
+                    ? "2026-08-22T17:00:00.000Z"
+                    : "2026-08-23T18:25:37.456Z",
+            mealSlot:
+              action === "retry custom"
+                ? "dinner"
+                : composer || action === "open"
+                  ? "lunch"
+                  : "breakfast",
+          }),
+        );
+        succeed = true;
+        vi.setSystemTime(new Date("2026-08-25T18:00:00.000Z"));
+        await click(retryLabel);
+        expect(writes).toHaveLength(initialWrites + 2);
+        for (const retry of writes) expect(retry).toEqual(request);
+        expect(allocate).toHaveBeenCalledTimes(1);
+        expect(text()).toContain("Pinned entry version repeated");
+        expect(text()).not.toContain("Pending repeat:");
+        expect(nutrientDetailText(1)).toBe(neighbor);
+        expect(evidence()).toEqual(totals);
+        expect(text()).toContain("2 of 24 entries loaded");
+        expect(button("Load more").props.disabled).toBe(false);
+        expect(fetch.mock.calls).toHaveLength(requests + 2);
+        expect(JSON.stringify(fixture)).toBe(original);
+      },
+    );
+  }
+});
