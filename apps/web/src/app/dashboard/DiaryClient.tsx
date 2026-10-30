@@ -1779,6 +1779,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       !session ||
       profileBusy ||
       profileController.current ||
+      activeMutation.current !== null ||
       privateUiClosed.current ||
       privateUiGeneration.current !== mealPrivateGeneration ||
       sessionRef.current?.user.id !== session.user.id
@@ -2839,6 +2840,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                       className="secondaryAction"
                       disabled={!session || controlsBusy}
                       onClick={() => {
+                        if (profileController.current || activeMutation.current !== null) return;
                         const opening = !diaryGroupSettingsOpen;
                         if (opening && session) setDiaryGroupDraft(createDiaryGroupDraft(session));
                         setDiaryGroupSettingsOpen(opening);

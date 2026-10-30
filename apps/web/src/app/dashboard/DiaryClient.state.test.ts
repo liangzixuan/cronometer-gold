@@ -5760,3 +5760,164 @@ describe("Diary meal-group matched save confirmation", () => {
     expect(button("Collapse Fresh morning").props["aria-expanded"]).toBe(true);
   });
 });
+
+describe("Diary meal-group busy admission", () => {
+  function form() {
+    const found = elements().find(
+      (node) =>
+        node.type === "form" &&
+        elements(node).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!found) throw new Error("Missing meal-group form.");
+    return found;
+  }
+  function fields() {
+    return elements(form())
+      .filter((node) => node.type === "input")
+      .map((node) => ({ id: node.props.id, value: node.props.value }));
+  }
+  const submittedGroups = defaultDiaryGroups.map((group) =>
+    group.mealSlot === "breakfast" ? { ...group, label: "Submitted morning" } : group,
+  );
+
+  it.each(["open", "close"] as const)(
+    "retains the submitted draft through an old %s launcher during profile save",
+    async (kind) => {
+      const pending = deferred<Response>();
+      const base = fetcher();
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (url === "/api/profile") {
+          if (!init) throw new Error("Missing profile request.");
+          writes.push(init);
+          return writes.length === 1
+            ? pending.promise
+            : Promise.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      const opening = button("Customize diary groups");
+      await click("Customize diary groups");
+      await change("Group 1 label", "Submitted morning");
+      const retained = kind === "open" ? opening : button("Close diary group settings");
+      const before = fields();
+      invoke(form(), "onSubmit", { preventDefault() {} });
+      expect(writes).toHaveLength(1);
+      invoke(retained);
+      await hooks.settle();
+      expect(fields()).toEqual(before);
+      expect(form().props["aria-busy"]).toBe(true);
+      expect(button("Close diary group settings").props.disabled).toBe(true);
+      expect(writes).toHaveLength(1);
+      pending.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(fields()).toEqual(before);
+      invoke(form(), "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes).toHaveLength(2);
+      expect(writes[0]?.body).toBe(
+        JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: submittedGroups }),
+      );
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"1"');
+      expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+      expect(button("Close diary group settings").props.disabled).toBe(false);
+      const requests = fetch.mock.calls.length;
+      await click("Close diary group settings");
+      expect(elements().some((node) => node.props.id === "diary-group-settings")).toBe(false);
+      await click("Customize diary groups");
+      expect(field("Group 1 label").props.value).toBe("Breakfast");
+      expect(fetch.mock.calls).toHaveLength(requests);
+    },
+  );
+
+  it.each(["open", "close"] as const)(
+    "ignores an old %s launcher during a pending diary deletion",
+    async (kind) => {
+      const pending = deferred<Response>();
+      const base = fetcher();
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (init?.method === "DELETE") {
+          writes.push(init);
+          return writes.length === 1
+            ? pending.promise
+            : Promise.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      if (kind === "close") {
+        await click("Customize diary groups");
+        await change("Group 1 label", "Submitted morning");
+      }
+      const label = kind === "open" ? "Customize diary groups" : "Close diary group settings";
+      const retained = button(label);
+      const before = kind === "close" ? fields() : null;
+      invoke(button("Delete Apple 0"));
+      expect(writes).toHaveLength(1);
+      invoke(retained);
+      await hooks.settle();
+      expect(elements().some((node) => node.props.id === "diary-group-settings")).toBe(
+        kind === "close",
+      );
+      if (before) expect(fields()).toEqual(before);
+      expect(button(label).props.disabled).toBe(true);
+      pending.resolve(Response.json({ error: "Delete unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(button(label).props.disabled).toBe(false);
+      if (before) expect(fields()).toEqual(before);
+      await click("Delete Apple 0");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      expect(Object.fromEntries(new Headers(writes[1]?.headers))).toEqual(
+        Object.fromEntries(new Headers(writes[0]?.headers)),
+      );
+      const requests = fetch.mock.calls.length;
+      await click(label);
+      expect(elements().some((node) => node.props.id === "diary-group-settings")).toBe(
+        kind === "open",
+      );
+      expect(fetch.mock.calls).toHaveLength(requests);
+    },
+  );
+
+  it("keeps a retained meal-group submit from overlapping an active diary deletion", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const profileWrites: RequestInit[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "DELETE") return pending.promise;
+      if (url === "/api/profile") {
+        if (!init) throw new Error("Missing profile request.");
+        profileWrites.push(init);
+        return Promise.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Customize diary groups");
+    await change("Group 1 label", "Submitted morning");
+    const retained = form();
+    const before = fields();
+    invoke(button("Delete Apple 0"));
+    expect(fetch.mock.calls.filter(([, init]) => init?.method === "DELETE")).toHaveLength(1);
+    invoke(retained, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(profileWrites).toHaveLength(0);
+    expect(fields()).toEqual(before);
+    expect(button("Save groups").props.disabled).toBe(true);
+    pending.resolve(Response.json({ error: "Delete unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Save groups").props.disabled).toBe(false);
+    invoke(form(), "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(profileWrites).toHaveLength(1);
+    expect(profileWrites[0]?.body).toBe(
+      JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: submittedGroups }),
+    );
+    expect(new Headers(profileWrites[0]?.headers).get("if-match")).toBe('"1"');
+    expect(fields()).toEqual(before);
+  });
+});
