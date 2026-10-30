@@ -84,7 +84,10 @@ account that presented the form. Retained submits cannot send a profile write
 after leaving the page, account replacement or effect replay. Pending receipts
 cannot update or navigate a retired page. Restarted effects clear a retired
 profile busy state so current settings can save again. Keep the draft's original
-owner and profile revision through a failed save and retry.
+owner and profile revision through a failed save and retry. While the profile
+write is pending, retained label, reorder, Reset and Cancel actions cannot change
+or discard the submitted draft. A failed write keeps those names and that order
+available for retry; fresh controls allow changes again after the request settles.
 
 ## Diary entry saves
 

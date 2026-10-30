@@ -2871,7 +2871,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                 disabled={profileBusy}
                                 id={`diary-group-${group.mealSlot}`}
                                 maxLength={120}
-                                onChange={(event) =>
+                                onChange={(event) => {
+                                  if (profileController.current) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
                                     groups: current.groups.map((candidate) =>
@@ -2879,8 +2880,8 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                         ? { ...candidate, label: event.target.value }
                                         : candidate,
                                     ),
-                                  }))
-                                }
+                                  }));
+                                }}
                                 value={group.label}
                               />
                             </label>
@@ -2889,12 +2890,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                               <button
                                 aria-label={`Move group ${index + 1} up`}
                                 disabled={profileBusy || index === 0}
-                                onClick={() =>
+                                onClick={() => {
+                                  if (profileController.current) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
                                     groups: moveDiaryGroup(current.groups, index, -1),
-                                  }))
-                                }
+                                  }));
+                                }}
                                 type="button"
                               >
                                 Move up
@@ -2904,12 +2906,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                                 disabled={
                                   profileBusy || index === diaryGroupDraft.groups.length - 1
                                 }
-                                onClick={() =>
+                                onClick={() => {
+                                  if (profileController.current) return;
                                   setDiaryGroupDraft((current) => ({
                                     ...current,
                                     groups: moveDiaryGroup(current.groups, index, 1),
-                                  }))
-                                }
+                                  }));
+                                }}
                                 type="button"
                               >
                                 Move down
@@ -2926,6 +2929,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                         <button
                           disabled={profileBusy}
                           onClick={() => {
+                            if (profileController.current) return;
                             setDiaryGroupDraft((current) => ({
                               ...current,
                               groups: defaultDiaryGroups,
@@ -2941,6 +2945,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
                         <button
                           disabled={profileBusy}
                           onClick={() => {
+                            if (profileController.current) return;
                             setDiaryGroupDraft(createDiaryGroupDraft(session));
                             setDiaryGroupSettingsOpen(false);
                           }}

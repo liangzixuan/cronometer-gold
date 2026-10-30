@@ -5484,3 +5484,101 @@ describe("Diary group save lifecycle ownership", () => {
     expect(fetch.mock.calls).toHaveLength(requests);
   });
 });
+
+describe("Diary meal-group draft pending save", () => {
+  function form() {
+    const found = elements().find(
+      (node) =>
+        node.type === "form" &&
+        elements(node).some((child) => child.props.id === "diary-group-breakfast"),
+    );
+    if (!found) throw new Error("Missing meal-group settings form.");
+    return found;
+  }
+  function fields() {
+    return elements(form())
+      .filter((node) => node.type === "input")
+      .map((node) => ({ id: node.props.id, value: node.props.value }));
+  }
+  function action(kind: string) {
+    return kind === "rename" ? field("Group 1 label") : button(kind);
+  }
+  function act(kind: string, node: ElementNode) {
+    if (kind === "rename") invoke(node, "onChange", { target: { value: "Changed morning" } });
+    else invoke(node);
+  }
+
+  it.each(["rename", "Move group 2 up", "Move group 1 down", "Reset defaults", "Cancel"])(
+    "keeps submitted groups through retained %s and permits a fresh action after failure",
+    async (kind) => {
+      const pending = deferred<Response>();
+      const base = fetcher();
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (url === "/api/profile") {
+          if (!init) throw new Error("Missing profile request.");
+          writes.push(init);
+          return writes.length === 1
+            ? pending.promise
+            : Promise.resolve(Response.json({ error: "Still unavailable." }, { status: 503 }));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await click("Customize diary groups");
+      await change("Group 1 label", "Submitted morning");
+      const before = fields();
+      const retained = action(kind);
+      expect(retained.props.disabled).toBe(false);
+      invoke(form(), "onSubmit", { preventDefault() {} });
+      expect(writes).toHaveLength(1);
+      act(kind, retained);
+      await hooks.settle();
+      expect(fields()).toEqual(before);
+      expect(form().props["aria-busy"]).toBe(true);
+      expect(button("Saving…").props.disabled).toBe(true);
+      expect(action(kind).props.disabled).toBe(true);
+      expect(writes).toHaveLength(1);
+      expect(text()).toContain("Saving your diary group names and order");
+      pending.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(fields()).toEqual(before);
+      expect(form().props["aria-busy"]).toBe(false);
+      expect(button("Save groups").props.disabled).toBe(false);
+      invoke(form(), "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes).toHaveLength(2);
+      const expectedGroups = defaultDiaryGroups.map((group) =>
+        group.mealSlot === "breakfast" ? { ...group, label: "Submitted morning" } : group,
+      );
+      expect(writes[0]?.body).toBe(
+        JSON.stringify({ expectedOwnerUserId: owner, diaryGroups: expectedGroups }),
+      );
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"1"');
+      expect(new Headers(writes[1]?.headers).get("if-match")).toBe('"1"');
+      expect(fields()).toEqual(before);
+      const fresh = action(kind);
+      expect(fresh.props.disabled).toBe(false);
+      const requests = fetch.mock.calls.length;
+      act(kind, fresh);
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      if (kind === "Cancel") {
+        expect(elements().some((node) => node.props.id === "diary-group-settings")).toBe(false);
+        expect(button("Customize diary groups").props.disabled).toBe(false);
+      } else if (kind === "rename") {
+        expect(field("Group 1 label").props.value).toBe("Changed morning");
+      } else if (kind === "Reset defaults") {
+        expect(fields()).toEqual(
+          defaultDiaryGroups.map((group) => ({
+            id: `diary-group-${group.mealSlot}`,
+            value: group.label,
+          })),
+        );
+      } else {
+        expect(fields()).toEqual([before[1], before[0], before[2], before[3]]);
+      }
+    },
+  );
+});
