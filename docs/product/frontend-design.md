@@ -122,6 +122,12 @@ state when no mutation is active, so a fresh move can start before an old respon
 arrives. Complete-day permutations, matching receipts and exact retries remain required.
 Collapsing a meal does not retire its otherwise valid Move control.
 
+Edit responses stay with the active account and route that sent the request. The
+client checks ownership before handling the response, after JSON decoding and
+after reloading the day. A retired save, failure or conflict cannot change another
+page's draft or message, or start its reload. Current saves, revision and time-zone
+conflict recovery, and exact failed-request retries remain available.
+
 Delete responses stay with the session, account and route that sent the request.
 Check that ownership before handling a response, after decoding its body and after
 reloading the affected day. A saved receipt, revision conflict or failure from a

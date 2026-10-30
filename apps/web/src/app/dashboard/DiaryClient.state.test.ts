@@ -6568,3 +6568,146 @@ describe("Diary deletion response lifecycle ownership", () => {
     expect(new Headers(writes[0]?.headers).get("if-match")).toBe('"3"');
   });
 });
+
+describe("Diary edit response lifecycle ownership", () => {
+  async function start(pending: Promise<Response>, reload?: Promise<Response>) {
+    const base = fetcher();
+    const writes: ReturnType<typeof captureEditorSave>[] = [];
+    const fetch = vi.fn((url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") {
+        writes.push(captureEditorSave(url, init));
+        return pending;
+      }
+      if (writes.length > 0 && url.startsWith("/api/diary?") && reload) return reload;
+      return base(url, init);
+    });
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const draft = editorValues();
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(1);
+    return { fetch, writes, draft };
+  }
+  function receipt(writes: ReturnType<typeof captureEditorSave>[]) {
+    const request = writes[0];
+    if (!request) throw new Error("Missing editor request.");
+    return editorSaveReceipt(request);
+  }
+  function replace(transition: string) {
+    if (transition === "account")
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    else {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+    }
+  }
+  async function settleBeforeEffects() {
+    for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+    hooks.renderWithoutEffects();
+  }
+  for (const transition of ["account", "route"]) {
+    it.each(["saved", "conflict", "timezone", "failed"])(
+      `ignores a late %s edit after ${transition} replacement`,
+      async (kind) => {
+        const pending = deferred<Response>();
+        const { fetch, writes } = await start(pending.promise);
+        const response =
+          kind === "saved"
+            ? Response.json(receipt(writes))
+            : Response.json(
+                { error: "Old edit unavailable.", code: "DIARY_TIME_ZONE_CHANGED" },
+                { status: kind === "conflict" ? 412 : kind === "timezone" ? 409 : 503 },
+              );
+        replace(transition);
+        const before = text(),
+          requests = fetch.mock.calls.length,
+          routes = router.replace.mock.calls.slice();
+        pending.resolve(response);
+        await settleBeforeEffects();
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(text()).toBe(before);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(writes).toHaveLength(1);
+      },
+    );
+    it(`retires an edit while JSON decodes before ${transition} effects`, async () => {
+      const body = deferred<ReturnType<typeof editorSaveReceipt>>();
+      const response = Response.json({});
+      const decode = vi.spyOn(response, "json").mockImplementation(() => body.promise);
+      const { fetch, writes } = await start(Promise.resolve(response));
+      expect(decode).toHaveBeenCalledTimes(1);
+      replace(transition);
+      const before = text(),
+        requests = fetch.mock.calls.length;
+      body.resolve(receipt(writes));
+      await settleBeforeEffects();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(text()).toBe(before);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    });
+  }
+  it.each(["saved", "failed"])(
+    "does not report an edit into a replaced account after a %s day reload",
+    async (kind) => {
+      const pending = deferred<Response>(),
+        reload = deferred<Response>();
+      const { fetch, writes } = await start(pending.promise, reload.promise);
+      const requests = fetch.mock.calls.length;
+      pending.resolve(Response.json(receipt(writes)));
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      replace("account");
+      const before = text();
+      reload.resolve(
+        kind === "saved"
+          ? Response.json(
+              page([receipt(writes).data.entry, entry(1, "lunch")], null, 2, "2026-08-15", "9"),
+            )
+          : Response.json({ error: "Old reload unavailable." }, { status: 503 }),
+      );
+      await settleBeforeEffects();
+      expect(text()).toBe(before);
+      expect(fetch.mock.calls).toHaveLength(requests + 1);
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+  it.each(["saved", "conflict"])("keeps the current %s edit recovery", async (kind) => {
+    const pending = deferred<Response>(),
+      reload = deferred<Response>();
+    const { fetch, writes } = await start(pending.promise, reload.promise);
+    const requests = fetch.mock.calls.length;
+    pending.resolve(
+      kind === "saved" ? Response.json(receipt(writes)) : Response.json({}, { status: 412 }),
+    );
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(requests + 1);
+    reload.resolve(
+      Response.json(
+        kind === "saved"
+          ? page([receipt(writes).data.entry, entry(1, "lunch")], null, 2, "2026-08-15", "9")
+          : page(),
+      ),
+    );
+    await hooks.settle();
+    expect(text()).toContain(
+      kind === "saved"
+        ? "Diary entry saved in Dinner with fresh totals."
+        : "The diary changed elsewhere. Fresh values were loaded; review your edit again.",
+    );
+    expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+    expect(button("Edit Apple 0").props.disabled).toBe(false);
+    expect(router.replace).not.toHaveBeenCalledWith("/login");
+    expect(writes[0]?.headers["if-match"]).toBe('"3"');
+  });
+  it("keeps the current failed edit draft and exact request for retry", async () => {
+    const { writes, draft } = await start(
+      Promise.resolve(Response.json({ error: "Edit unavailable." }, { status: 503 })),
+    );
+    expect(editorValues()).toEqual(draft);
+    expect(button("Save changes to Apple 0").props.disabled).toBe(false);
+    await click("Save changes to Apple 0");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(editorValues()).toEqual(draft);
+  });
+});

@@ -1224,6 +1224,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     const requestSession = sessionRef.current;
     const requestRoute = sessionRouteRef.current;
     const owner = beginMutation(editor.originLocalDate, editor.entryId);
+    const ownsPage = () =>
+      sessionActive.current &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      sessionRef.current?.user.id === requestSession?.user.id &&
+      sessionRouteRef.current === requestRoute;
+    const responseIsCurrent = () => ownsPage() && mutationIsCurrent(owner);
     setMessage("Saving the diary entry…");
     try {
       const body = {
@@ -1254,9 +1261,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           cache: "no-store",
         },
       );
+      if (!responseIsCurrent()) return;
       if (response.status === 401) {
         if (
-          mutationIsCurrent(owner) &&
+          responseIsCurrent() &&
           sessionRef.current === requestSession &&
           sessionRouteRef.current === requestRoute
         )
@@ -1264,24 +1272,25 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         return;
       }
       const responseBody = await json(response);
+      if (!responseIsCurrent()) return;
       if (
         timestampChanged &&
         response.status === 409 &&
         responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED"
       ) {
         operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
+        if (!responseIsCurrent()) return;
         setEditor(null);
         const refreshRoute = sessionRouteRef.current;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
         if (
-          !mutationIsCurrent(owner) ||
+          !responseIsCurrent() ||
           sessionRef.current?.user.id !== session?.user.id ||
           sessionRouteRef.current !== refreshRoute
         )
           return;
         await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (responseIsCurrent()) {
           setMessage(
             `Your profile time zone changed${currentTimeZone ? ` to ${currentTimeZone}` : ""}. No edit was made; review the local date and time before saving again.`,
           );
@@ -1290,10 +1299,10 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       }
       if (response.status === 412) {
         operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
+        if (!responseIsCurrent()) return;
         setEditor(null);
         const reloaded = await loadDiary(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
+        if (responseIsCurrent()) {
           setMessage(
             reloaded
               ? "The diary changed elsewhere. Fresh values were loaded; review your edit again."
@@ -1319,18 +1328,22 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         throw new TypeError("The server returned a correction receipt for a different edit.");
       }
       operationIds.current.delete(key);
-      if (!mutationIsCurrent(owner)) return;
+      if (!responseIsCurrent()) return;
       setEditor(null);
-      await reportMutationReceipt(
-        owner,
-        mutation,
-        `Diary entry saved in ${diaryGroupLabel(diaryGroups, editor.mealSlot)} with fresh totals.`,
-        "The entry was saved, but fresh diary data could not be confirmed. Choose Retry.",
-      );
+      const reloaded = mutation.affectedDays.some((day) => day.localDate === owner.sourceDate)
+        ? await loadDiary(owner.sourceDate)
+        : true;
+      if (responseIsCurrent()) {
+        setMessage(
+          reloaded
+            ? `Diary entry saved in ${diaryGroupLabel(diaryGroups, editor.mealSlot)} with fresh totals.`
+            : "The entry was saved, but fresh diary data could not be confirmed. Choose Retry.",
+        );
+      }
     } catch (error) {
-      if (mutationIsCurrent(owner)) setMessage(diaryEditErrorMessage(error));
+      if (responseIsCurrent()) setMessage(diaryEditErrorMessage(error));
     } finally {
-      finishMutation(owner);
+      if (ownsPage()) finishMutation(owner);
     }
   }
 
