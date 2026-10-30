@@ -545,6 +545,13 @@ Fresh controls can edit or cancel, and fresh saves keep their exact retry body,
 headers and operation identity. Response handling for writes already started is
 unchanged.
 
+Meal visibility controls also belong to their rendered route. A retained collapse,
+expand or Expand all action cannot change meal choices after leaving the Diary
+or returning to the same day, before or after route effects. Returning keeps the
+chosen meal visibility, loaded rows, nutrient disclosures, whole-day totals and
+pagination controls. Fresh visibility controls work without a request or operation
+ID. Entry-editor controls keep the same route check through shared meal admission.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

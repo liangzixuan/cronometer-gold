@@ -463,6 +463,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   function canUseMealControls() {
     return (
       !privateUiClosed.current &&
+      sessionRouteRef.current === sessionRoute &&
       privateUiGeneration.current === mealPrivateGeneration &&
       viewEpoch.current === mealViewEpoch &&
       mealVisibilityGeneration.current === renderedMealVisibilityGeneration &&
@@ -485,7 +486,6 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   function canUseEntryEditorControls() {
     return (
       canUseMealControls() &&
-      sessionRouteRef.current === sessionRoute &&
       editorRef.current === editor &&
       sessionRef.current === session &&
       mutationSequence.current === renderedEditorMutationSequence &&

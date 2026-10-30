@@ -8349,3 +8349,90 @@ describe("Diary editor control route ownership", () => {
     );
   }
 });
+
+describe("Diary meal control route ownership", () => {
+  for (const transition of [
+    "view replacement",
+    "same-day return before effects",
+    "same-day return after effects",
+  ] as const) {
+    it.each(["Collapse Breakfast", "Expand Breakfast", "Expand all meals"] as const)(
+      `retires retained %s after ${transition} without changing meal evidence`,
+      async (action) => {
+        const fixture = page([entry(0), entry(1, "lunch"), entry(2, "dinner")], "d1.next-page", 24);
+        const original = JSON.stringify(fixture);
+        const fetch = fetcher(fixture);
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        await toggleNutrients(0);
+        if (action !== "Collapse Breakfast") await click("Collapse Breakfast");
+        await click("Collapse Lunch");
+        const retained = button(action);
+        const rows = defaultDiaryGroups.map((item) => text(group(item.mealSlot)));
+        const evidence = () =>
+          elements()
+            .filter(
+              (node) =>
+                node.props.id === "diary-page-count" ||
+                node.props["aria-labelledby"] === "nutrition-summary-title",
+            )
+            .map((node) => text(node));
+        const totals = evidence();
+        const allocate = vi.fn();
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "same-day return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const before = text();
+        const requests = fetch.mock.calls.length;
+        const routes = router.replace.mock.calls.slice();
+        invoke(retained);
+        hooks.renderWithoutEffects();
+        expect(text()).toBe(before);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toEqual(routes);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        expect(defaultDiaryGroups.map((item) => text(group(item.mealSlot)))).toEqual(rows);
+        expect(evidence()).toEqual(totals);
+        expect(button("Expand Lunch").props["aria-expanded"]).toBe(false);
+        expect(button("Load more").props.disabled).toBe(false);
+        await click(action);
+        expect(
+          button(action === "Collapse Breakfast" ? "Expand Breakfast" : "Collapse Breakfast").props[
+            "aria-expanded"
+          ],
+        ).toBe(action !== "Collapse Breakfast");
+        expect(
+          button(action === "Expand all meals" ? "Collapse Lunch" : "Expand Lunch").props[
+            "aria-expanded"
+          ],
+        ).toBe(action === "Expand all meals");
+        await click("Expand all meals");
+        expect(
+          defaultDiaryGroups.map((item) => button(`Collapse ${item.label}`).props["aria-expanded"]),
+        ).toEqual([true, true, true, true]);
+        expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+        expect(text(group("breakfast"))).toContain("Apple 0");
+        expect(text(group("lunch"))).toContain("Apple 1");
+        expect(text(group("dinner"))).toContain("Apple 2");
+        expect(text()).toContain("3 of 24 entries loaded");
+        expect(evidence()).toEqual(totals);
+        expect(button("Load more").props.disabled).toBe(false);
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(JSON.stringify(fixture)).toBe(original);
+      },
+    );
+  }
+});
