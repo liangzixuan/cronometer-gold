@@ -152,6 +152,7 @@ import { CalmOverview } from "./CalmOverview";
 import { DiaryClient } from "./DiaryClient";
 import { DiaryDayNote } from "./DiaryDayNote";
 import { DiaryEntryEditorForm } from "./DiaryEntryEditorForm";
+import { TodayOverviewCards } from "./TodayOverviewCards";
 
 interface ElementNode {
   readonly type: unknown;
@@ -7329,4 +7330,148 @@ describe("Diary day response route ownership", () => {
       }
     },
   );
+});
+
+describe("Dashboard card retry ownership", () => {
+  function cardProps() {
+    const node = elements().find((node) => node.type === TodayOverviewCards);
+    if (!node) throw new Error("Missing overview cards");
+    return node.props as unknown as Parameters<typeof TodayOverviewCards>[0];
+  }
+  for (const kind of ["hydration", "activity"] as const) {
+    const endpoint = kind === "hydration" ? "/api/hydration?" : "/api/activities?";
+    const retry = () =>
+      kind === "hydration" ? cardProps().onRetryHydration : cardProps().onRetryActivity;
+    const emptyDay = () =>
+      Response.json({
+        data: {
+          localDate: "2026-08-15",
+          timeZone: "America/Chicago",
+          revision: "2",
+          entries: [],
+          updatedAt: "2026-08-15T13:05:02.000Z",
+          ...(kind === "hydration" ? { totalMilliliters: 0 } : { totalDurationMinutes: 0 }),
+        },
+      });
+
+    it.each(["unmount", "replay", "route return", "owner", "profile", "date", "sign out"] as const)(
+      `${kind} retires its failed-card retry after %s`,
+      async (reason) => {
+        const base = fetcher();
+        const logout = deferred<Response>();
+        const fetch = vi.fn((url: string, init?: RequestInit) =>
+          url === "/api/auth/logout" ? logout.promise : base(url, init),
+        );
+        let view: "overview" | "diary" = "overview";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        expect(cardProps()[kind].status).toBe("error");
+        const oldRetry = retry();
+        if (reason === "unmount") hooks.unmount();
+        else if (reason === "replay") {
+          hooks.replayEffects();
+          await hooks.settle();
+        } else if (reason === "route return") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+          view = "overview";
+          hooks.renderWithoutEffects();
+        } else if (reason === "owner" || reason === "profile") {
+          hooks.replaceVerifiedSessionBeforeEffects(
+            parseSession(
+              session(reason === "owner" ? anotherOwner : owner, defaultDiaryGroups, "2"),
+            ),
+          );
+        } else if (reason === "date") invoke(button("Next day"));
+        else invoke(button("Sign out"));
+        const count = fetch.mock.calls.length;
+        oldRetry();
+        expect(fetch.mock.calls).toHaveLength(count);
+        if (reason === "unmount") expect(hooks.afterClose()).toBe(0);
+        if (reason === "replay") {
+          retry()();
+          await hooks.settle();
+          expect(fetch.mock.calls.filter(([url]) => url.startsWith(endpoint))).toHaveLength(3);
+        }
+        if (reason === "sign out") {
+          logout.resolve(Response.json({}, { status: 503 }));
+          await hooks.settle();
+          oldRetry();
+          expect(fetch.mock.calls).toHaveLength(count);
+          retry()();
+          await hooks.settle();
+          expect(fetch.mock.calls.filter(([url]) => url.startsWith(endpoint))).toHaveLength(2);
+        }
+      },
+    );
+
+    it(`${kind} retries one failure at a time and preserves a recovered card`, async () => {
+      const base = fetcher();
+      const pending = deferred<Response>();
+      let reads = 0;
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (url.startsWith(endpoint)) {
+          reads += 1;
+          if (reads === 2) return pending.promise;
+          if (reads >= 3) return Promise.resolve(emptyDay());
+        }
+        return base(url, init);
+      });
+      await mount(fetch, "overview");
+      const otherKind = kind === "hydration" ? "activity" : "hydration";
+      const otherCard = cardProps()[otherKind];
+      const oldRetry = retry();
+      oldRetry();
+      const signal = fetch.mock.calls.filter(([url]) => url.startsWith(endpoint))[1]?.[1]?.signal;
+      oldRetry();
+      expect(reads).toBe(2);
+      expect(signal?.aborted).toBe(false);
+      await hooks.settle();
+      expect(cardProps()[kind].status).toBe("loading");
+      oldRetry();
+      expect(reads).toBe(2);
+      pending.resolve(
+        Response.json({ error: "Summary temporarily unavailable." }, { status: 503 }),
+      );
+      await hooks.settle();
+      expect(cardProps()[kind].status).toBe("error");
+      oldRetry();
+      expect(reads).toBe(2);
+      const freshRetry = retry();
+      freshRetry();
+      await hooks.settle();
+      expect(reads).toBe(3);
+      expect(cardProps()[kind]).toEqual({ status: "empty", count: 0, total: 0 });
+      expect(cardProps()[otherKind]).toEqual(otherCard);
+      const count = fetch.mock.calls.length;
+      oldRetry();
+      freshRetry();
+      retry()();
+      expect(fetch.mock.calls).toHaveLength(count);
+      for (const [url, init] of fetch.mock.calls.filter(([url]) => url.startsWith(endpoint))) {
+        expect(url).toBe(endpoint + "date=2026-08-15");
+        expect(init?.cache).toBe("no-store");
+        expect(new Headers(init?.headers).get("accept")).toBe("application/json");
+        expect(new Headers(init?.headers).get("x-expected-owner-user-id")).toBe(owner);
+      }
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(1);
+      expect(router.replace).not.toHaveBeenCalled();
+    });
+
+    it(`${kind} keeps current retry session expiry`, async () => {
+      const base = fetcher();
+      let reads = 0;
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url.startsWith(endpoint) && ++reads > 1
+          ? Promise.resolve(Response.json({}, { status: 401 }))
+          : base(url, init),
+      );
+      await mount(fetch, "overview");
+      retry()();
+      await hooks.settle();
+      expect(reads).toBe(2);
+      expect(router.replace).toHaveBeenCalledWith("/login");
+    });
+  }
 });

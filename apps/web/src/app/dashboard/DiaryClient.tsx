@@ -2130,14 +2130,44 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     });
   };
 
+  function retryOverviewCard(kind: "hydration" | "activity") {
+    const scoped = kind === "hydration" ? hydrationOverview : activityOverview;
+    const generation =
+      kind === "hydration" ? hydrationOverviewGeneration : activityOverviewGeneration;
+    if (
+      scoped.card.status !== "error" ||
+      !scoped.identity ||
+      !sessionActive.current ||
+      privateUiClosed.current ||
+      session === null ||
+      sessionRef.current !== session ||
+      sessionRouteRef.current !== sessionRoute ||
+      viewEpoch.current !== mealViewEpoch ||
+      mutationSequence.current !== renderedEditorMutationSequence ||
+      activeMutation.current !== null ||
+      profileController.current !== null ||
+      !dailyOverviewRequestMatches(
+        scoped.identity,
+        dailyOverviewIdentity(
+          sessionRef.current,
+          dateRef.current,
+          privateUiGeneration.current,
+          generation.current,
+        ),
+      )
+    )
+      return;
+    void loadOverviewCard(kind, date);
+  }
+
   const overviewCards =
     session && hasCommittedDate ? (
       <TodayOverviewCards
         activity={activityOverviewForCurrentIdentity}
         date={date}
         hydration={hydrationOverviewForCurrentIdentity}
-        onRetryActivity={() => void loadOverviewCard("activity", date)}
-        onRetryHydration={() => void loadOverviewCard("hydration", date)}
+        onRetryActivity={() => retryOverviewCard("activity")}
+        onRetryHydration={() => retryOverviewCard("hydration")}
       />
     ) : null;
   const dayNote =

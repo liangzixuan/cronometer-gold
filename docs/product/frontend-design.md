@@ -488,6 +488,14 @@ another request or update the closed view. Open pages keep these public tools
 available during session verification and recovery; closing does not submit a
 diary addition. In-flight reads retain their existing cancellation behavior.
 
+Dashboard water and activity Retry controls belong to the current failed card,
+account, profile, route and selected day. Starting a retry retires its previous
+callback before paint, so a retained action cannot cancel the newer read or
+replace a recovered card. Unmount, effect replay, route return, date selection
+and sign-out also retire older retries. A fresh control can retry another failure
+or recover after an unconfirmed sign-out. Each card keeps its own request and
+error state; retrying it does not reload the diary or the other summary.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not
