@@ -7116,3 +7116,108 @@ describe("Diary date controls during writes", () => {
     });
   }
 });
+
+describe("Diary date control page ownership", () => {
+  const choices = ["Previous day", "Next day", "Today", "Local date"] as const;
+  function control(choice: (typeof choices)[number]) {
+    return choice === "Local date" ? field(choice) : button(choice);
+  }
+  function activate(node: ElementNode, choice: (typeof choices)[number]) {
+    if (choice === "Local date") invoke(node, "onChange", { target: { value: "2026-08-20" } });
+    else invoke(node);
+  }
+  function freezeToday() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-16T18:00:00Z"));
+  }
+  it.each(choices)("retires %s before a replacement account's effects", async (choice) => {
+    freezeToday();
+    const fetch = fetcher();
+    await mount(fetch);
+    await prepareSaveLockDraft();
+    const retained = control(choice);
+    hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    const before = text(),
+      draft = editorValues(),
+      requests = fetch.mock.calls.length,
+      navigations = router.replace.mock.calls.length;
+    activate(retained, choice);
+    hooks.renderWithoutEffects();
+    expect(router.replace.mock.calls).toHaveLength(navigations);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(text()).toBe(before);
+    expect(editorValues()).toEqual(draft);
+    expect(field("Local date").props.value).toBe("2026-08-15");
+  });
+  it.each(["unmount", "effect replay", "route replacement", "route return"])(
+    "retires Next day after %s",
+    async (transition) => {
+      const fetch = fetcher();
+      await mount(fetch);
+      const retained = button("Next day");
+      if (transition === "unmount") hooks.unmount();
+      else if (transition === "effect replay") {
+        hooks.replayEffects();
+        await hooks.settle();
+      } else {
+        route.date = "2026-08-16";
+        hooks.renderWithoutEffects();
+        if (transition === "route return") {
+          route.date = "2026-08-15";
+          hooks.renderWithoutEffects();
+        }
+      }
+      const before = text(),
+        requests = fetch.mock.calls.length,
+        navigations = router.replace.mock.calls.length;
+      invoke(retained);
+      if (transition !== "unmount") hooks.renderWithoutEffects();
+      expect(router.replace.mock.calls).toHaveLength(navigations);
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(hooks.afterClose()).toBe(0);
+      expect(text()).toBe(before);
+      if (transition === "effect replay") {
+        invoke(button("Next day"));
+        route.date = "2026-08-16";
+        await hooks.settle();
+        expect(field("Local date").props.value).toBe("2026-08-16");
+        expect(text()).toContain("Apple 2");
+        expect(router.replace).toHaveBeenLastCalledWith("/dashboard?date=2026-08-16", {
+          scroll: false,
+        });
+      }
+    },
+  );
+  it.each(choices)("retires %s as soon as another date is selected", async (choice) => {
+    freezeToday();
+    const fetch = fetcher();
+    await mount(fetch);
+    const retained = control(choice);
+    invoke(button("Next day"));
+    const navigations = router.replace.mock.calls.length;
+    activate(retained, choice);
+    expect(router.replace.mock.calls).toHaveLength(navigations);
+    route.date = "2026-08-16";
+    await hooks.settle();
+    expect(field("Local date").props.value).toBe("2026-08-16");
+    await click("Edit Apple 2");
+    await changeEditorField("Quantity", "2.125000");
+    const draft = editorValues(),
+      before = text(),
+      requests = fetch.mock.calls.length;
+    activate(retained, choice);
+    await hooks.settle();
+    expect(router.replace.mock.calls).toHaveLength(navigations);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(editorValues()).toEqual(draft);
+    expect(text()).toBe(before);
+    invoke(button("Next day"));
+    route.date = "2026-08-17";
+    await hooks.settle();
+    expect(field("Local date").props.value).toBe("2026-08-17");
+    expect(text()).toContain("Apple 2");
+    expect(router.replace).toHaveBeenLastCalledWith("/dashboard?date=2026-08-17", {
+      scroll: false,
+    });
+  });
+});

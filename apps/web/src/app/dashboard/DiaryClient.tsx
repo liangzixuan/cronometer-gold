@@ -1011,7 +1011,19 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   function chooseDate(next: string) {
-    if (activeMutation.current !== null || profileController.current !== null) return;
+    if (
+      !sessionActive.current ||
+      privateUiClosed.current ||
+      session === null ||
+      sessionRef.current !== session ||
+      sessionRouteRef.current !== sessionRoute ||
+      privateUiGeneration.current !== mealPrivateGeneration ||
+      viewEpoch.current !== mealViewEpoch ||
+      dateRef.current !== date ||
+      activeMutation.current !== null ||
+      profileController.current !== null
+    )
+      return;
     transitionCommittedDate(next, true);
   }
 

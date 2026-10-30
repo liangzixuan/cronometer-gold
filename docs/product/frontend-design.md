@@ -72,6 +72,12 @@ state before paint and ignore retained actions during the request. A failed save
 keeps its draft and exact retry request; fresh date controls work when the write
 settles. Route-driven date changes and server recovery keep their existing paths.
 
+Date controls also belong to the account, route and mounted page that presented
+them. Account or route replacement, leaving the page and effect replay retire old
+callbacks. Selecting another date retires them before paint, so they cannot navigate
+again or clear a later editor and its draft. Fresh controls remain available after
+the selected day loads.
+
 The day Retry action belongs to the failed read, account, route and mounted page
 that presented it. Starting a retry retires that callback before paint, so repeated
 activation cannot abort the new read. Recovery, account or route replacement and
