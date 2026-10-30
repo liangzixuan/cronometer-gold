@@ -485,6 +485,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   function canUseEntryEditorControls() {
     return (
       canUseMealControls() &&
+      sessionRouteRef.current === sessionRoute &&
       editorRef.current === editor &&
       sessionRef.current === session &&
       mutationSequence.current === renderedEditorMutationSequence &&

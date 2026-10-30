@@ -537,6 +537,14 @@ start another recovery read. The existing write lock stays held until completion
 its existing cleanup then enables fresh controls. Unsaved labels and order remain
 available, and a fresh save keeps the same request and retry contract.
 
+Entry-editor controls belong to the route that rendered them. Leaving the Diary
+or returning to the same day retires retained open, field, clear-note, cancel and
+save callbacks before and after route effects. They cannot replace or submit the
+draft. Unsaved quantity, meal, date, time and note remain available on return.
+Fresh controls can edit or cancel, and fresh saves keep their exact retry body,
+headers and operation identity. Response handling for writes already started is
+unchanged.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

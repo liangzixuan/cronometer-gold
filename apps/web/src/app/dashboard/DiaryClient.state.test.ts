@@ -8239,3 +8239,113 @@ describe("Diary group save response route ownership", () => {
     );
   }
 });
+
+describe("Diary editor control route ownership", () => {
+  const replacements = ["8.5000", "lunch", "2026-08-20", "11:22", "Retired note"];
+  for (const transition of [
+    "view replacement",
+    "same-day return before effects",
+    "same-day return after effects",
+  ] as const) {
+    it.each([...saveLockFields, "Clear", "Cancel", "Save", "Open"] as const)(
+      `retires retained %s after ${transition} while preserving fresh edit retries`,
+      async (action) => {
+        const base = fetcher();
+        const writes: ReturnType<typeof captureEditorSave>[] = [];
+        const fetch = vi.fn((url: string, init?: RequestInit) => {
+          if (init?.method === "PATCH") {
+            const request = captureEditorSave(url, init);
+            writes.push(request);
+            return Promise.resolve(
+              writes.length === 1
+                ? Response.json({ error: "Fresh edit unavailable." }, { status: 503 })
+                : Response.json(editorSaveReceipt(request)),
+            );
+          }
+          return base(url, init);
+        });
+        let view: "diary" | "overview" = "diary";
+        vi.stubGlobal("fetch", fetch);
+        hooks.mount(() => DiaryClient({ view }));
+        await hooks.settle();
+        if (action !== "Open") await prepareSaveLockDraft();
+        const expected = action === "Open" ? null : editorValues();
+        const fieldIndex = saveLockFields.findIndex((label) => label === action);
+        const retained =
+          fieldIndex >= 0
+            ? editorField(action)
+            : button(
+                action === "Open"
+                  ? "Edit Apple 0"
+                  : action === "Clear"
+                    ? "Clear note field for Apple 0"
+                    : action === "Cancel"
+                      ? "Cancel editing Apple 0"
+                      : "Save changes to Apple 0",
+              );
+        view = "overview";
+        hooks.renderWithoutEffects();
+        if (transition !== "view replacement") {
+          view = "diary";
+          hooks.renderWithoutEffects();
+        }
+        if (transition === "same-day return after effects") {
+          hooks.render();
+          await hooks.settle();
+        }
+        const before = text();
+        const requests = fetch.mock.calls.length;
+        const routes = router.replace.mock.calls.slice();
+        if (fieldIndex >= 0)
+          invoke(retained, "onChange", { target: { value: replacements[fieldIndex] } });
+        else invoke(retained);
+        for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+        hooks.renderWithoutEffects();
+        expect(fetch.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toEqual(routes);
+        expect(text()).toBe(before);
+        expect(writes).toHaveLength(0);
+        view = "diary";
+        hooks.render();
+        await hooks.settle();
+        if (expected === null) {
+          expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+          await prepareSaveLockDraft();
+        } else {
+          expect(editorValues()).toEqual(expected);
+        }
+        const preserved = editorValues();
+        await changeEditorField("Quantity", "3.250000");
+        expect(editorField("Quantity").props.value).toBe("3.250000");
+        await changeEditorField("Quantity", String(preserved[0]));
+        expect(editorValues()).toEqual(preserved);
+        expect(button("Save changes to Apple 0").props.disabled).toBe(false);
+        await click("Save changes to Apple 0");
+        expect(writes).toHaveLength(1);
+        expect(text()).toContain("Fresh edit unavailable.");
+        expect(editorValues()).toEqual(preserved);
+        await click("Save changes to Apple 0");
+        expect(writes).toHaveLength(2);
+        expect(writes[1]).toEqual(writes[0]);
+        expect(writes[0]?.url).toBe(
+          `/api/diary/entries/${entry(0).id}?date=2026-08-15&profileTimeZonePrecondition=v1`,
+        );
+        expect(JSON.parse(writes[0]?.body ?? "")).toMatchObject({
+          portion: { amount: "2.125000" },
+          mealSlot: "dinner",
+          note: "  Keep this exact draft\nincluding spacing  ",
+          occurredAt: "2026-08-15T14:45:00.000Z",
+        });
+        expect(writes[0]?.headers["if-match"]).toBe('"3"');
+        expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+        expect(writes[0]?.headers["idempotency-key"]).toBeTruthy();
+        expect(text()).toContain("Diary entry saved in Dinner with fresh totals.");
+        expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+        await click("Edit Apple 0");
+        await click("Cancel editing Apple 0");
+        expect(elements().some((node) => node.props.className === "entryEditor")).toBe(false);
+        expect(writes).toHaveLength(2);
+      },
+    );
+  }
+});
