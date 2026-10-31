@@ -327,6 +327,10 @@ An external report route change retires unfinished report and profile responses,
 even if the route returns before effects run. Late data, errors and unauthorized
 responses cannot replace or close the returned report. The report's own range URL
 update preserves its pending read without another session or report request.
+Keep route readiness closed after an external departure and return until the
+route effects verify its session. Hide the prior report and disable dates,
+presets, submission and period navigation during that transition. Returning to
+the same URL alone does not restore the previous route's readiness.
 
 A temporary failure to verify the Reports session offers Retry session. It verifies
 the current route and profile before loading its report. Keep report content,

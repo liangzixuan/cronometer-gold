@@ -2250,3 +2250,62 @@ describe("Report response route return", () => {
     );
   }
 });
+
+describe("Report route return readiness", () => {
+  it.each(["from", "to", "preset", "submit", "next", "previous"])(
+    "keeps fresh %s controls inactive after route return until session verification",
+    async (action) => {
+      const fetcher = readyFetcher();
+      const original = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+      let props = original;
+      hooks.mount(() => ReportsClient(props));
+      await hooks.settle();
+      nutrient("15");
+      await hooks.settle();
+      const requests = fetcher.mock.calls.length;
+      props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+      hooks.renderWithoutEffects();
+      props = original;
+      hooks.renderWithoutEffects();
+      if (action === "from" || action === "to") {
+        invoke(required(dateFields()[action === "from" ? 0 : 1]), "onChange", {
+          target: { value: action === "from" ? "2026-08-31" : "2026-09-08" },
+        });
+      } else if (action === "submit") {
+        invoke(required(elements().find((node) => node.type === "form")), "onSubmit", {
+          preventDefault() {},
+        });
+      } else {
+        invoke(
+          button(
+            action === "preset" ? "14 days" : action === "next" ? "Next period" : "Previous period",
+          ),
+        );
+      }
+      hooks.renderWithoutEffects();
+      expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(text()).not.toContain("Exact daily evidence");
+      expect(dateFields().every((node) => node.props.disabled === true)).toBe(true);
+      for (const label of ["14 days", "Update report", "Next period", "Previous period"]) {
+        expect(button(label).props.disabled).toBe(true);
+      }
+      hooks.render();
+      await hooks.settle();
+      expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+      expect(text()).toContain("Exact daily evidence");
+      expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+      expect(dateFields().every((node) => node.props.disabled === false)).toBe(true);
+      expect(button("Update report").props.disabled).toBe(false);
+      await click("Next period");
+      expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+      expect(router.replace).toHaveBeenCalledExactlyOnceWith(
+        "/reports?from=2026-09-08&to=2026-09-14",
+        { scroll: false },
+      );
+      expect(fetcher.mock.calls.filter(([url]) => url.includes("from=2026-09-08"))).toHaveLength(1);
+      expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+    },
+  );
+});

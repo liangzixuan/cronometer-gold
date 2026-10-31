@@ -188,7 +188,6 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   refreshRef.current = refreshKey;
   const initialRouteKey = `${initialFrom ?? ""}/${initialTo ?? ""}`;
   const routeRef = useRef({ key: initialRouteKey });
-  const handledRouteKey = useRef(initialRouteKey);
   const routeReadyRef = useRef(false);
   const pendingRoute = ownedRouteCommit.current;
   const ownedRouteEcho =
@@ -199,10 +198,10 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     pendingRoute.ownerUserId === sessionRef.current?.user.id;
   if (routeRef.current.key !== initialRouteKey) {
     routeRef.current = { key: initialRouteKey };
+    routeReadyRef.current = ownedRouteEcho;
     if (!ownedRouteEcho) reportGeneration.current += 1;
   }
   const routeContext = routeRef.current;
-  routeReadyRef.current = handledRouteKey.current === initialRouteKey || ownedRouteEcho;
 
   const closePrintGate = useCallback(() => {
     armedPrint.current = null;
@@ -335,7 +334,6 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   useEffect(() => {
     const ownedCommit = ownedRouteCommit.current;
     ownedRouteCommit.current = null;
-    handledRouteKey.current = initialRouteKey;
     routeReadyRef.current = true;
     if (
       ownedCommit &&
@@ -348,7 +346,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       return;
     const controller = loadSession();
     return () => controller?.abort();
-  }, [initialFrom, initialTo, initialRouteKey, loadSession]);
+  }, [initialFrom, initialTo, loadSession]);
 
   useEffect(() => {
     if (!session || !range) return;
@@ -932,13 +930,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <legend>Quick ranges ending on the To date</legend>
             {[7, 14, 30].map((days) => (
               <button
-                disabled={
-                  !session ||
-                  sessionVerifying ||
-                  logoutBusy ||
-                  state === "loading" ||
-                  privateUiClosed.current
-                }
+                disabled={!canUseRangeControls()}
                 key={days}
                 onClick={() => choosePreset(days as 7 | 14 | 30)}
                 type="button"
@@ -951,13 +943,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <label>
               <span>From</span>
               <input
-                disabled={
-                  !session ||
-                  sessionVerifying ||
-                  logoutBusy ||
-                  state === "loading" ||
-                  privateUiClosed.current
-                }
+                disabled={!canUseRangeControls()}
                 onChange={(event) => {
                   editRangeDate("from", event.target.value);
                 }}
@@ -969,13 +955,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <label>
               <span>To</span>
               <input
-                disabled={
-                  !session ||
-                  sessionVerifying ||
-                  logoutBusy ||
-                  state === "loading" ||
-                  privateUiClosed.current
-                }
+                disabled={!canUseRangeControls()}
                 onChange={(event) => {
                   editRangeDate("to", event.target.value);
                 }}
@@ -984,17 +964,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                 value={draftTo}
               />
             </label>
-            <button
-              className="buttonPrimary"
-              disabled={
-                !session ||
-                sessionVerifying ||
-                logoutBusy ||
-                state === "loading" ||
-                privateUiClosed.current
-              }
-              type="submit"
-            >
+            <button className="buttonPrimary" disabled={!canUseRangeControls()} type="submit">
               Update report
             </button>
           </div>
