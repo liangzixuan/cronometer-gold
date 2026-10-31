@@ -231,15 +231,20 @@ export function FoodSearchClient() {
   const mounted = useRef(false);
   const sessionController = useRef<AbortController | null>(null);
   const sessionGeneration = useRef(0);
-  const sessionRoute = useRef({ context: confirmationContext, revision: 0 });
+  const sessionRoute = useRef<{
+    context: string;
+    revision: number;
+    appliedRevision: number | null;
+  }>({ context: confirmationContext, revision: 0, appliedRevision: null });
   if (sessionRoute.current.context !== confirmationContext) {
     sessionRoute.current = {
+      ...sessionRoute.current,
       context: confirmationContext,
       revision: sessionRoute.current.revision + 1,
     };
   }
   const sessionRouteRevision = sessionRoute.current.revision;
-  const appliedSessionRoute = useRef<number | null>(null);
+  const [appliedSessionRoute, setAppliedSessionRoute] = useState<number | null>(null);
   const sessionViewGeneration = sessionGeneration.current;
   const dateEdited = useRef(false);
   const mealEdited = useRef(false);
@@ -368,7 +373,7 @@ export function FoodSearchClient() {
     if (
       !mounted.current ||
       sessionRoute.current.revision !== sessionRouteRevision ||
-      appliedSessionRoute.current !== sessionRouteRevision ||
+      sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       sessionController.current !== null ||
       sessionStateRef.current === "ready" ||
       sessionStateRef.current === "unauthenticated" ||
@@ -388,7 +393,7 @@ export function FoodSearchClient() {
       sessionController.current === controller &&
       sessionGeneration.current === generation &&
       sessionRoute.current.revision === sessionRouteRevision &&
-      appliedSessionRoute.current === sessionRouteRevision;
+      sessionRoute.current.appliedRevision === sessionRouteRevision;
     try {
       const response = await fetch("/api/auth/me", {
         headers: { accept: "application/json" },
@@ -435,7 +440,8 @@ export function FoodSearchClient() {
   }, [requestedDate, requestedMeal, sessionRouteRevision]);
 
   useEffect(() => {
-    appliedSessionRoute.current = sessionRouteRevision;
+    sessionRoute.current.appliedRevision = sessionRouteRevision;
+    setAppliedSessionRoute(sessionRouteRevision);
     setSelectedOccurredAt(null);
     confirmationGeneration.current += 1;
     setConfirmation(null);
@@ -471,7 +477,7 @@ export function FoodSearchClient() {
       sessionController.current === null &&
       sessionGeneration.current === sessionViewGeneration &&
       sessionRoute.current.revision === sessionRouteRevision &&
-      appliedSessionRoute.current === sessionRouteRevision &&
+      sessionRoute.current.appliedRevision === sessionRouteRevision &&
       activeAddOperation.current === null &&
       pendingAdds.current.size === 0 &&
       !dateReviewRequired
@@ -732,12 +738,13 @@ export function FoodSearchClient() {
       (instance === "search" ? searchController.current : barcodeController.current) !==
         resultController ||
       (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== draftGeneration ||
+      appliedSessionRoute !== sessionRouteRevision ||
       sessionState !== "ready" ||
       sessionStateRef.current !== "ready" ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       mealGeneration.current !== renderedMealGeneration ||
       sessionRoute.current.revision !== sessionRouteRevision ||
-      appliedSessionRoute.current !== sessionRouteRevision
+      sessionRoute.current.appliedRevision !== sessionRouteRevision
     ) {
       return;
     }
@@ -808,7 +815,7 @@ export function FoodSearchClient() {
       sessionStateRef.current === "ready" &&
       sessionGeneration.current === addSessionGeneration &&
       sessionRoute.current.revision === sessionRouteRevision &&
-      appliedSessionRoute.current === sessionRouteRevision;
+      sessionRoute.current.appliedRevision === sessionRouteRevision;
     setAddingFoodVersion(food.foodVersionId);
     setAddState("loading");
     setAddMessage(`Adding ${quickAddAmountLabel(draft)} of ${food.name}…`);
@@ -900,7 +907,7 @@ export function FoodSearchClient() {
     if (
       !mounted.current ||
       sessionRoute.current.revision !== sessionRouteRevision ||
-      appliedSessionRoute.current !== sessionRouteRevision ||
+      sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       !isLocalDate(value) ||
       value === diaryDate
@@ -916,7 +923,7 @@ export function FoodSearchClient() {
     if (
       !mounted.current ||
       sessionRoute.current.revision !== sessionRouteRevision ||
-      appliedSessionRoute.current !== sessionRouteRevision ||
+      sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       mealGeneration.current !== renderedMealGeneration
     )
       return;
@@ -934,7 +941,7 @@ export function FoodSearchClient() {
       addingFoodVersion === null &&
       activeAddOperation.current === null &&
       sessionRoute.current.revision === sessionRouteRevision &&
-      appliedSessionRoute.current === sessionRouteRevision &&
+      sessionRoute.current.appliedRevision === sessionRouteRevision &&
       dayReviewGeneration.current === renderedDayReviewGeneration
     );
   }
@@ -987,7 +994,7 @@ export function FoodSearchClient() {
       sessionStateRef.current !== "ready" ||
       activeAddOperation.current !== null ||
       sessionRoute.current.revision !== sessionRouteRevision ||
-      appliedSessionRoute.current !== sessionRouteRevision ||
+      sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       !dateReviewRequired
     ) {
@@ -1035,7 +1042,7 @@ export function FoodSearchClient() {
       addingFoodVersion !== null ||
       activeAddOperation.current !== null ||
       sessionRoute.current.revision !== sessionRouteRevision ||
-      appliedSessionRoute.current !== sessionRouteRevision ||
+      sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== generation
     )
       return;
@@ -1054,7 +1061,7 @@ export function FoodSearchClient() {
     const controlId = `quick-add-${instance}-${food.foodVersionId}`;
     const busy = addingFoodVersion !== null;
     const currentConfirmation =
-      appliedSessionRoute.current === sessionRouteRevision &&
+      sessionRoute.current.appliedRevision === sessionRouteRevision &&
       confirmation?.context === confirmationContext &&
       confirmation.foodVersionId === food.foodVersionId &&
       confirmation.instance === instance
@@ -1114,7 +1121,13 @@ export function FoodSearchClient() {
           <button
             aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
             className="quickAddButton"
-            disabled={busy || sessionState !== "ready" || dateReviewRequired || !amountIsValid}
+            disabled={
+              busy ||
+              appliedSessionRoute !== sessionRouteRevision ||
+              sessionState !== "ready" ||
+              dateReviewRequired ||
+              !amountIsValid
+            }
             onClick={() => void addFood(food, draft, instance, draftGeneration)}
             type="button"
           >

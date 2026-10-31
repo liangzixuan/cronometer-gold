@@ -492,6 +492,13 @@ link. Returning to the same route before its effects run must not restore them.
 Manual draft edits and unrelated URL parameters preserve the current receipt.
 After route settlement, a fresh addition or its exact retry can show a new receipt.
 
+Search and barcode Add stay disabled until a requested date or meal route is
+applied. Returning to the original route before effects does not reopen Add.
+Settlement updates the controls even if the draft values and empty receipt did
+not change. Callbacks displayed disabled stay inert after recovery and cannot
+clear a later receipt. Public results, shared portions and diary coordinates
+remain available; fresh Add and its exact uncertain retry use the settled route.
+
 ## Foods session recovery
 
 Foods keeps public search, suggestions and barcode lookup available while it
