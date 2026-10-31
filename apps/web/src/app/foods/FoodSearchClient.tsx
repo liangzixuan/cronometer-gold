@@ -725,6 +725,8 @@ export function FoodSearchClient() {
       instance === "search" ? renderedSearchController : renderedBarcodeController;
     if (
       !mounted.current ||
+      addingFoodVersion !== null ||
+      activeAddOperation.current !== null ||
       !resultController ||
       resultController.signal.aborted ||
       (instance === "search" ? searchController.current : barcodeController.current) !==
@@ -736,11 +738,6 @@ export function FoodSearchClient() {
       sessionRoute.current.revision !== sessionRouteRevision ||
       appliedSessionRoute.current !== sessionRouteRevision
     ) {
-      return;
-    }
-    if (activeAddOperation.current !== null) {
-      setAddState("error");
-      setAddMessage("Wait for the current diary addition to finish before adding another food.");
       return;
     }
     const generation = ++confirmationGeneration.current;
@@ -799,6 +796,7 @@ export function FoodSearchClient() {
       );
       return;
     }
+    quickAddDraftGeneration.current.set(food.foodVersionId, draftGeneration + 1);
     pendingAdds.current.set(operation.intentKey, operation);
     activeAddOperation.current = operation.operationId;
     const addSessionGeneration = sessionGeneration.current;

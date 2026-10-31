@@ -441,6 +441,14 @@ retry an uncertain addition with its exact original request and operation ID.
 Replacing the other lookup leaves the unchanged panel usable. Responses for
 additions already started keep their existing handling.
 
+Starting an addition retires that food version's ready Add callbacks in both
+result panels before paint. Controls rendered during that addition remain inert after it
+settles. Retained actions cannot issue another write, retry a failed request,
+replace its status or clear a saved receipt. Fresh Add controls can retry an
+uncertain addition with its exact body, headers and operation ID, or create a
+new operation after a confirmed save. Keep the selected day, meal and shared
+portion draft unchanged.
+
 ## Catalogue food logging time
 
 Catalogue search and barcode results share an optional local time beside their

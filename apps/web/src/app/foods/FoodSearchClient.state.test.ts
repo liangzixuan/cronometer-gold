@@ -3759,3 +3759,131 @@ describe("Food result Add admission", () => {
     }
   });
 });
+
+describe("Food Add attempt admission", () => {
+  function add(instance: "search" | "barcode") {
+    const controls = elements().find(
+      (node) =>
+        node.type === "fieldset" &&
+        elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+    );
+    const action = controls && elements(controls).find((node) => node.type === "button");
+    if (!action) throw new Error("Missing attempt Add");
+    return action;
+  }
+  async function ready(fetcher: ReturnType<typeof vi.fn>) {
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("food-barcode", "012345678905");
+    const form = elements().find((node) => node.props.className === "barcodeForm");
+    if (!form) throw new Error("Missing barcode form");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    await change("quick-add-search-202-amount", "2.500000");
+  }
+  for (const instance of ["search", "barcode"] as const) {
+    const other = instance === "search" ? "barcode" : "search";
+    it.each(["before-paint", "loading"])(
+      `keeps repeated ${instance} Add inert while pending at %s`,
+      async (boundary) => {
+        const held = deferred<Response>();
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") return held.promise;
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        const retained = add(instance);
+        const retainedOther = add(other);
+        invoke(retained);
+        if (boundary === "loading") await hooks.settle();
+        invoke(retained);
+        invoke(retainedOther);
+        await hooks.settle();
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(text()).toContain("Adding 2.500000 default servings of Apple Pie…");
+        expect(text()).not.toContain("Wait for the current diary addition");
+        const post = pendingPosts(fetcher)[0]?.[1];
+        if (!post) throw new Error("Missing held addition");
+        held.resolve(savedMutation(post));
+        await hooks.settle();
+        expect(text()).toContain(
+          "2.500000 default servings of Apple Pie was added to Dinner on 2026-09-24.",
+        );
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+      },
+    );
+    for (const captured of ["ready", "loading"] as const) {
+      it.each(["success", "failure"])(
+        `retires ${instance} Add captured while ${captured} after %s`,
+        async (outcome) => {
+          const held = deferred<Response>();
+          let writes = 0;
+          const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+            if (url === "/api/auth/me") return session();
+            if (init?.method === "POST") {
+              writes += 1;
+              return writes === 1 ? held.promise : savedMutation(init);
+            }
+            return publicResponse(url);
+          });
+          await ready(fetcher);
+          const retainedReady = add(instance);
+          const retainedOther = add(other);
+          invoke(retainedReady);
+          await hooks.settle();
+          const retained = captured === "ready" ? retainedReady : add(instance);
+          const retainedLoadingOther = add(other);
+          expect(add(instance).props.disabled).toBe(true);
+          const first = pendingPosts(fetcher)[0]?.[1];
+          if (!first) throw new Error("Missing original addition");
+          held.resolve(outcome === "success" ? savedMutation(first) : failure("503"));
+          await hooks.settle();
+          const settledText = text();
+          const receipt = elements().find(
+            (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+          );
+          const calls = fetcher.mock.calls.length;
+          invoke(retained);
+          invoke(retainedOther);
+          invoke(retainedLoadingOther);
+          await hooks.settle();
+          expect(pendingPosts(fetcher)).toHaveLength(1);
+          expect(fetcher).toHaveBeenCalledTimes(calls);
+          expect(operationId).toHaveBeenCalledOnce();
+          expect(text()).toBe(settledText);
+          expect(
+            elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+              ?.props.confirmation,
+          ).toEqual(receipt?.props.confirmation);
+          expect(field("quick-add-date").props.value).toBe("2026-09-24");
+          expect(field("quick-add-meal").props.value).toBe("dinner");
+          expect(field(`quick-add-${other}-202-amount`).props.value).toBe("2.500000");
+          expect(add(other).props.disabled).toBe(false);
+          invoke(add(other));
+          await hooks.settle();
+          const posts = pendingPosts(fetcher);
+          expect(posts).toHaveLength(2);
+          if (outcome === "failure") {
+            expect(posts[1]).toEqual(posts[0]);
+            expect(operationId).toHaveBeenCalledOnce();
+          } else {
+            expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+            expect(posts[1]?.[1]?.headers).not.toEqual(posts[0]?.[1]?.headers);
+            expect(operationId).toHaveBeenCalledTimes(2);
+          }
+          expect(text()).toContain(
+            "2.500000 default servings of Apple Pie was added to Dinner on 2026-09-24.",
+          );
+          invoke(retained);
+          await hooks.settle();
+          expect(pendingPosts(fetcher)).toHaveLength(2);
+          expect(authCount(fetcher)).toBe(1);
+        },
+      );
+    }
+  }
+});
