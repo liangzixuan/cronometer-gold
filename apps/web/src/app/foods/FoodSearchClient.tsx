@@ -906,6 +906,7 @@ export function FoodSearchClient() {
   function changeDiaryDate(value: string) {
     if (
       !mounted.current ||
+      appliedSessionRoute !== sessionRouteRevision ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
@@ -922,6 +923,7 @@ export function FoodSearchClient() {
   function changeDiaryMeal(value: MealSlot) {
     if (
       !mounted.current ||
+      appliedSessionRoute !== sessionRouteRevision ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       mealGeneration.current !== renderedMealGeneration
@@ -1246,6 +1248,7 @@ export function FoodSearchClient() {
             Local day
             <input
               id="quick-add-date"
+              disabled={appliedSessionRoute !== sessionRouteRevision}
               onChange={(event) => changeDiaryDate(event.target.value)}
               type="date"
               value={diaryDate}
@@ -1268,6 +1271,7 @@ export function FoodSearchClient() {
             Meal
             <select
               id="quick-add-meal"
+              disabled={appliedSessionRoute !== sessionRouteRevision}
               onChange={(event) => changeDiaryMeal(event.target.value as MealSlot)}
               value={mealSlot}
             >

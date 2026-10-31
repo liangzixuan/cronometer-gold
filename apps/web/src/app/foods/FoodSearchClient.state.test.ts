@@ -4678,4 +4678,106 @@ describe("Food Add attempt admission", () => {
       );
     }
   }
+
+  for (const control of ["date", "meal"] as const) {
+    for (const coordinate of ["date", "meal"] as const) {
+      it.each([false, true])(
+        `keeps manual ${control} unavailable until the ${coordinate} route settles (return=%s)`,
+        async (returns) => {
+          let save = false;
+          const expectedDate = coordinate === "date" && !returns ? "2026-09-25" : "2026-09-24";
+          const expectedMeal = coordinate === "meal" && !returns ? "lunch" : "dinner";
+          const loggedDate = control === "date" ? "2026-09-26" : expectedDate;
+          const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+            if (url === "/api/auth/me") return session();
+            if (init?.method === "POST")
+              return save ? savedMutation(init, loggedDate) : failure("503");
+            return publicResponse(url);
+          });
+          await ready(fetcher);
+          await change("quick-add-time", "12:00");
+          const input = () => field(`quick-add-${control}`);
+          const edit = (retained: ElementNode) =>
+            invoke(retained, "onChange", {
+              target: { value: control === "date" ? "2026-09-27" : "breakfast" },
+            });
+          const oldReady = input();
+          expect(oldReady.props.disabled).not.toBe(true);
+          const calls = fetcher.mock.calls.length;
+          const original = route.query;
+          route.query =
+            coordinate === "date" ? "date=2026-09-25&meal=dinner" : "date=2026-09-24&meal=lunch";
+          hooks.renderWithoutEffects();
+          const departure = input();
+          expect(departure.props.disabled).toBe(true);
+          edit(departure);
+          if (returns) {
+            route.query = original;
+            hooks.renderWithoutEffects();
+          }
+          const unsettled = input();
+          expect(unsettled.props.disabled).toBe(true);
+          edit(unsettled);
+          edit(oldReady);
+          hooks.renderWithoutEffects();
+          expect(field("quick-add-date").props.value).toBe("2026-09-24");
+          expect(field("quick-add-meal").props.value).toBe("dinner");
+          expect(fetcher).toHaveBeenCalledTimes(calls);
+          expect(operationId).not.toHaveBeenCalled();
+          hooks.render();
+          await hooks.settle();
+          expect(input().props.disabled).toBe(false);
+          const recovered = text();
+          edit(departure);
+          edit(unsettled);
+          edit(oldReady);
+          await hooks.settle();
+          expect(field("quick-add-date").props.value).toBe(expectedDate);
+          expect(field("quick-add-meal").props.value).toBe(expectedMeal);
+          expect(field("quick-add-time").props.value).toBe("12:00");
+          expect(text()).toBe(recovered);
+          expect(fetcher).toHaveBeenCalledTimes(calls);
+          expect(operationId).not.toHaveBeenCalled();
+          await change(`quick-add-${control}`, control === "date" ? "2026-09-26" : "snacks");
+          expect(input().props.value).toBe(control === "date" ? "2026-09-26" : "snacks");
+          invoke(add("search"));
+          await hooks.settle();
+          expect(text()).toContain("Choose Add again to retry safely");
+          save = true;
+          invoke(add("barcode"));
+          await hooks.settle();
+          const posts = pendingPosts(fetcher);
+          expect(posts).toHaveLength(2);
+          expect(posts[1]).toEqual(posts[0]);
+          expect(operationId).toHaveBeenCalledOnce();
+          const receipt = elements().find(
+            (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+          )?.props.confirmation;
+          expect(receipt).toMatchObject({ localDate: loggedDate, timeZone: "America/Chicago" });
+          const saved = text();
+          edit(departure);
+          edit(unsettled);
+          edit(oldReady);
+          await hooks.settle();
+          expect(field("quick-add-date").props.value).toBe(loggedDate);
+          expect(field("quick-add-meal").props.value).toBe(
+            control === "meal" ? "snacks" : expectedMeal,
+          );
+          expect(field("quick-add-time").props.value).toBe("12:00");
+          for (const panel of ["search", "barcode"]) {
+            expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+            expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+          }
+          expect(text()).toBe(saved);
+          expect(pendingPosts(fetcher)).toEqual(posts);
+          expect(operationId).toHaveBeenCalledOnce();
+          expect(authCount(fetcher)).toBe(1);
+          expect(
+            elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+              ?.props.confirmation,
+          ).toEqual(receipt);
+        },
+      );
+    }
+  }
 });

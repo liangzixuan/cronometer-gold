@@ -492,6 +492,13 @@ link. Returning to the same route before its effects run must not restore them.
 Manual draft edits and unrelated URL parameters preserve the current receipt.
 After route settlement, a fresh addition or its exact retry can show a new receipt.
 
+Manual Local day and Meal stay disabled while a requested diary route is
+waiting to apply, including departure and return before effects. Callbacks
+rendered disabled stay inert after recovery and saving. Fresh controls edit
+the destination after settlement without another read. Session loading and
+pending additions keep their existing manual draft editing behavior. Shared
+portions, local time, saved receipts and exact uncertain retries remain intact.
+
 Amount and Unit stay disabled in both food result panels until the requested
 diary date or meal is applied, including departure and return before effects.
 Settlement enables unchanged shared portions without another read. Callbacks
