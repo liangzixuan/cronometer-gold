@@ -3483,4 +3483,134 @@ describe("Food result Add admission", () => {
       expect(resultAdd(instance).props.disabled).toBe(false);
     });
   }
+  describe("Food result portion admission", () => {
+    for (const instance of ["search", "barcode"] as const) {
+      for (const control of ["amount", "kind"] as const) {
+        it.each(["before-paint", "loading", "success", "failure"])(
+          `retires ${instance} portion ${control} when its replacement reaches %s`,
+          async (boundary) => {
+            const held = deferred<Response>();
+            const replacementHit = {
+              ...hit,
+              foodId: "102",
+              foodVersionId: "203",
+              name: "Fresh Pear",
+            };
+            const replacementResponse = () =>
+              Response.json(
+                instance === "search"
+                  ? { data: [replacementHit], page: { nextCursor: null } }
+                  : { data: replacementHit },
+              );
+            let targetReads = 0;
+            let lookupSignal: AbortSignal | null | undefined;
+            let saved = false;
+            const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+              if (url === "/api/auth/me") return session();
+              if (init?.method === "POST") return saved ? savedMutation(init) : failure("503");
+              if (
+                url.startsWith(
+                  instance === "search" ? "/api/foods/search?" : "/api/foods/barcodes/",
+                )
+              ) {
+                targetReads += 1;
+                if (targetReads === 2) {
+                  lookupSignal = init?.signal;
+                  return held.promise;
+                }
+              }
+              return publicResponse(url);
+            });
+            vi.stubGlobal("fetch", fetcher);
+            hooks.mount(FoodSearchClient);
+            await hooks.settle();
+            await showBoth();
+            await change(`quick-add-${instance}-202-amount`, "2.500000");
+            invoke(resultAdd(instance));
+            await hooks.settle();
+            expect(pendingPosts(fetcher)).toHaveLength(1);
+            expect(operationId).toHaveBeenCalledOnce();
+            const retired = field(`quick-add-${instance}-202-${control}`);
+            const other = instance === "search" ? "barcode" : "search";
+            const replace = await prepareLookup(instance, true);
+            replace();
+            if (boundary !== "before-paint") await hooks.settle();
+            if (boundary === "success" || boundary === "failure") {
+              held.resolve(boundary === "success" ? replacementResponse() : failure("503"));
+              await hooks.settle();
+            }
+            const reads = fetcher.mock.calls.length;
+            const staleValue = control === "amount" ? "9.750000" : "grams";
+            invoke(retired, "onChange", { target: { value: staleValue } });
+            await hooks.settle();
+            expect(field(`quick-add-${other}-202-amount`).props.value).toBe("2.500000");
+            expect(field(`quick-add-${other}-202-kind`).props.value).toBe("serving");
+            expect(fetcher).toHaveBeenCalledTimes(reads);
+            expect(pendingPosts(fetcher)).toHaveLength(1);
+            expect(operationId).toHaveBeenCalledOnce();
+            expect(lookupSignal?.aborted).toBe(false);
+            expect(field("quick-add-date").props.value).toBe("2026-09-24");
+            expect(field("quick-add-meal").props.value).toBe("dinner");
+            if (boundary === "before-paint" || boundary === "loading") {
+              held.resolve(replacementResponse());
+              await hooks.settle();
+            }
+            (await prepareLookup(instance, false))();
+            await hooks.settle();
+            expect(targetReads).toBe(3);
+            invoke(retired, "onChange", { target: { value: staleValue } });
+            await hooks.settle();
+            expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+            expect(field(`quick-add-${instance}-202-kind`).props.value).toBe("serving");
+            saved = true;
+            invoke(resultAdd(instance));
+            await hooks.settle();
+            const posts = pendingPosts(fetcher);
+            expect(posts).toHaveLength(2);
+            expect(posts[1]).toEqual(posts[0]);
+            expect(operationId).toHaveBeenCalledOnce();
+            expect(text()).toContain(
+              "2.500000 default servings of Apple Pie was added to Dinner on 2026-09-24",
+            );
+            const afterSave = fetcher.mock.calls.length;
+            await change(`quick-add-${instance}-202-${control}`, staleValue);
+            expect(field(`quick-add-${instance}-202-${control}`).props.value).toBe(staleValue);
+            expect(field(`quick-add-${other}-202-${control}`).props.value).toBe(staleValue);
+            expect(
+              field(`quick-add-${instance}-202-${control === "amount" ? "kind" : "amount"}`).props
+                .value,
+            ).toBe(control === "amount" ? "serving" : "2.500000");
+            expect(fetcher).toHaveBeenCalledTimes(afterSave);
+            expect(operationId).toHaveBeenCalledOnce();
+            expect(authCount(fetcher)).toBe(1);
+          },
+        );
+
+        it(`keeps ${instance} portion ${control} usable when the other lookup is replaced`, async () => {
+          const fetcher = vi.fn(async (url: string) =>
+            url === "/api/auth/me" ? session() : publicResponse(url),
+          );
+          vi.stubGlobal("fetch", fetcher);
+          hooks.mount(FoodSearchClient);
+          await hooks.settle();
+          await showBoth();
+          const current = field(`quick-add-${instance}-202-${control}`);
+          const other = instance === "search" ? "barcode" : "search";
+          (await prepareLookup(other, true))();
+          await hooks.settle();
+          const reads = fetcher.mock.calls.length;
+          const value = control === "amount" ? "3.250000" : "grams";
+          invoke(current, "onChange", { target: { value } });
+          await hooks.settle();
+          expect(field(`quick-add-${instance}-202-${control}`).props.value).toBe(value);
+          expect(field(`quick-add-${other}-202-${control}`).props.value).toBe(value);
+          expect(fetcher).toHaveBeenCalledTimes(reads);
+          expect(pendingPosts(fetcher)).toHaveLength(0);
+          expect(operationId).not.toHaveBeenCalled();
+          expect(field("quick-add-date").props.value).toBe("2026-09-24");
+          expect(field("quick-add-meal").props.value).toBe("dinner");
+        });
+      }
+    }
+  });
 });

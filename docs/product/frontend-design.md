@@ -415,6 +415,15 @@ Search and barcode results share the draft for one saved food version; other
 foods keep their own quantities. While an addition is pending, keep its submitted
 portion fixed and ignore retained quantity or unit actions.
 
+A result's amount and unit controls also belong to its search or barcode lookup.
+Replacing that lookup retires those callbacks before paint and after loading,
+success or failure. They cannot change the shared portion draft in the other
+panel or when the same food returns. Fresh controls still update that draft.
+The selected diary day and meal, and any uncertain Add request, stay intact;
+a fresh Add retry uses the same body, headers and operation ID. Portion edits
+send no requests and create no operation IDs. Replacing the other lookup leaves
+the current panel's controls usable.
+
 A result's Add action belongs to the search or barcode lookup that displayed it.
 Replacing that lookup retires its retained Add before paint and after loading,
 success or failure. The old action cannot submit the removed food, even if the

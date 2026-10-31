@@ -1017,9 +1017,16 @@ export function FoodSearchClient() {
     food: FoodSearchHit,
     patch: Partial<QuickAddDraft>,
     generation: number,
+    instance: "barcode" | "search",
   ) {
+    const resultController =
+      instance === "search" ? renderedSearchController : renderedBarcodeController;
     if (
       !mounted.current ||
+      !resultController ||
+      resultController.signal.aborted ||
+      (instance === "search" ? searchController.current : barcodeController.current) !==
+        resultController ||
       activeAddOperation.current !== null ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       appliedSessionRoute.current !== sessionRouteRevision ||
@@ -1062,6 +1069,7 @@ export function FoodSearchClient() {
                     kind: event.target.value as QuickAddPortionKind,
                   },
                   draftGeneration,
+                  instance,
                 )
               }
               value={draft.kind}
@@ -1083,7 +1091,7 @@ export function FoodSearchClient() {
               inputMode="decimal"
               maxLength={19}
               onChange={(event) =>
-                updateQuickAddDraft(food, { amount: event.target.value }, draftGeneration)
+                updateQuickAddDraft(food, { amount: event.target.value }, draftGeneration, instance)
               }
               pattern="(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?"
               value={draft.amount}
