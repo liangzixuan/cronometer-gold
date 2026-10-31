@@ -188,18 +188,21 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   refreshRef.current = refreshKey;
   const initialRouteKey = `${initialFrom ?? ""}/${initialTo ?? ""}`;
   const routeRef = useRef({ key: initialRouteKey });
-  if (routeRef.current.key !== initialRouteKey) routeRef.current = { key: initialRouteKey };
-  const routeContext = routeRef.current;
   const handledRouteKey = useRef(initialRouteKey);
   const routeReadyRef = useRef(false);
   const pendingRoute = ownedRouteCommit.current;
-  routeReadyRef.current =
-    handledRouteKey.current === initialRouteKey ||
-    (pendingRoute !== null &&
-      pendingRoute.rangeKey === initialRouteKey &&
-      rangeKey(rangeRef.current) === initialRouteKey &&
-      pendingRoute.sessionGeneration === sessionGeneration.current &&
-      pendingRoute.ownerUserId === sessionRef.current?.user.id);
+  const ownedRouteEcho =
+    pendingRoute !== null &&
+    pendingRoute.rangeKey === initialRouteKey &&
+    rangeKey(rangeRef.current) === initialRouteKey &&
+    pendingRoute.sessionGeneration === sessionGeneration.current &&
+    pendingRoute.ownerUserId === sessionRef.current?.user.id;
+  if (routeRef.current.key !== initialRouteKey) {
+    routeRef.current = { key: initialRouteKey };
+    if (!ownedRouteEcho) reportGeneration.current += 1;
+  }
+  const routeContext = routeRef.current;
+  routeReadyRef.current = handledRouteKey.current === initialRouteKey || ownedRouteEcho;
 
   const closePrintGate = useCallback(() => {
     armedPrint.current = null;

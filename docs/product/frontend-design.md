@@ -323,6 +323,11 @@ reminder and privacy-action drafts alone.
 
 ## Reports session recovery
 
+An external report route change retires unfinished report and profile responses,
+even if the route returns before effects run. Late data, errors and unauthorized
+responses cannot replace or close the returned report. The report's own range URL
+update preserves its pending read without another session or report request.
+
 A temporary failure to verify the Reports session offers Retry session. It verifies
 the current route and profile before loading its report. Keep report content,
 printing and day inspection unavailable during verification. A failed report read

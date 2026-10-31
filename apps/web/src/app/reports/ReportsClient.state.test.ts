@@ -2170,3 +2170,83 @@ describe("Reports session retry lifecycle", () => {
     },
   );
 });
+
+describe("Report response route return", () => {
+  for (const stage of ["report", "profile"] as const) {
+    it.each(["401", "503", "success", "json"])(
+      `retires a pending ${stage} %s response across route departure and return before effects`,
+      async (outcome) => {
+        const pending = deferred<Response>();
+        const pendingBody = deferred<unknown>();
+        let authReads = 0;
+        let reportReads = 0;
+        const responseJson = vi.fn();
+        const fetcher = vi.fn(async (url: string) => {
+          if (url === "/api/auth/me") {
+            authReads += 1;
+            if (stage === "profile" && authReads === 2) {
+              return outcome === "json"
+                ? ({ ok: true, status: 200, json: () => pendingBody.promise } as Response)
+                : pending.promise;
+            }
+            return session();
+          }
+          reportReads += 1;
+          if (reportReads === 1) {
+            if (stage === "report") {
+              return outcome === "json"
+                ? ({ ok: true, status: 200, json: () => pendingBody.promise } as Response)
+                : pending.promise;
+            }
+            const body = await reportResponse(url).json();
+            body.data.profileRevision = "5";
+            return Response.json(body);
+          }
+          return reportResponse(url);
+        });
+        vi.stubGlobal("fetch", fetcher);
+        const original = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+        let props = original;
+        hooks.mount(() => ReportsClient(props));
+        await hooks.settle();
+        expect(reportReads).toBe(1);
+        expect(authReads).toBe(stage === "profile" ? 2 : 1);
+        props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+        hooks.renderWithoutEffects();
+        props = original;
+        hooks.renderWithoutEffects();
+        const body =
+          stage === "profile"
+            ? await session(owner, "5").json()
+            : await reportResponse("/api/reports/nutrition?from=2026-09-01&to=2026-09-07").json();
+        if (outcome === "json") pendingBody.resolve(body);
+        else {
+          const status = outcome === "success" ? 200 : Number(outcome);
+          responseJson.mockResolvedValue(status === 200 ? body : { error: "Retired route failed" });
+          pending.resolve({
+            ok: status === 200,
+            status,
+            json: responseJson,
+          } as unknown as Response);
+        }
+        // Drain the response without committing pending route effects.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        hooks.renderWithoutEffects();
+        expect(router.replace.mock.calls.some(([url]) => url === "/login")).toBe(false);
+        expect(text()).not.toContain("Retired route failed");
+        expect(text()).not.toContain("Exact daily evidence");
+        expect(text()).toContain("Loading 2026-09-01 through 2026-09-07");
+        expect(responseJson).not.toHaveBeenCalled();
+        expect(reportReads).toBe(1);
+        expect(authReads).toBe(stage === "profile" ? 2 : 1);
+        hooks.render();
+        await hooks.settle();
+        expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+        expect(text()).toContain("Exact daily evidence");
+        expect(button("Next period").props.disabled).toBe(false);
+        expect(router.replace.mock.calls.some(([url]) => url === "/login")).toBe(false);
+        expect(fetcher.mock.calls.every(([url]) => !url.includes("from=2026-09-15"))).toBe(true);
+      },
+    );
+  }
+});
