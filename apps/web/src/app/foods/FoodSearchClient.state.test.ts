@@ -3886,4 +3886,80 @@ describe("Food Add attempt admission", () => {
       );
     }
   }
+
+  for (const instance of ["search", "barcode"] as const) {
+    const other = instance === "search" ? "barcode" : "search";
+    for (const control of ["amount", "kind"] as const) {
+      it.each(["success", "failure"])(
+        `keeps disabled ${instance} ${control} inert after Add %s`,
+        async (outcome) => {
+          const held = deferred<Response>();
+          let writes = 0;
+          const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+            if (url === "/api/auth/me") return session();
+            if (init?.method === "POST") {
+              writes += 1;
+              return writes === 1 ? held.promise : savedMutation(init);
+            }
+            return publicResponse(url);
+          });
+          await ready(fetcher);
+          invoke(add(instance));
+          await hooks.settle();
+          const retained = field(`quick-add-${instance}-202-${control}`);
+          const retainedOther = field(`quick-add-${other}-202-${control}`);
+          expect(retained.props.disabled).toBe(true);
+          expect(retainedOther.props.disabled).toBe(true);
+          const first = pendingPosts(fetcher)[0]?.[1];
+          if (!first) throw new Error("Missing portion attempt");
+          held.resolve(outcome === "success" ? savedMutation(first) : failure("503"));
+          await hooks.settle();
+          const settledText = text();
+          const receipt = elements().find(
+            (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+          )?.props.confirmation;
+          const calls = fetcher.mock.calls.length;
+          const value = control === "amount" ? "9.125000" : "grams";
+          invoke(retained, "onChange", { target: { value } });
+          invoke(retainedOther, "onChange", { target: { value } });
+          await hooks.settle();
+          for (const panel of [instance, other]) {
+            expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+            expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+            expect(field(`quick-add-${panel}-202-${control}`).props.disabled).toBe(false);
+          }
+          expect(field("quick-add-date").props.value).toBe("2026-09-24");
+          expect(field("quick-add-meal").props.value).toBe("dinner");
+          expect(text()).toBe(settledText);
+          expect(
+            elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+              ?.props.confirmation,
+          ).toEqual(receipt);
+          expect(fetcher).toHaveBeenCalledTimes(calls);
+          expect(pendingPosts(fetcher)).toHaveLength(1);
+          expect(operationId).toHaveBeenCalledOnce();
+          invoke(add(other));
+          await hooks.settle();
+          const posts = pendingPosts(fetcher);
+          expect(posts).toHaveLength(2);
+          if (outcome === "failure") {
+            expect(posts[1]).toEqual(posts[0]);
+            expect(operationId).toHaveBeenCalledOnce();
+          } else {
+            expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+            expect(posts[1]?.[1]?.headers).not.toEqual(posts[0]?.[1]?.headers);
+            expect(operationId).toHaveBeenCalledTimes(2);
+          }
+          expect(text()).toContain(
+            "2.500000 default servings of Apple Pie was added to Dinner on 2026-09-24.",
+          );
+          await change(`quick-add-${other}-202-${control}`, value);
+          expect(field(`quick-add-${instance}-202-${control}`).props.value).toBe(value);
+          expect(field(`quick-add-${other}-202-${control}`).props.value).toBe(value);
+          expect(pendingPosts(fetcher)).toHaveLength(2);
+          expect(authCount(fetcher)).toBe(1);
+        },
+      );
+    }
+  }
 });

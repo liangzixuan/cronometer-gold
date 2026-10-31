@@ -423,6 +423,10 @@ raw values were changed and restored. A same-value choice keeps Add available.
 Search and barcode results share the draft for one saved food version; other
 foods keep their own quantities. While an addition is pending, keep its submitted
 portion fixed and ignore retained quantity or unit actions.
+Amount and Unit actions rendered disabled during an addition stay inert after
+success or failure. They cannot change the shared draft or disturb a saved receipt.
+Fresh controls remain editable, and an unchanged retry keeps the exact request
+body, headers and operation ID.
 
 A result's amount and unit controls also belong to its search or barcode lookup.
 Replacing that lookup retires those callbacks before paint and after loading,

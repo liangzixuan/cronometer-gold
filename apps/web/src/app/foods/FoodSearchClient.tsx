@@ -1029,6 +1029,7 @@ export function FoodSearchClient() {
       resultController.signal.aborted ||
       (instance === "search" ? searchController.current : barcodeController.current) !==
         resultController ||
+      addingFoodVersion !== null ||
       activeAddOperation.current !== null ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       appliedSessionRoute.current !== sessionRouteRevision ||
