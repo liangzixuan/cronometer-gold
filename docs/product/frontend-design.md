@@ -551,6 +551,13 @@ pressing Search consumes the old suggestions, so a retained click cannot issue
 a second search or replace newer typed text. Current selection still uses the
 full normalized food label within the query limit.
 
+The suggestion panel also belongs to that request. Changing the query or food
+type hides its results, empty message, failure message and loading status before
+effects run. Returning to the old query or type does not restore that panel.
+Same-value edits preserve it. Current suggestions recover after the existing
+debounce; barcode results, shared portions, diary coordinates, saved receipts
+and exact uncertain Add retries remain intact.
+
 Barcode lookup submits the current normalized digits. Changing those digits
 retires an older form and input before the next view renders, including after an
 edit-and-restore. A same-value event keeps the current form usable. Typing does

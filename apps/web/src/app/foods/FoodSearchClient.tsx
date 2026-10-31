@@ -1134,7 +1134,11 @@ export function FoodSearchClient() {
     );
   }
 
-  const showSuggestionPanel = normalizeSearchText(query).length >= 2 && suggestionState !== "idle";
+  const showSuggestionPanel =
+    renderedAutocompleteController !== null &&
+    !renderedAutocompleteController.signal.aborted &&
+    normalizeSearchText(query).length >= 2 &&
+    suggestionState !== "idle";
 
   return (
     <div className="foodTools">

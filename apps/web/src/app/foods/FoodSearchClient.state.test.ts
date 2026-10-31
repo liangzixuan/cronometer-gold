@@ -4362,4 +4362,126 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+
+  for (const coordinate of ["query", "intent"] as const) {
+    it.each(["ready", "empty", "error", "loading"])(
+      `hides the retired %s suggestion panel after the ${coordinate} round trip`,
+      async (state) => {
+        const held = deferred<Response>();
+        let autocompleteReads = 0;
+        let save = true;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") return save ? savedMutation(init) : failure("503");
+          if (url.startsWith("/api/foods/autocomplete?") && ++autocompleteReads === 1) {
+            if (state === "loading") return held.promise;
+            if (state === "error") return failure("503");
+            if (state === "empty") return Response.json({ data: [] });
+          }
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        await change("quick-add-time", "12:00");
+        invoke(add("barcode"));
+        await hooks.settle();
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: "2026-09-24",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          timeZone: "America/Chicago",
+        });
+        await change("food-query", "apples");
+        for (const callback of timers.values()) callback();
+        timers.clear();
+        await hooks.settle();
+        const panel = () => elements().find((node) => node.props.className === "suggestionPanel");
+        const shown = panel();
+        expect(shown).toBeDefined();
+        expect(text(shown)).toContain(
+          state === "loading"
+            ? "Finding suggestions"
+            : state === "error"
+              ? "Suggestions are unavailable"
+              : state === "empty"
+                ? "No suggestions yet"
+                : "Apple Pie",
+        );
+        const oldChoice = elements(shown).find((node) => node.type === "button");
+        const chooseType = (value: string) => {
+          const radio = elements().find(
+            (node) => node.props.name === "food-intent" && node.props.value === value,
+          );
+          if (!radio) throw new Error("Missing food type");
+          invoke(radio, "onChange");
+        };
+        const calls = fetcher.mock.calls.length;
+        invoke(field("food-query"), "onChange", { target: { value: "apples" } });
+        chooseType("all");
+        hooks.renderWithoutEffects();
+        expect(text(panel())).toBe(text(shown));
+        if (coordinate === "query") {
+          invoke(field("food-query"), "onChange", { target: { value: "pear" } });
+        } else chooseType("generic");
+        hooks.renderWithoutEffects();
+        expect(panel()).toBeUndefined();
+        if (coordinate === "query") {
+          invoke(field("food-query"), "onChange", { target: { value: "apples" } });
+        } else chooseType("all");
+        hooks.renderWithoutEffects();
+        expect(panel()).toBeUndefined();
+        if (oldChoice) invoke(oldChoice);
+        if (state === "loading") {
+          held.resolve(publicResponse("/api/foods/autocomplete?q=apples"));
+          for (let pass = 0; pass < 20; pass += 1) await Promise.resolve();
+          hooks.renderWithoutEffects();
+          expect(panel()).toBeUndefined();
+        }
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("12:00");
+        hooks.render();
+        await hooks.settle();
+        expect(panel()).toBeUndefined();
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        for (const callback of timers.values()) callback();
+        timers.clear();
+        await hooks.settle();
+        expect(autocompleteReads).toBe(2);
+        expect(text(panel())).toContain("Apple Pie");
+        const freshChoice = elements(panel()).find((node) => node.type === "button");
+        if (!freshChoice) throw new Error("Missing current suggestion");
+        invoke(freshChoice);
+        await hooks.settle();
+        expect(panel()).toBeUndefined();
+        expect(field("food-query").props.value).toBe("Apple Pie");
+        expect(
+          fetcher.mock.calls.filter(([url]) => url.startsWith("/api/foods/search?")),
+        ).toHaveLength(2);
+        expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        save = false;
+        invoke(add("search"));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        save = true;
+        invoke(add("barcode"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(authCount(fetcher)).toBe(1);
+      },
+    );
+  }
 });
