@@ -4571,4 +4571,111 @@ describe("Food Add attempt admission", () => {
       );
     }
   }
+
+  for (const instance of ["search", "barcode"] as const) {
+    for (const coordinate of ["date", "meal"] as const) {
+      it.each([false, true])(
+        `keeps ${instance} portions unavailable until the ${coordinate} route settles (return=%s)`,
+        async (returns) => {
+          let save = false;
+          const expectedDate = coordinate === "date" && !returns ? "2026-09-25" : "2026-09-24";
+          const expectedMeal = coordinate === "meal" && !returns ? "lunch" : "dinner";
+          const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+            if (url === "/api/auth/me") return session();
+            if (init?.method === "POST")
+              return save ? savedMutation(init, expectedDate) : failure("503");
+            return publicResponse(url);
+          });
+          await ready(fetcher);
+          await change("quick-add-time", "12:00");
+          const controls = () => ({
+            amount: field(`quick-add-${instance}-202-amount`),
+            kind: field(`quick-add-${instance}-202-kind`),
+          });
+          const edit = (retained: ReturnType<typeof controls>) => {
+            invoke(retained.amount, "onChange", { target: { value: "9.250000" } });
+            invoke(retained.kind, "onChange", { target: { value: "grams" } });
+          };
+          const expectPortion = (amount: string, kind: string) => {
+            for (const panel of ["search", "barcode"]) {
+              expect(field(`quick-add-${panel}-202-amount`).props.value).toBe(amount);
+              expect(field(`quick-add-${panel}-202-kind`).props.value).toBe(kind);
+            }
+          };
+          const oldReady = controls();
+          expect(oldReady.amount.props.disabled).toBe(false);
+          expect(oldReady.kind.props.disabled).toBe(false);
+          const calls = fetcher.mock.calls.length;
+          const original = route.query;
+          route.query =
+            coordinate === "date" ? "date=2026-09-25&meal=dinner" : "date=2026-09-24&meal=lunch";
+          hooks.renderWithoutEffects();
+          const departure = controls();
+          expect(departure.amount.props.disabled).toBe(true);
+          expect(departure.kind.props.disabled).toBe(true);
+          edit(departure);
+          if (returns) {
+            route.query = original;
+            hooks.renderWithoutEffects();
+          }
+          const unsettled = controls();
+          expect(unsettled.amount.props.disabled).toBe(true);
+          expect(unsettled.kind.props.disabled).toBe(true);
+          edit(unsettled);
+          edit(oldReady);
+          hooks.renderWithoutEffects();
+          expectPortion("2.500000", "serving");
+          expect(fetcher).toHaveBeenCalledTimes(calls);
+          expect(operationId).not.toHaveBeenCalled();
+          hooks.render();
+          await hooks.settle();
+          expect(controls().amount.props.disabled).toBe(false);
+          expect(controls().kind.props.disabled).toBe(false);
+          expect(field("quick-add-date").props.value).toBe(expectedDate);
+          expect(field("quick-add-meal").props.value).toBe(expectedMeal);
+          expect(field("quick-add-time").props.value).toBe("12:00");
+          const recovered = text();
+          edit(departure);
+          edit(unsettled);
+          edit(oldReady);
+          await hooks.settle();
+          expectPortion("2.500000", "serving");
+          expect(text()).toBe(recovered);
+          expect(fetcher).toHaveBeenCalledTimes(calls);
+          expect(operationId).not.toHaveBeenCalled();
+          await change(`quick-add-${instance}-202-kind`, "grams");
+          await change(`quick-add-${instance}-202-amount`, "7.125000");
+          expectPortion("7.125000", "grams");
+          invoke(add(instance));
+          await hooks.settle();
+          expect(text()).toContain("Choose Add again to retry safely");
+          save = true;
+          invoke(add(instance === "search" ? "barcode" : "search"));
+          await hooks.settle();
+          const posts = pendingPosts(fetcher);
+          expect(posts).toHaveLength(2);
+          expect(posts[1]).toEqual(posts[0]);
+          expect(operationId).toHaveBeenCalledOnce();
+          const receipt = elements().find(
+            (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+          )?.props.confirmation;
+          expect(receipt).toMatchObject({ localDate: expectedDate, timeZone: "America/Chicago" });
+          const saved = text();
+          edit(departure);
+          edit(unsettled);
+          edit(oldReady);
+          await hooks.settle();
+          expectPortion("7.125000", "grams");
+          expect(text()).toBe(saved);
+          expect(pendingPosts(fetcher)).toEqual(posts);
+          expect(operationId).toHaveBeenCalledOnce();
+          expect(authCount(fetcher)).toBe(1);
+          expect(
+            elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+              ?.props.confirmation,
+          ).toEqual(receipt);
+        },
+      );
+    }
+  }
 });

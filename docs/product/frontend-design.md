@@ -492,6 +492,13 @@ link. Returning to the same route before its effects run must not restore them.
 Manual draft edits and unrelated URL parameters preserve the current receipt.
 After route settlement, a fresh addition or its exact retry can show a new receipt.
 
+Amount and Unit stay disabled in both food result panels until the requested
+diary date or meal is applied, including departure and return before effects.
+Settlement enables unchanged shared portions without another read. Callbacks
+rendered disabled cannot change the portion after recovery or saving. Fresh
+controls edit the exact shared amount and unit; uncertain Add retries retain
+their body, headers and operation ID.
+
 Search and barcode Add stay disabled until a requested date or meal route is
 applied. Returning to the original route before effects does not reopen Add.
 Settlement updates the controls even if the draft values and empty receipt did

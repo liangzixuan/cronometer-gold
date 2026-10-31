@@ -1041,6 +1041,7 @@ export function FoodSearchClient() {
         resultController ||
       addingFoodVersion !== null ||
       activeAddOperation.current !== null ||
+      appliedSessionRoute !== sessionRouteRevision ||
       sessionRoute.current.revision !== sessionRouteRevision ||
       sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== generation
@@ -1074,7 +1075,7 @@ export function FoodSearchClient() {
           <label htmlFor={`${controlId}-kind`}>
             Unit
             <select
-              disabled={busy}
+              disabled={busy || appliedSessionRoute !== sessionRouteRevision}
               id={`${controlId}-kind`}
               onChange={(event) =>
                 updateQuickAddDraft(
@@ -1100,7 +1101,7 @@ export function FoodSearchClient() {
               aria-describedby={`${controlId}-amount-help`}
               aria-invalid={!amountIsValid}
               autoComplete="off"
-              disabled={busy}
+              disabled={busy || appliedSessionRoute !== sessionRouteRevision}
               id={`${controlId}-amount`}
               inputMode="decimal"
               maxLength={19}
