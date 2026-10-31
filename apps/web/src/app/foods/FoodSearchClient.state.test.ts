@@ -4183,4 +4183,92 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+  for (const instance of ["search", "barcode"] as const) {
+    it.each(["initial", "error", "retry"])(
+      `keeps session-disabled ${instance} Add inert after %s recovery`,
+      async (phase) => {
+        const recovery = deferred<Response>();
+        let authReads = 0;
+        let saved = false;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") {
+            authReads += 1;
+            return phase !== "initial" && authReads === 1 ? failure("503") : recovery.promise;
+          }
+          if (init?.method === "POST") return saved ? savedMutation(init) : failure("503");
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        if (phase === "retry") {
+          invoke(button("Retry session"));
+          await hooks.settle();
+        }
+        const retained = add(instance);
+        expect(retained.props.disabled).toBe(true);
+        invoke(retained);
+        await hooks.settle();
+        expect(pendingPosts(fetcher)).toHaveLength(0);
+        expect(operationId).not.toHaveBeenCalled();
+        if (phase === "error") invoke(button("Retry session"));
+        recovery.resolve(session());
+        await hooks.settle();
+        expect(add(instance).props.disabled).toBe(false);
+        const recovered = text();
+        const reads = fetcher.mock.calls.length;
+        invoke(retained);
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(fetcher).toHaveBeenCalledTimes(reads);
+        expect(operationId).not.toHaveBeenCalled();
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        for (const panel of ["search", "barcode"] as const) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        invoke(add(instance));
+        await hooks.settle();
+        const first = pendingPosts(fetcher)[0];
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(text()).toContain("Choose Add again to retry safely");
+        const failed = text();
+        invoke(retained);
+        await hooks.settle();
+        expect(text()).toBe(failed);
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        saved = true;
+        invoke(add(instance === "search" ? "barcode" : "search"));
+        await hooks.settle();
+        expect(pendingPosts(fetcher)).toHaveLength(2);
+        expect(pendingPosts(fetcher)[1]).toEqual(first);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(text()).toContain("was added to Dinner on 2026-09-24");
+        const confirmation = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation as Parameters<typeof FoodAddConfirmation>[0]["confirmation"];
+        expect(confirmation).toMatchObject({
+          localDate: "2026-09-24",
+          timeZone: "America/Chicago",
+          occurredAt: JSON.parse(String(first?.[1]?.body)).occurredAt,
+        });
+        expect(
+          elements(FoodAddConfirmation({ confirmation })).some(
+            (node) => node.props.href === "/dashboard?date=2026-09-24",
+          ),
+        ).toBe(true);
+        const receipt = text();
+        const count = fetcher.mock.calls.length;
+        invoke(retained);
+        await hooks.settle();
+        expect(text()).toBe(receipt);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(confirmation);
+        expect(fetcher).toHaveBeenCalledTimes(count);
+        expect(authCount(fetcher)).toBe(phase === "initial" ? 1 : 2);
+        expect(operationId).toHaveBeenCalledOnce();
+      },
+    );
+  }
 });

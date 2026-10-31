@@ -495,6 +495,12 @@ confirmed signed-out response asks the person to sign in before adding food.
 Recovery preserves the selected day, meal and exact quantity. Untouched defaults
 use the recovered profile's local date and time.
 
+Add callbacks displayed disabled during initial session discovery, failed discovery
+or a session retry stay inert after recovery. They cannot replace the recovered
+status, clear a saved receipt or submit an addition. Fresh controls can add food
+and retry an uncertain save with its exact body, headers and operation ID. Both
+result panels keep their public results, shared portion, selected day and meal.
+
 Session retry ignores duplicate clicks, stale responses and closed pages. Once
 initial discovery succeeds, changing the destination updates it locally without
 reopening session recovery. Recovery never repeats an add or changes an

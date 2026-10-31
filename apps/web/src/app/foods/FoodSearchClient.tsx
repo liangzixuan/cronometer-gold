@@ -732,6 +732,7 @@ export function FoodSearchClient() {
       (instance === "search" ? searchController.current : barcodeController.current) !==
         resultController ||
       (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== draftGeneration ||
+      sessionState !== "ready" ||
       sessionStateRef.current !== "ready" ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       mealGeneration.current !== renderedMealGeneration ||
