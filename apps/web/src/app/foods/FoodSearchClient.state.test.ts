@@ -4070,4 +4070,117 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+
+  for (const control of ["today", "yesterday", "time", "occurrence"] as const) {
+    it.each(["success", "failure"])(
+      `retires ready diary ${control} after Add %s`,
+      async (outcome) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-11-03T12:00:00Z"));
+        const held = deferred<Response>();
+        let writes = 0;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes += 1;
+            if (writes === 1) return held.promise;
+            const saved = await savedMutation(init, "2026-11-01").json();
+            saved.data.entry.localTime = "01:30:00";
+            return Response.json(saved);
+          }
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        await change("quick-add-date", "2026-11-01");
+        await change("quick-add-time", "01:30");
+        invoke(button("Later occurrence · UTC−06:00"));
+        await hooks.settle();
+        const retained =
+          control === "time"
+            ? field("quick-add-time")
+            : button(
+                control === "occurrence"
+                  ? "Earlier occurrence · UTC−05:00"
+                  : `Set diary date to ${control}`,
+              );
+        expect(retained.props.disabled).toBe(false);
+        invoke(add("search"));
+        if (control === "time") invoke(retained, "onChange", { target: { value: "02:45" } });
+        else invoke(retained);
+        await hooks.settle();
+        expect(field("quick-add-date").props.value).toBe("2026-11-01");
+        expect(field("quick-add-time").props.value).toBe("01:30");
+        expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+        const first = pendingPosts(fetcher)[0]?.[1];
+        if (!first) throw new Error("Missing timed addition");
+        expect(JSON.parse(String(first.body)).occurredAt).toBe("2026-11-01T07:30:00.000Z");
+        const saved = await savedMutation(first, "2026-11-01").json();
+        saved.data.entry.localTime = "01:30:00";
+        held.resolve(outcome === "success" ? Response.json(saved) : failure("503"));
+        await hooks.settle();
+        const settledText = text();
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        const calls = fetcher.mock.calls.length;
+        if (control === "time") invoke(retained, "onChange", { target: { value: "02:45" } });
+        else invoke(retained);
+        await hooks.settle();
+        expect(field("quick-add-date").props.value).toBe("2026-11-01");
+        expect(field("quick-add-time").props.value).toBe("01:30");
+        expect(field("quick-add-time").props.disabled).toBe(false);
+        expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+        expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+        expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+        expect(text()).toBe(settledText);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        invoke(add("barcode"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(2);
+        if (outcome === "failure") {
+          expect(posts[1]).toEqual(posts[0]);
+          expect(operationId).toHaveBeenCalledOnce();
+        } else {
+          expect(posts[1]?.[1]?.body).toBe(posts[0]?.[1]?.body);
+          expect(posts[1]?.[1]?.headers).not.toEqual(posts[0]?.[1]?.headers);
+          expect(operationId).toHaveBeenCalledTimes(2);
+        }
+        expect(text()).toContain(
+          "2.500000 default servings of Apple Pie was added to Dinner on 2026-11-01.",
+        );
+        if (control === "time") {
+          await change("quick-add-time", "02:45");
+          expect(field("quick-add-time").props.value).toBe("02:45");
+        } else {
+          const fresh = button(
+            control === "occurrence"
+              ? "Earlier occurrence · UTC−05:00"
+              : `Set diary date to ${control}`,
+          );
+          expect(fresh.props.disabled).toBe(false);
+          invoke(fresh);
+          await hooks.settle();
+          if (control === "occurrence") {
+            expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(true);
+            expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+          } else {
+            expect(field("quick-add-date").props.value).toBe(
+              control === "today" ? "2026-11-03" : "2026-11-02",
+            );
+          }
+        }
+        expect(pendingPosts(fetcher)).toHaveLength(2);
+        expect(authCount(fetcher)).toBe(1);
+      },
+    );
+  }
 });

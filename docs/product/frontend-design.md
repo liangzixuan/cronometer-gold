@@ -465,6 +465,13 @@ Changing the day, time or verified zone retires an older occurrence. A no-op kee
 it. Each automatic, entered and repeated-minute choice keeps its own exact retry
 request after an uncertain response. Timezone recovery preserves the entered time
 and requires review of the current day and time before a fresh explicit Add.
+Starting an accepted food addition also retires the previous ready day and time
+actions through the existing day generation. Today, Yesterday, local-time and
+repeated-minute callbacks from that view cannot change the selected coordinates
+after success or failure. Fresh controls recover after settlement; fresh manual
+date and meal editing remains available while a write is pending. Exact retry
+bytes, operation IDs and saved receipts remain intact.
+
 Today, Yesterday, local-time and occurrence actions rendered disabled during an
 addition remain inert after success or failure. They preserve the selected day,
 minute and occurrence for an exact retry. Fresh controls work after settlement.

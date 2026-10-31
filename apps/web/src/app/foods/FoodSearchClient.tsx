@@ -796,6 +796,7 @@ export function FoodSearchClient() {
       );
       return;
     }
+    dayReviewGeneration.current += 1;
     quickAddDraftGeneration.current.set(food.foodVersionId, draftGeneration + 1);
     pendingAdds.current.set(operation.intentKey, operation);
     activeAddOperation.current = operation.operationId;
