@@ -290,6 +290,7 @@ export function FoodSearchClient() {
   const autocompleteController = useRef<AbortController | null>(null);
   const renderedAutocompleteController = autocompleteController.current;
   const searchController = useRef<AbortController | null>(null);
+  const renderedSearchController = searchController.current;
   const barcodeController = useRef<AbortController | null>(null);
   const profileRefreshController = useRef<AbortController | null>(null);
   const suppressedAutocompleteValue = useRef<string | null>(null);
@@ -1357,7 +1358,14 @@ export function FoodSearchClient() {
             className="loadMoreButton"
             disabled={searchState === "loading"}
             onClick={() => {
-              if (currentSearchDraft()) void runSearch(lastSearchQuery, nextCursor);
+              if (
+                currentSearchDraft() &&
+                searchState !== "loading" &&
+                renderedSearchController !== null &&
+                !renderedSearchController.signal.aborted &&
+                searchController.current === renderedSearchController
+              )
+                void runSearch(lastSearchQuery, nextCursor);
             }}
             type="button"
           >

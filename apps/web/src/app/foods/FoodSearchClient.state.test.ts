@@ -1036,6 +1036,115 @@ describe("web search request retirement", () => {
     },
   );
 
+  it.each(["before-paint", "loading", "success", "failure", "expired", "new-search"])(
+    "retires food pagination after a newer request reaches %s",
+    async (boundary) => {
+      const held = deferred<Response>();
+      let heldSignal: AbortSignal | null | undefined;
+      const reads: Array<{ url: string; signal: AbortSignal | null | undefined }> = [];
+      let firstContinuation = true;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?")) {
+          reads.push({ url, signal: init?.signal });
+          const cursor = new URL(url, "https://example.test").searchParams.get("cursor");
+          if (cursor === "page_two" && firstContinuation) {
+            firstContinuation = false;
+            heldSignal = init?.signal;
+            return held.promise;
+          }
+          return Response.json(
+            cursor === "page_three"
+              ? page([freshHit, finalHit])
+              : cursor === "page_two"
+                ? page([hit, freshHit], "page_three")
+                : page([hit], "page_two"),
+          );
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await submitQuery("apple");
+      await change("quick-add-search-202-amount", "2.500000");
+      const retired = button("Load more results");
+      invoke(retired);
+      expect(reads).toHaveLength(2);
+      if (boundary !== "before-paint") await hooks.settle();
+      if (boundary === "success") {
+        held.resolve(Response.json(page([hit, freshHit], "page_three")));
+        await hooks.settle();
+        expect(searchView().names).toEqual(["Apple Pie", "Fresh Pear"]);
+      } else if (boundary === "failure" || boundary === "expired") {
+        held.resolve(
+          Response.json(
+            { error: "Synthetic failure" },
+            { status: boundary === "failure" ? 503 : 400 },
+          ),
+        );
+        await hooks.settle();
+        expect(searchView().names).toEqual(["Apple Pie"]);
+        expect(searchView().loadMore).toBe(boundary === "failure");
+      } else if (boundary === "new-search") {
+        await submitQuery("apple");
+        expect(reads).toHaveLength(3);
+        expect(heldSignal?.aborted).toBe(true);
+      }
+      const before = searchView();
+      const count = reads.length;
+      const currentSignal = reads.at(-1)?.signal;
+      expect(currentSignal?.aborted).toBe(false);
+      invoke(retired);
+      if (boundary === "loading") invoke(button("Loading…"));
+      await hooks.settle();
+      expect(reads).toHaveLength(count);
+      expect(currentSignal?.aborted).toBe(false);
+      if (boundary !== "before-paint") expect(searchView()).toEqual(before);
+      else expect(searchView().names).toEqual(["Apple Pie"]);
+      expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+      expect(field("quick-add-date").props.value).toBe("2026-09-24");
+      expect(field("quick-add-meal").props.value).toBe("dinner");
+
+      if (boundary === "before-paint" || boundary === "loading" || boundary === "new-search") {
+        held.resolve(Response.json(page([hit, freshHit], "page_three")));
+        await hooks.settle();
+        expect(searchView().names).toEqual(
+          boundary === "new-search" ? ["Apple Pie"] : ["Apple Pie", "Fresh Pear"],
+        );
+      }
+      if (boundary === "expired") await submitQuery("apple");
+      if (boundary === "failure" || boundary === "expired" || boundary === "new-search") {
+        const previousCount = reads.length;
+        invoke(button("Load more results"));
+        await hooks.settle();
+        expect(reads).toHaveLength(previousCount + 1);
+        expect(
+          new URL(reads.at(-1)?.url ?? "", "https://example.test").searchParams.get("cursor"),
+        ).toBe("page_two");
+        expect(searchView().names).toEqual(["Apple Pie", "Fresh Pear"]);
+      }
+      const previousCount = reads.length;
+      invoke(button("Load more results"));
+      await hooks.settle();
+      expect(reads).toHaveLength(previousCount + 1);
+      expect(
+        new URL(reads.at(-1)?.url ?? "", "https://example.test").searchParams.get("cursor"),
+      ).toBe("page_three");
+      expect(searchView().names).toEqual(["Apple Pie", "Fresh Pear", "Final Pear"]);
+      expect(searchView().status).toBe("3 results shown for “apple”.");
+      expect(searchView().loadMore).toBe(false);
+      invoke(retired);
+      await hooks.settle();
+      expect(reads).toHaveLength(previousCount + 1);
+      expect(searchView().names).toEqual(["Apple Pie", "Fresh Pear", "Final Pear"]);
+      expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+      expect(authCount(fetcher)).toBe(1);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
   it("appends a current continuation without duplicating versions", async () => {
     const fetcher = vi.fn(async (url: string) => {
       if (url === "/api/auth/me") return session();

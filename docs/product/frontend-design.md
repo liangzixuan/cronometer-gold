@@ -469,6 +469,14 @@ renders, including after edit-and-restore. A suggestion selection also retires
 its previous manual form. Same-value query/type actions keep the current form,
 results and in-flight read available. Typing alone does not submit a search.
 
+Food-search Load more actions also belong to the request that produced their
+result list. Starting a continuation or another search retires the old action
+before paint. Loading controls cannot start a duplicate read. Retained actions
+cannot reuse an older cursor after success, failure or expiry, cancel the current
+read or replace later results. Fresh retries and continuations preserve the exact
+cursor chain, unique results, portion drafts and selected diary day and meal.
+Pagination does not submit an addition or allocate an operation ID.
+
 A suggestion belongs to the query and food type that produced it. Changing either
 retires that suggestion before the next view renders; restoring the query does
 not revive it. A same-value query edit keeps it usable. Choosing a suggestion or
