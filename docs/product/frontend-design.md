@@ -415,6 +415,14 @@ Search and barcode results share the draft for one saved food version; other
 foods keep their own quantities. While an addition is pending, keep its submitted
 portion fixed and ignore retained quantity or unit actions.
 
+A result's Add action belongs to the search or barcode lookup that displayed it.
+Replacing that lookup retires its retained Add before paint and after loading,
+success or failure. The old action cannot submit the removed food, even if the
+same food is found again. A fresh result keeps the saved portion draft and can
+retry an uncertain addition with its exact original request and operation ID.
+Replacing the other lookup leaves the unchanged panel usable. Responses for
+additions already started keep their existing handling.
+
 ## Catalogue food logging time
 
 Catalogue search and barcode results share an optional local time beside their

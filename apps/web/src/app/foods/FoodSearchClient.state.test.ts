@@ -3314,3 +3314,173 @@ describe("Public Add provenance", () => {
     },
   );
 });
+
+describe("Food result Add admission", () => {
+  function resultAdd(instance: "search" | "barcode") {
+    const controls = elements().find(
+      (node) =>
+        node.type === "fieldset" &&
+        elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+    );
+    const add = controls && elements(controls).find((node) => node.type === "button");
+    if (!add) throw new Error("Missing result Add");
+    return add;
+  }
+  async function prepareLookup(instance: "search" | "barcode", replacement: boolean) {
+    await change(
+      instance === "search" ? "food-query" : "food-barcode",
+      instance === "search"
+        ? replacement
+          ? "pear"
+          : "apple"
+        : replacement
+          ? "4006381333931"
+          : "012345678905",
+    );
+    const form = elements().find(
+      (node) =>
+        node.type === "form" &&
+        (instance === "search"
+          ? node.props["aria-label"] === "Food search"
+          : node.props.className === "barcodeForm"),
+    );
+    if (!form) throw new Error("Missing lookup form");
+    return () => invoke(form, "onSubmit", { preventDefault() {} });
+  }
+  async function showBoth() {
+    for (const instance of ["search", "barcode"] as const) {
+      (await prepareLookup(instance, false))();
+      await hooks.settle();
+    }
+  }
+
+  for (const instance of ["search", "barcode"] as const) {
+    it.each(["before-paint", "loading", "success", "failure"])(
+      `retires ${instance} Add when its replacement lookup reaches %s`,
+      async (boundary) => {
+        const held = deferred<Response>();
+        const replacementHit = { ...hit, foodId: "102", foodVersionId: "203", name: "Fresh Pear" };
+        const replacementResponse = () =>
+          Response.json(
+            instance === "search"
+              ? { data: [replacementHit], page: { nextCursor: null } }
+              : { data: replacementHit },
+          );
+        let targetReads = 0;
+        let lookupSignal: AbortSignal | null | undefined;
+        let saved = false;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") return saved ? savedMutation(init) : failure("503");
+          if (
+            url.startsWith(instance === "search" ? "/api/foods/search?" : "/api/foods/barcodes/")
+          ) {
+            targetReads += 1;
+            if (targetReads === 2) {
+              lookupSignal = init?.signal;
+              return held.promise;
+            }
+          }
+          return publicResponse(url);
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(FoodSearchClient);
+        await hooks.settle();
+        await showBoth();
+        await change(`quick-add-${instance}-202-amount`, "2.500000");
+        invoke(resultAdd(instance));
+        await hooks.settle();
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        const retired = resultAdd(instance);
+        const replace = await prepareLookup(instance, true);
+        replace();
+        if (boundary !== "before-paint") await hooks.settle();
+        if (boundary === "success" || boundary === "failure") {
+          held.resolve(boundary === "success" ? replacementResponse() : failure("503"));
+          await hooks.settle();
+        }
+        const reads = fetcher.mock.calls.length;
+        invoke(retired);
+        await hooks.settle();
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(fetcher).toHaveBeenCalledTimes(reads);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(lookupSignal?.aborted).toBe(false);
+        expect(
+          field(`quick-add-${instance === "search" ? "barcode" : "search"}-202-amount`).props.value,
+        ).toBe("2.500000");
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(text()).not.toContain("was added to Dinner");
+        if (boundary === "before-paint" || boundary === "loading") {
+          held.resolve(replacementResponse());
+          await hooks.settle();
+        }
+        (await prepareLookup(instance, false))();
+        await hooks.settle();
+        expect(targetReads).toBe(3);
+        expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+        invoke(retired);
+        await hooks.settle();
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        saved = true;
+        invoke(resultAdd(instance));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(2);
+        expect(posts[1]).toEqual(posts[0]);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(text()).toContain(
+          "2.500000 default servings of Apple Pie was added to Dinner on 2026-09-24",
+        );
+        expect(authCount(fetcher)).toBe(1);
+      },
+    );
+
+    it(`keeps ${instance} Add usable when the other lookup is replaced`, async () => {
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return savedMutation(init);
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await showBoth();
+      const current = resultAdd(instance);
+      (await prepareLookup(instance === "search" ? "barcode" : "search", true))();
+      await hooks.settle();
+      invoke(current);
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(operationId).toHaveBeenCalledOnce();
+      expect(text()).toContain("was added to Dinner on 2026-09-24");
+    });
+
+    it(`keeps an already-started ${instance} addition owned after its lookup is replaced`, async () => {
+      const held = deferred<Response>();
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return held.promise;
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await showBoth();
+      invoke(resultAdd(instance));
+      await hooks.settle();
+      const post = pendingPosts(fetcher)[0]?.[1];
+      if (!post) throw new Error("Missing submitted addition");
+      (await prepareLookup(instance, true))();
+      await hooks.settle();
+      held.resolve(savedMutation(post));
+      await hooks.settle();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(operationId).toHaveBeenCalledOnce();
+      expect(text()).toContain("was added to Dinner on 2026-09-24");
+      expect(resultAdd(instance).props.disabled).toBe(false);
+    });
+  }
+});

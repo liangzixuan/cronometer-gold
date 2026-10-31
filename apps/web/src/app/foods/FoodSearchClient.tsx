@@ -292,6 +292,7 @@ export function FoodSearchClient() {
   const searchController = useRef<AbortController | null>(null);
   const renderedSearchController = searchController.current;
   const barcodeController = useRef<AbortController | null>(null);
+  const renderedBarcodeController = barcodeController.current;
   const profileRefreshController = useRef<AbortController | null>(null);
   const suppressedAutocompleteValue = useRef<string | null>(null);
 
@@ -716,8 +717,14 @@ export function FoodSearchClient() {
     instance: "search" | "barcode",
     draftGeneration: number,
   ) {
+    const resultController =
+      instance === "search" ? renderedSearchController : renderedBarcodeController;
     if (
       !mounted.current ||
+      !resultController ||
+      resultController.signal.aborted ||
+      (instance === "search" ? searchController.current : barcodeController.current) !==
+        resultController ||
       (quickAddDraftGeneration.current.get(food.foodVersionId) ?? 0) !== draftGeneration ||
       sessionStateRef.current !== "ready" ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
