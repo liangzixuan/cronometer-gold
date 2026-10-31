@@ -3613,4 +3613,149 @@ describe("Food result Add admission", () => {
       }
     }
   });
+  describe("Food lookup submit admission", () => {
+    for (const instance of ["search", "barcode"] as const) {
+      it.each(["before-paint", "loading", "success", "failure"])(
+        `retires the ${instance} submit when its replacement reaches %s`,
+        async (boundary) => {
+          const held = deferred<Response>();
+          const laterHit = { ...hit, name: "Current Apple Pie" };
+          const laterResponse = () =>
+            Response.json(
+              instance === "search"
+                ? { data: [laterHit], page: { nextCursor: "current_cursor" } }
+                : { data: laterHit },
+            );
+          let targetReads = 0;
+          let signal: AbortSignal | null | undefined;
+          let saved = false;
+          const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+            if (url === "/api/auth/me") return session();
+            if (init?.method === "POST") return saved ? savedMutation(init) : failure("503");
+            if (
+              url.startsWith(instance === "search" ? "/api/foods/search?" : "/api/foods/barcodes/")
+            ) {
+              targetReads += 1;
+              if (targetReads === 2) {
+                signal = init?.signal;
+                return held.promise;
+              }
+              if (targetReads > 2) return laterResponse();
+            }
+            return publicResponse(url);
+          });
+          vi.stubGlobal("fetch", fetcher);
+          hooks.mount(FoodSearchClient);
+          await hooks.settle();
+          await showBoth();
+          await change(`quick-add-${instance}-202-amount`, "2.500000");
+          invoke(resultAdd(instance));
+          await hooks.settle();
+          expect(pendingPosts(fetcher)).toHaveLength(1);
+          const retired = await prepareLookup(instance, false);
+          retired();
+          if (boundary !== "before-paint") await hooks.settle();
+          if (boundary === "success" || boundary === "failure") {
+            held.resolve(boundary === "success" ? laterResponse() : failure("503"));
+            await hooks.settle();
+          }
+          const count = fetcher.mock.calls.length;
+          retired();
+          await hooks.settle();
+          expect(fetcher).toHaveBeenCalledTimes(count);
+          expect(targetReads).toBe(2);
+          expect(signal?.aborted).toBe(false);
+          expect(
+            field(`quick-add-${instance === "search" ? "barcode" : "search"}-202-amount`).props
+              .value,
+          ).toBe("2.500000");
+          if (boundary === "success") {
+            expect(text()).toContain("Current Apple Pie");
+            if (instance === "search")
+              expect(button("Load more results").props.disabled).toBe(false);
+          }
+          // A fresh form can explicitly replace a pending read or retry a settled one.
+          (await prepareLookup(instance, false))();
+          await hooks.settle();
+          expect(targetReads).toBe(3);
+          expect(signal?.aborted).toBe(true);
+          if (boundary === "before-paint" || boundary === "loading") {
+            held.resolve(
+              Response.json(
+                instance === "search"
+                  ? { data: [{ ...hit, name: "Retired Apple Pie" }], page: { nextCursor: null } }
+                  : { data: { ...hit, name: "Retired Apple Pie" } },
+              ),
+            );
+            await hooks.settle();
+          }
+          expect(text()).toContain("Current Apple Pie");
+          expect(text()).not.toContain("Retired Apple Pie");
+          retired();
+          await hooks.settle();
+          expect(targetReads).toBe(3);
+          expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+          expect(field("quick-add-date").props.value).toBe("2026-09-24");
+          expect(field("quick-add-meal").props.value).toBe("dinner");
+          saved = true;
+          invoke(resultAdd(instance));
+          await hooks.settle();
+          const posts = pendingPosts(fetcher);
+          expect(posts).toHaveLength(2);
+          expect(posts[1]).toEqual(posts[0]);
+          expect(operationId).toHaveBeenCalledOnce();
+          expect(authCount(fetcher)).toBe(1);
+          expect(text()).toContain("was added to Dinner on 2026-09-24");
+        },
+      );
+
+      it(`admits only one initial ${instance} lookup before paint`, async () => {
+        const held = deferred<Response>();
+        let signal: AbortSignal | null | undefined;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          signal = init?.signal;
+          return held.promise;
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(FoodSearchClient);
+        await hooks.settle();
+        const submit = await prepareLookup(instance, false);
+        submit();
+        submit();
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(signal?.aborted).toBe(false);
+        held.resolve(
+          publicResponse(
+            instance === "search" ? "/api/foods/search?" : "/api/foods/barcodes/012345678905",
+          ),
+        );
+        await hooks.settle();
+        expect(text()).toContain("Apple Pie");
+        expect(operationId).not.toHaveBeenCalled();
+        expect(pendingPosts(fetcher)).toHaveLength(0);
+      });
+
+      it(`keeps the ${instance} form usable when only the other lookup changes`, async () => {
+        const fetcher = vi.fn(async (url: string) =>
+          url === "/api/auth/me" ? session() : publicResponse(url),
+        );
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(FoodSearchClient);
+        await hooks.settle();
+        await showBoth();
+        const current = await prepareLookup(instance, false);
+        (await prepareLookup(instance === "search" ? "barcode" : "search", true))();
+        await hooks.settle();
+        const count = fetcher.mock.calls.length;
+        current();
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(count + 1);
+        expect(text()).toContain("Apple Pie");
+        expect(operationId).not.toHaveBeenCalled();
+        expect(pendingPosts(fetcher)).toHaveLength(0);
+      });
+    }
+  });
 });

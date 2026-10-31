@@ -486,6 +486,14 @@ renders, including after edit-and-restore. A suggestion selection also retires
 its previous manual form. Same-value query/type actions keep the current form,
 results and in-flight read available. Typing alone does not submit a search.
 
+Search and barcode forms also belong to their rendered request. Starting a new
+lookup retires that submit before paint and through loading, success or failure,
+even when the input stays the same. A retained submit cannot issue another read,
+cancel the newer request or clear its results. Fresh forms can explicitly replace
+pending reads or retry settled ones through the existing cancellation path.
+The two lookups stay independent. Shared portions, diary day and meal, and exact
+uncertain Add retry bodies, headers and operation IDs stay intact.
+
 Food-search Load more actions also belong to the request that produced their
 result list. Starting a continuation or another search retires the old action
 before paint. Loading controls cannot start a duplicate read. Retained actions

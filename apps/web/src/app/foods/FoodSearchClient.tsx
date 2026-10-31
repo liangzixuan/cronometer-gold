@@ -573,7 +573,7 @@ export function FoodSearchClient() {
 
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!currentSearchDraft()) return;
+    if (!currentSearchDraft() || searchController.current !== renderedSearchController) return;
     closeSuggestions(query);
     void runSearch(query);
   }
@@ -623,7 +623,11 @@ export function FoodSearchClient() {
 
   async function submitBarcode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!mounted.current || barcodeDraftGeneration.current !== renderedBarcodeDraftGeneration)
+    if (
+      !mounted.current ||
+      barcodeDraftGeneration.current !== renderedBarcodeDraftGeneration ||
+      barcodeController.current !== renderedBarcodeController
+    )
       return;
     barcodeController.current?.abort();
     const controller = new AbortController();
