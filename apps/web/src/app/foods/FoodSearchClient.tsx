@@ -929,6 +929,7 @@ export function FoodSearchClient() {
       mounted.current &&
       sessionStateRef.current === "ready" &&
       timeZone !== null &&
+      addingFoodVersion === null &&
       activeAddOperation.current === null &&
       sessionRoute.current.revision === sessionRouteRevision &&
       appliedSessionRoute.current === sessionRouteRevision &&

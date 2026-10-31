@@ -465,6 +465,9 @@ Changing the day, time or verified zone retires an older occurrence. A no-op kee
 it. Each automatic, entered and repeated-minute choice keeps its own exact retry
 request after an uncertain response. Timezone recovery preserves the entered time
 and requires review of the current day and time before a fresh explicit Add.
+Today, Yesterday, local-time and occurrence actions rendered disabled during an
+addition remain inert after success or failure. They preserve the selected day,
+minute and occurrence for an exact retry. Fresh controls work after settlement.
 
 Catalogue and barcode Add require a matching public-food receipt. A private-food
 entry cannot confirm either addition, even if its numeric version ID matches.
