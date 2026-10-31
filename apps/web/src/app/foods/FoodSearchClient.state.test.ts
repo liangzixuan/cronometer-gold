@@ -4271,4 +4271,95 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+  for (const instance of ["search", "barcode"] as const) {
+    it.each(["date", "meal"])(
+      `keeps the saved ${instance} receipt retired after a %s route round trip`,
+      async (coordinate) => {
+        let save = true;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") return save ? savedMutation(init) : failure("503");
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        await change("quick-add-time", "12:00");
+        invoke(add(instance));
+        await hooks.settle();
+        const receipts = () =>
+          elements()
+            .filter((node) => node.type === FoodAddConfirmation)
+            .map((node) => node.props.confirmation)
+            .filter(Boolean) as Array<
+            NonNullable<Parameters<typeof FoodAddConfirmation>[0]["confirmation"]>
+          >;
+        expect(receipts()).toHaveLength(1);
+        const receipt = receipts()[0];
+        expect(receipt).toMatchObject({
+          localDate: "2026-09-24",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          timeZone: "America/Chicago",
+        });
+        expect(
+          elements(FoodAddConfirmation({ confirmation: receipt ?? null })).some(
+            (node) => node.props.href === "/dashboard?date=2026-09-24",
+          ),
+        ).toBe(true);
+        await change(`quick-add-${instance}-202-amount`, "3.500000");
+        expect(receipts()).toEqual([receipt]);
+        route.query = "meal=dinner&date=2026-09-24&unrelated=value";
+        hooks.renderWithoutEffects();
+        expect(receipts()).toEqual([receipt]);
+        const calls = fetcher.mock.calls.length;
+        const original = route.query;
+        route.query =
+          coordinate === "date" ? "date=2026-09-25&meal=dinner" : "date=2026-09-24&meal=lunch";
+        hooks.renderWithoutEffects();
+        expect(receipts()).toHaveLength(0);
+        route.query = original;
+        hooks.renderWithoutEffects();
+        expect(receipts()).toHaveLength(0);
+        hooks.renderWithoutEffects();
+        expect(receipts()).toHaveLength(0);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        hooks.render();
+        await hooks.settle();
+        expect(receipts()).toHaveLength(0);
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("12:00");
+        for (const panel of ["search", "barcode"] as const) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("3.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        save = false;
+        invoke(add(instance));
+        await hooks.settle();
+        expect(receipts()).toHaveLength(0);
+        expect(text()).toContain("Choose Add again to retry safely");
+        expect(pendingPosts(fetcher)).toHaveLength(2);
+        save = true;
+        invoke(add(instance === "search" ? "barcode" : "search"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(authCount(fetcher)).toBe(1);
+        expect(receipts()).toHaveLength(1);
+        expect(receipts()[0]).toMatchObject({
+          localDate: "2026-09-24",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          timeZone: "America/Chicago",
+          message: "3.500000 default servings of Apple Pie was added to Dinner on 2026-09-24.",
+        });
+        expect(
+          elements(FoodAddConfirmation({ confirmation: receipts()[0] ?? null })).some(
+            (node) => node.props.href === "/dashboard?date=2026-09-24",
+          ),
+        ).toBe(true);
+      },
+    );
+  }
 });

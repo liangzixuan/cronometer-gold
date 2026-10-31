@@ -487,6 +487,11 @@ cannot change this saved receipt or its diary-day link. An uncertain or unrelate
 response must not produce a recorded-time receipt. Keep the single existing live
 announcement; the inline receipt remains available for review.
 
+A requested date or meal route change retires the inline food receipt and diary
+link. Returning to the same route before its effects run must not restore them.
+Manual draft edits and unrelated URL parameters preserve the current receipt.
+After route settlement, a fresh addition or its exact retry can show a new receipt.
+
 ## Foods session recovery
 
 Foods keeps public search, suggestions and barcode lookup available while it

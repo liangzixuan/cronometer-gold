@@ -1054,6 +1054,7 @@ export function FoodSearchClient() {
     const controlId = `quick-add-${instance}-${food.foodVersionId}`;
     const busy = addingFoodVersion !== null;
     const currentConfirmation =
+      appliedSessionRoute.current === sessionRouteRevision &&
       confirmation?.context === confirmationContext &&
       confirmation.foodVersionId === food.foodVersionId &&
       confirmation.instance === instance
