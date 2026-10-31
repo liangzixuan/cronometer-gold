@@ -4780,4 +4780,132 @@ describe("Food Add attempt admission", () => {
       );
     }
   }
+
+  for (const control of ["today", "yesterday", "time", "occurrence"] as const) {
+    it.each(["date", "meal"])(
+      `keeps route-disabled diary ${control} inert after a %s round trip`,
+      async (coordinate) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-11-03T12:00:00Z"));
+        route.query = "date=2026-11-01&meal=dinner";
+        let save = false;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            if (!save) return failure("503");
+            const saved = await savedMutation(init, "2026-11-01").json();
+            saved.data.entry.localTime = "01:30:00";
+            return Response.json(saved);
+          }
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        await change("quick-add-time", "01:30");
+        invoke(button("Later occurrence · UTC−06:00"));
+        await hooks.settle();
+        const input = () =>
+          control === "time"
+            ? field("quick-add-time")
+            : button(
+                control === "occurrence"
+                  ? "Earlier occurrence · UTC−05:00"
+                  : `Set diary date to ${control}`,
+              );
+        const edit = (retained: ElementNode) =>
+          control === "time"
+            ? invoke(retained, "onChange", { target: { value: "02:45" } })
+            : invoke(retained);
+        const oldReady = input();
+        expect(oldReady.props.disabled).toBe(false);
+        const calls = fetcher.mock.calls.length;
+        const original = route.query;
+        route.query =
+          coordinate === "date" ? "date=2026-11-02&meal=dinner" : "date=2026-11-01&meal=lunch";
+        hooks.renderWithoutEffects();
+        const departure = input();
+        expect(departure.props.disabled).toBe(true);
+        edit(departure);
+        route.query = original;
+        hooks.renderWithoutEffects();
+        const returned = input();
+        expect(returned.props.disabled).toBe(true);
+        edit(returned);
+        edit(oldReady);
+        hooks.renderWithoutEffects();
+        expect(field("quick-add-date").props.value).toBe("2026-11-01");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("01:30");
+        expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).not.toHaveBeenCalled();
+        hooks.render();
+        await hooks.settle();
+        expect(input().props.disabled).toBe(false);
+        const recovered = text();
+        edit(departure);
+        edit(returned);
+        edit(oldReady);
+        await hooks.settle();
+        expect(field("quick-add-date").props.value).toBe("2026-11-01");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("01:30");
+        expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
+        expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+        expect(text()).toBe(recovered);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).not.toHaveBeenCalled();
+        invoke(button("Later occurrence · UTC−06:00"));
+        await hooks.settle();
+        invoke(add("search"));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        save = true;
+        invoke(add("barcode"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(2);
+        expect(posts[1]).toEqual(posts[0]);
+        expect(JSON.parse(String(posts[0]?.[1]?.body)).occurredAt).toBe("2026-11-01T07:30:00.000Z");
+        expect(operationId).toHaveBeenCalledOnce();
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: "2026-11-01",
+          occurredAt: "2026-11-01T07:30:00.000Z",
+          timeZone: "America/Chicago",
+        });
+        const saved = text();
+        edit(departure);
+        edit(returned);
+        edit(oldReady);
+        await hooks.settle();
+        expect(field("quick-add-date").props.value).toBe("2026-11-01");
+        expect(field("quick-add-time").props.value).toBe("01:30");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+        expect(text()).toBe(saved);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        edit(input());
+        await hooks.settle();
+        if (control === "time") expect(field("quick-add-time").props.value).toBe("02:45");
+        else if (control === "occurrence")
+          expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(true);
+        else
+          expect(field("quick-add-date").props.value).toBe(
+            control === "today" ? "2026-11-03" : "2026-11-02",
+          );
+        expect(pendingPosts(fetcher)).toEqual(posts);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(authCount(fetcher)).toBe(1);
+      },
+    );
+  }
 });

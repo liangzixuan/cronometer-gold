@@ -492,6 +492,13 @@ link. Returning to the same route before its effects run must not restore them.
 Manual draft edits and unrelated URL parameters preserve the current receipt.
 After route settlement, a fresh addition or its exact retry can show a new receipt.
 
+Today, Yesterday, local time and repeated-minute occurrence callbacks rendered
+disabled during a requested date or meal route change stay inert after settlement,
+including departure and return before effects. Fresh controls recover without
+another read. Retired actions preserve the current day, minute, occurrence, meal,
+shared portions, status and saved receipt. Exact uncertain Add retries retain
+their request body, headers and operation ID.
+
 Manual Local day and Meal stay disabled while a requested diary route is
 waiting to apply, including departure and return before effects. Callbacks
 rendered disabled stay inert after recovery and saving. Fresh controls edit

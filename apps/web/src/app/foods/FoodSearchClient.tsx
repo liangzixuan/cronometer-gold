@@ -938,6 +938,7 @@ export function FoodSearchClient() {
   function canEditDiaryCoordinates() {
     return (
       mounted.current &&
+      appliedSessionRoute === sessionRouteRevision &&
       sessionStateRef.current === "ready" &&
       timeZone !== null &&
       addingFoodVersion === null &&
