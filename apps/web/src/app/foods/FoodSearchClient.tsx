@@ -678,7 +678,9 @@ export function FoodSearchClient() {
     } catch {
       if (!controller.signal.aborted) {
         setBarcodeState("error");
-        setBarcodeMessage("Barcode lookup is unavailable right now. Please try again.");
+        setBarcodeMessage(
+          "Barcode lookup is unavailable right now. Your digits are still entered. Choose Look up to try again.",
+        );
       }
     }
   }

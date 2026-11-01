@@ -790,3 +790,14 @@ barcode result, shared exact portions, diary day, time and meal, and any uncerta
 Add request unchanged. An explicit Add retry retains its body, headers and
 operation ID. Initial-search failure and expired-cursor recovery keep their
 existing guidance.
+
+## Barcode lookup recovery
+
+A temporary barcode lookup failure explains that the digits remain entered and
+names Look up as the retry action. The current form retries that exact barcode;
+retired or duplicate submits cannot start another request. Keep public search
+results, shared exact portions and the selected local day, time and meal intact.
+Lookup recovery never retries an uncertain Add. Its next explicit Add keeps the
+original body, headers and operation ID. A missing barcode remains an exact
+no-match result. An independent search result keeps its saved receipt when the
+barcode lookup fails or finds no match.
