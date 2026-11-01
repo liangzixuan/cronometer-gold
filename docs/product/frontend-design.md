@@ -565,6 +565,13 @@ confirmation and saving. Only a fresh Add can submit after confirmation; exact
 uncertain retries keep their body, headers and operation ID. Public results,
 shared portions and the selected local day, time and meal remain intact.
 
+Add callbacks rendered disabled for an invalid amount do nothing in both result
+panels. Empty, zero and over-precision amounts keep their inline validation and
+shared draft without clearing a saved receipt or replacing status. The same rule
+preserves uncertain-save guidance. A valid edit enables a fresh Add; returning to
+an uncertain portion retries its exact body, headers and operation ID. Retained
+invalid callbacks stay inert after recovery and saving, without extra profile reads.
+
 Time-zone conflict guidance refers to the selected local day and time, not the
 date captured by the rejected addition. Manual day and meal edits during the
 addition, profile read or recovered review must not leave instructions to review

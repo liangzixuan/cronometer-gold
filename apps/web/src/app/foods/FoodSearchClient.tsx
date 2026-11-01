@@ -783,6 +783,7 @@ export function FoodSearchClient() {
       sessionState !== "ready" ||
       sessionStateRef.current !== "ready" ||
       dateReviewRequired ||
+      !isPositiveDecimal(draft.amount) ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       mealGeneration.current !== renderedMealGeneration ||
       sessionRoute.current.revision !== sessionRouteRevision ||
@@ -793,11 +794,6 @@ export function FoodSearchClient() {
     const generation = ++confirmationGeneration.current;
     const context = confirmationContextRef.current;
     setConfirmation(null);
-    if (!isPositiveDecimal(draft.amount)) {
-      setAddState("error");
-      setAddMessage("Enter a positive quantity with at most 12 whole digits and 6 decimals.");
-      return;
-    }
     if (draft.kind === "serving" && (!food.defaultServing || !hasGramResolvedServing(food))) {
       setAddState("error");
       setAddMessage("This food has no gram-resolved default serving. Choose grams instead.");

@@ -5030,6 +5030,119 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+  for (const instance of ["search", "barcode"] as const) {
+    it.each(["", "0", "1.1234567"])(
+      `keeps invalid-amount ${instance} Add inert for %s and preserves exact retries`,
+      async (invalidAmount) => {
+        let writes = 0;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes += 1;
+            return writes === 2 ? failure("503") : savedMutation(init);
+          }
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        invoke(add(instance));
+        await hooks.settle();
+        const firstReceipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(firstReceipt).toMatchObject({
+          localDate: "2026-09-24",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          timeZone: "America/Chicago",
+        });
+        await change(`quick-add-${instance}-202-amount`, invalidAmount);
+        const disabled = add(instance);
+        const other = instance === "search" ? "barcode" : "search";
+        const disabledOther = add(other);
+        expect(disabled.props.disabled).toBe(true);
+        expect(disabledOther.props.disabled).toBe(true);
+        const invalidView = text();
+        const calls = fetcher.mock.calls.length;
+        invoke(disabled);
+        invoke(disabledOther);
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(invalidView);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(firstReceipt);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe(invalidAmount);
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        await change(`quick-add-${other}-202-amount`, "3.125000");
+        const recovered = text();
+        invoke(disabled);
+        invoke(disabledOther);
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(add(instance).props.disabled).toBe(false);
+        invoke(add(instance));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        await change(`quick-add-${instance}-202-amount`, invalidAmount);
+        const retryDisabled = add(instance);
+        expect(retryDisabled.props.disabled).toBe(true);
+        const uncertain = text();
+        invoke(retryDisabled);
+        invoke(add(other));
+        await hooks.settle();
+        expect(text()).toBe(uncertain);
+        expect(pendingPosts(fetcher)).toHaveLength(2);
+        expect(operationId).toHaveBeenCalledTimes(2);
+        await change(`quick-add-${other}-202-amount`, "3.125000");
+        invoke(add(other));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(posts[1]?.[0]).toContain("date=2026-09-24");
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: "dinner",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          portion: { kind: "serving", amount: "3.125" },
+        });
+        expect(posts[1]?.[1]?.headers).toMatchObject({
+          "x-expected-profile-time-zone": "America/Chicago",
+        });
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: "2026-09-24",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          timeZone: "America/Chicago",
+        });
+        const saved = text();
+        invoke(disabled);
+        invoke(disabledOther);
+        invoke(retryDisabled);
+        await hooks.settle();
+        expect(text()).toBe(saved);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-time").props.value).toBe("");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("3.125000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        expect(pendingPosts(fetcher)).toEqual(posts);
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(authCount(fetcher)).toBe(1);
+      },
+    );
+  }
 });
 
 describe("Food timezone profile retry", () => {
