@@ -4844,3 +4844,110 @@ describe("My foods conflicted reload recovery guidance", () => {
     },
   );
 });
+
+describe("My foods archive recovery guidance", () => {
+  it.each(["http", "network", "malformed"] as const)(
+    "explains how to retry an unconfirmed %s archive without changing drafts or pending logs",
+    async (failure) => {
+      navigation.search = "date=2026-09-09&meal=lunch";
+      const first = allStates();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first, second]);
+      await mount();
+      await change("Name", "  Unsaved lunch food  ");
+      await change("Notes (optional)", "Raw notes\nkeep this line");
+      await toggle(first);
+      await toggle(second);
+      await prepareLog();
+      await change(savedFilterLabel, "  saved  ");
+      state.write = () => Response.json({ error: "Log response unavailable" }, { status: 503 });
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+      const originalLog = requiredCustom(writes()[0]?.[1]);
+      expect(JSON.parse(String(originalLog.body))).toEqual({
+        customFoodVersionId: first.currentVersion.id,
+        portion: { kind: "serving", servingId: "1", amount: "2.375" },
+        mealSlot: "lunch",
+        occurredAt: "2026-09-09T18:14:00.000Z",
+      });
+      const drafts = formValues();
+      const authReads = fetcher.mock.calls.filter(([url]) => url === "/api/auth/me").length;
+      const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+      vi.stubGlobal("crypto", { randomUUID: allocate });
+      const confirm = vi.fn(() => true);
+      vi.stubGlobal("window", { confirm });
+      const pending = deferred<Response>();
+      state.write = () =>
+        pending.promise.then((response) => {
+          if (failure === "network") throw new Error("Archive network unavailable");
+          return response;
+        });
+      await click("Archive", card(second));
+      expect(writes()).toHaveLength(2);
+      expect(allocate).toHaveBeenCalledOnce();
+      expect(button("Archive", card(second)).props.disabled).toBe(true);
+      expect(formValues()).toEqual(drafts);
+      const originalArchive = requiredCustom(writes()[1]?.[1]);
+      expect(writes()[1]?.[0]).toBe(`/api/retention/custom-foods/${second.id}`);
+      expect(originalArchive.method).toBe("DELETE");
+      expect(originalArchive.body).toBeUndefined();
+      expect(originalArchive.cache).toBe("no-store");
+      expect(Object.fromEntries(new Headers(originalArchive.headers))).toEqual({
+        accept: "application/json",
+        "idempotency-key": "cdfd121e-6fbc-42f5-8630-e1cb60f9c351",
+        "if-match": '"1"',
+      });
+      pending.resolve(
+        failure === "http"
+          ? Response.json({ error: "Archive unavailable" }, { status: 503 })
+          : failure === "malformed"
+            ? Response.json({ data: { malformed: true } })
+            : new Response(null),
+      );
+      await hooks.settle();
+      const guidance =
+        "The archive is not confirmed. Choose Archive again to retry the same request.";
+      const detail =
+        failure === "http"
+          ? "Archive unavailable"
+          : failure === "network"
+            ? "Archive network unavailable"
+            : "The custom-food mutation was invalid.";
+      expect(status()).toBe(`${guidance} ${detail}`);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      expect(details(second).props.hidden).toBe(false);
+      expect(text(card(second))).toContain("active");
+      expect(button("Archive", card(second)).props.disabled).toBe(false);
+      confirm.mockReturnValue(false);
+      await click("Archive", card(second));
+      expect(writes()).toHaveLength(2);
+      expect(status()).toBe(`${guidance} ${detail}`);
+      expect(allocate).toHaveBeenCalledOnce();
+      confirm.mockReturnValue(true);
+      state.write = () => receipt({ ...second, status: "archived", revision: "2" });
+      await click("Archive", card(second));
+      expect(writes()).toHaveLength(3);
+      expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+      for (const key of ["method", "body", "headers", "cache", "credentials"] as const) {
+        expect(writes()[2]?.[1]?.[key]).toEqual(originalArchive[key]);
+      }
+      expect(allocate).toHaveBeenCalledOnce();
+      expect(text(card(second))).toContain("archived");
+      expect(text(card(first))).toContain("active");
+      expect(formValues()).toEqual(drafts);
+      expect(status()).toBe("Custom food archived; pinned diary history was preserved.");
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(4);
+      expect(writes()[3]?.[1]?.body).toBe(originalLog.body);
+      expect(writes()[3]?.[1]?.headers).toEqual(originalLog.headers);
+      expect(allocate).toHaveBeenCalledOnce();
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(authReads);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      expect(field("Name").props.value).toBe("  Unsaved lunch food  ");
+      expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+    },
+  );
+});

@@ -1333,7 +1333,9 @@ export function CustomFoodsClient() {
       setMessage("Custom food archived; pinned diary history was preserved.");
     } catch (error) {
       if (current())
-        setMessage(error instanceof Error ? error.message : "Custom food could not be archived.");
+        setMessage(
+          `The archive is not confirmed. Choose Archive again to retry the same request. ${error instanceof Error ? error.message : "Custom food could not be archived."}`,
+        );
     } finally {
       if (customArchive.current === token && archiveViewIsCurrent()) retireCustomArchive();
     }

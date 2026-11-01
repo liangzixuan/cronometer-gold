@@ -831,3 +831,5 @@ nutrition details and the pinned diary draft. Only a verified newer active versi
 replaces the editor after an explicit retry. Recovery does not allocate a write
 operation or refresh the profile. An uncertain pinned log retains its exact request
 and operation ID; a later explicit save uses the recovered food revision.
+
+A failed custom-food archive reports that the archive is not confirmed and names Archive as the retry action. The original error detail remains visible. A retry requires confirmation and uses the same request and operation ID. Cancelling confirmation sends no request. The open editor, loaded-name filter, nutrition details and local diary draft remain available. An unrelated uncertain food log keeps its exact request and produces a matching diary receipt when confirmed.
