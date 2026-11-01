@@ -813,3 +813,12 @@ Preserve the independent barcode result, shared exact portion, local day, time
 and meal. An uncertain addition keeps its exact retry body, headers and operation
 ID without another profile read. Empty search results retain their existing
 guidance and preserve the independent barcode receipt.
+
+- Failed private-food continuation explains that loaded foods remain available
+  and names **Load more private foods** as the retry action. The existing error
+  detail remains visible. Retrying preserves the exact cursor, loaded-name
+  filter, expanded nutrition, unsaved editor and local log drafts. An overlapping
+  page adds each food once after the existing owner check. An uncertain log
+  retains its exact request body, headers and operation ID through the failed
+  load and retry. HTTP, network and malformed-page cases are covered by state
+  tests; this does not establish real-browser, API or hosted acceptance.

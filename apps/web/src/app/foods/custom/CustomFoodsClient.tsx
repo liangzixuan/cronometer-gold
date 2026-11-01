@@ -929,7 +929,11 @@ export function CustomFoodsClient() {
     } catch (error) {
       if (controller.signal.aborted) return;
       if (error instanceof PrivateOwnerFenceError) return signInAgain();
-      setMessage(error instanceof Error ? error.message : "More custom foods could not be loaded.");
+      setMessage(
+        `Your loaded foods are still available. Choose Load more private foods to try again. ${
+          error instanceof Error ? error.message : "More custom foods could not be loaded."
+        }`,
+      );
     } finally {
       privateReadControllers.current.delete(controller);
       if (!privateUiClosed.current) setBusy(null);

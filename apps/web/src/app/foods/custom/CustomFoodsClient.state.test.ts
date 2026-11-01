@@ -1078,7 +1078,9 @@ describe("actual loaded saved-food name filter", () => {
     pending.resolve(Response.json({ error: "Next page unavailable" }, { status: 503 }));
     await hooks.settle();
     expect(field(savedFilterLabel).props.value).toBe(" quinoa ");
-    expect(status()).toBe("Next page unavailable");
+    expect(status()).toBe(
+      "Your loaded foods are still available. Choose Load more private foods to try again. Next page unavailable",
+    );
     state.continuation = () => page([first, third], "end");
     await click("Load more private foods");
     expect(filterStatus()).toContain("1 of 3 loaded saved foods match.");
@@ -4648,4 +4650,100 @@ describe("My foods saved-time confirmation", () => {
     expect(hooks.afterClose()).toBe(updates);
     expect(elements().filter((node) => node.type === "time")).toHaveLength(0);
   });
+});
+
+describe("My foods continuation recovery guidance", () => {
+  it.each(["http", "network", "malformed"] as const)(
+    "explains how to retry a %s continuation without losing drafts or an uncertain log",
+    async (failure) => {
+      const first = food();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first]);
+      state.cursor = "next page/+?=";
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      await toggle(first);
+      await click("Revise", card(first));
+      await change("Name", "Unsaved lunch food");
+      await prepareLog();
+      await change(savedFilterLabel, "  SAVED food  ");
+      state.write = () => Response.json({ error: "Log response unavailable" }, { status: 503 });
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+      const originalWrite = requiredCustom(writes()[0]?.[1]);
+      expect(JSON.parse(String(originalWrite.body))).toEqual({
+        customFoodVersionId: first.currentVersion.id,
+        portion: { kind: "serving", servingId: "1", amount: "2.375" },
+        mealSlot: "lunch",
+        occurredAt: "2026-09-09T18:14:00.000Z",
+      });
+      expect(new Headers(originalWrite.headers).get("idempotency-key")).toBeTruthy();
+      const drafts = formValues();
+      const authReads = fetcher.mock.calls.filter(([url]) => url === "/api/auth/me").length;
+      const pending = deferred<Response>();
+      state.continuation = async () => {
+        const response = await pending.promise;
+        if (failure === "network") throw new Error("Network unavailable");
+        return response;
+      };
+      await click("Load more private foods");
+      expect(button("Load more private foods").props.disabled).toBe(true);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      if (failure === "http") {
+        pending.resolve(Response.json({ error: "Next page unavailable" }, { status: 503 }));
+      } else if (failure === "network") {
+        pending.resolve(new Response(null));
+      } else {
+        pending.resolve(Response.json({ data: "invalid", page: { nextCursor: "wrong" } }));
+      }
+      await hooks.settle();
+      const guidance =
+        "Your loaded foods are still available. Choose Load more private foods to try again.";
+      expect(status()).toContain(guidance);
+      if (failure === "http") expect(status()).toBe(`${guidance} Next page unavailable`);
+      if (failure === "network") expect(status()).toBe(`${guidance} Network unavailable`);
+      if (failure === "malformed")
+        expect(status()).toBe(`${guidance} The custom-food list was invalid.`);
+      expect(status().length).toBeGreaterThan(guidance.length);
+      expect(button("Load more private foods").props.disabled).toBe(false);
+      expect(formValues()).toEqual(drafts);
+      expect(savedNames()).toEqual([first.currentVersion.name]);
+      expect(details(first).props.hidden).toBe(false);
+      expect(filterStatus()).toContain("1 of 1 loaded saved foods match.");
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(authReads);
+      expect(writes()).toHaveLength(1);
+      state.continuation = () => page([first, second]);
+      await click("Load more private foods");
+      const continuations = fetcher.mock.calls.filter(([url]) =>
+        url.startsWith("/api/retention/custom-foods?limit=50&cursor="),
+      );
+      expect(continuations).toHaveLength(2);
+      expect(continuations.map(([url]) => url)).toEqual([
+        "/api/retention/custom-foods?limit=50&cursor=next%20page%2F%2B%3F%3D",
+        "/api/retention/custom-foods?limit=50&cursor=next%20page%2F%2B%3F%3D",
+      ]);
+      expect(continuations[1]?.[1]?.headers).toEqual(continuations[0]?.[1]?.headers);
+      expect(continuations[1]?.[1]?.credentials).toBe(continuations[0]?.[1]?.credentials);
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(
+        authReads + 1,
+      );
+      expect(formValues()).toEqual(drafts);
+      expect(savedNames()).toEqual([first.currentVersion.name, second.currentVersion.name]);
+      expect(details(first).props.hidden).toBe(false);
+      expect(filterStatus()).toContain("2 of 2 loaded saved foods match.");
+      expect(filterStatus()).toContain("No more records in this listing.");
+      expect(writes()).toHaveLength(1);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1]?.[1]?.body).toBe(originalWrite.body);
+      expect(writes()[1]?.[1]?.headers).toEqual(originalWrite.headers);
+      expect(field("Name").props.value).toBe("Unsaved lunch food");
+      expect(field(savedFilterLabel).props.value).toBe("  SAVED food  ");
+      expect(status()).toContain("version logged");
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+    },
+  );
 });
