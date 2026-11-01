@@ -1471,7 +1471,7 @@ export function CustomFoodsClient() {
       }
       if (!ownsDraft()) return;
       setMessage(
-        `${error instanceof Error ? error.message : "Private food could not be logged."} Submit again to retry the exact version safely.`,
+        `The log is not confirmed. Your diary draft is still available. Choose Log exact version again to retry the same request. ${error instanceof Error ? error.message : "Private food could not be logged."}`,
       );
     } finally {
       if (activeLog.current === token) {

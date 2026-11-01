@@ -5097,3 +5097,137 @@ describe("My foods save recovery guidance", () => {
     );
   }
 });
+
+describe("My foods pinned log recovery guidance", () => {
+  for (const portion of ["grams", "serving"] as const) {
+    it.each(["http", "network", "malformed"] as const)(
+      `names the exact ${portion} log retry after %s without losing drafts`,
+      async (failure) => {
+        navigation.search = "date=2026-09-09&meal=lunch";
+        const first = food();
+        const second = food(2);
+        const { state, fetcher, writes } = workspace([first, second]);
+        state.picker = [
+          {
+            id: "2",
+            code: "protein",
+            name: "Picker protein",
+            unit: "g",
+            category: "macronutrient",
+          },
+        ];
+        await mount();
+        await click("Revise", card(second));
+        await change("Name", "  Saved lunch food  ");
+        await change("Notes (optional)", "Raw notes\nkeep this line");
+        await change("Amount per 100 grams 1", "0.125");
+        await toggle(first);
+        await toggle(second);
+        await prepareLog();
+        invoke(
+          requiredCustom(
+            elements(logForm()).find(
+              (node) => node.type === "select" && node.props.value === "serving",
+            ),
+          ),
+          "onChange",
+          { target: { value: portion } },
+        );
+        await hooks.settle();
+        await change(savedFilterLabel, "  saved  ");
+        const drafts = formValues();
+        const editorDraft = elements()
+          .filter(
+            (node) =>
+              ["input", "select", "textarea"].includes(String(node.type)) &&
+              !elements(logForm()).includes(node),
+          )
+          .map((node) => node.props.value);
+        const authReads = fetcher.mock.calls.filter(([url]) => url === "/api/auth/me").length;
+        const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        const pending = deferred<Response>();
+        state.write = () =>
+          pending.promise.then((response) => {
+            if (failure === "network") throw new Error("Log network unavailable");
+            return response;
+          });
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(1);
+        expect(allocate).toHaveBeenCalledOnce();
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(formValues()).toEqual(drafts);
+        const original = requiredCustom(writes()[0]?.[1]);
+        expect(writes()[0]?.[0]).toBe(
+          `/api/retention/custom-foods/${first.id}/log?profileTimeZonePrecondition=v1`,
+        );
+        expect(original.method).toBe("POST");
+        expect(original.cache).toBe("no-store");
+        expect(original.credentials).toBeUndefined();
+        expect(original.headers).toEqual({
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": "cdfd121e-6fbc-42f5-8630-e1cb60f9c351",
+          "x-expected-profile-time-zone": "America/Chicago",
+        });
+        expect(JSON.parse(String(original.body))).toEqual({
+          customFoodVersionId: first.currentVersion.id,
+          portion:
+            portion === "grams"
+              ? { kind: "grams", grams: "2.375" }
+              : { kind: "serving", servingId: "1", amount: "2.375" },
+          mealSlot: "lunch",
+          occurredAt: "2026-09-09T18:14:00.000Z",
+        });
+        pending.resolve(
+          failure === "http"
+            ? Response.json({ error: "Log response unavailable" }, { status: 503 })
+            : failure === "malformed"
+              ? Response.json({ data: { malformed: true } })
+              : new Response(null),
+        );
+        await hooks.settle();
+        expect(status()).toContain(
+          "The log is not confirmed. Your diary draft is still available. Choose Log exact version again to retry the same request.",
+        );
+        expect(status()).toContain(
+          failure === "http"
+            ? "Log response unavailable"
+            : failure === "network"
+              ? "Log network unavailable"
+              : "The diary mutation response was invalid.",
+        );
+        expect(formValues()).toEqual(drafts);
+        expect(details(first).props.hidden).toBe(false);
+        expect(details(second).props.hidden).toBe(false);
+        expect(button("Log exact version").props.disabled).toBe(false);
+        expect(elements().some((node) => node.type === "time")).toBe(false);
+        state.write = (_url, init) => Response.json(matchedLogData(init, true));
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+        for (const key of ["method", "body", "headers", "cache", "credentials"] as const) {
+          expect(writes()[1]?.[1]?.[key]).toEqual(original[key]);
+        }
+        expect(allocate).toHaveBeenCalledOnce();
+        expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(
+          authReads,
+        );
+        expect(status()).toBe("Pinned private food version logged to Lunch on 2026-09-09.");
+        expect(
+          elements().some((node) => node.type === "button" && text(node) === "Log exact version"),
+        ).toBe(false);
+        expect(
+          elements()
+            .filter((node) => ["input", "select", "textarea"].includes(String(node.type)))
+            .map((node) => node.props.value),
+        ).toEqual(editorDraft);
+        expect(details(first).props.hidden).toBe(false);
+        expect(details(second).props.hidden).toBe(false);
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(text(confirmedCustomTime())).toBe("13:14:00 GMT-05:00");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      },
+    );
+  }
+});
