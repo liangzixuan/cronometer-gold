@@ -5329,4 +5329,113 @@ describe("Food timezone profile retry", () => {
       },
     );
   }
+
+  for (const phase of ["unavailable", "retrying", "recovered"] as const) {
+    it.each(["search", "barcode"])(
+      `keeps review-disabled %s Add inert during ${phase} recovery`,
+      async (instance) => {
+        const { held, fetcher } = await unavailableProfile("503");
+        const unavailable = add(instance);
+        expect(unavailable.props.disabled).toBe(true);
+        if (phase !== "unavailable") {
+          invoke(button("Retry diary time zone"));
+          await hooks.settle();
+          if (phase === "recovered") {
+            held.resolve(session("UTC"));
+            await hooks.settle();
+          }
+        }
+        const disabled = add(instance);
+        expect(disabled.props.disabled).toBe(true);
+        const before = text();
+        const calls = fetcher.mock.calls.length;
+        invoke(disabled);
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(before);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        if (phase === "retrying") {
+          held.reject(new TypeError("Profile unavailable"));
+          await hooks.settle();
+          const failed = text();
+          invoke(disabled);
+          invoke(add(instance));
+          await hooks.settle();
+          expect(text()).toBe(failed);
+          expect(authCount(fetcher)).toBe(3);
+        }
+        if (phase !== "recovered") {
+          invoke(button("Retry diary time zone"));
+          await hooks.settle();
+          if (phase === "unavailable") {
+            held.resolve(session("UTC"));
+            await hooks.settle();
+          }
+        }
+        const recovered = text();
+        invoke(unavailable);
+        invoke(disabled);
+        invoke(add(instance));
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(add().props.disabled).toBe(true);
+        expect(add("barcode").props.disabled).toBe(true);
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("12:34");
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        const waitingForConfirmation = add(instance);
+        invoke(button("Confirm 2026-09-24 at 12:34 in UTC"));
+        await hooks.settle();
+        const confirmed = text();
+        invoke(disabled);
+        invoke(waitingForConfirmation);
+        await hooks.settle();
+        expect(text()).toBe(confirmed);
+        expect(add(instance).props.disabled).toBe(false);
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        invoke(add(instance));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        invoke(add(instance === "search" ? "barcode" : "search"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: "dinner",
+          occurredAt: "2026-09-24T12:34:00.000Z",
+          portion: { amount: "2.5" },
+        });
+        expect(posts[1]?.[1]?.headers).toMatchObject({ "x-expected-profile-time-zone": "UTC" });
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: "2026-09-24",
+          timeZone: "UTC",
+          occurredAt: "2026-09-24T12:34:00.000Z",
+        });
+        const saved = text();
+        invoke(unavailable);
+        invoke(disabled);
+        invoke(waitingForConfirmation);
+        await hooks.settle();
+        expect(text()).toBe(saved);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        expect(pendingPosts(fetcher)).toEqual(posts);
+        expect(authCount(fetcher)).toBe(phase === "retrying" ? 4 : 3);
+        expect(operationId).toHaveBeenCalledTimes(2);
+      },
+    );
+  }
 });

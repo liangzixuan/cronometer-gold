@@ -558,6 +558,13 @@ inert after recovery and saving. A fresh confirmation is still required before
 Add becomes available; recovery does not change the selected destination or
 shared exact portions.
 
+Search and barcode Add callbacks rendered disabled for diary review do nothing.
+They preserve guidance while the profile time zone is unavailable, during a retry,
+after another failed read and after recovery. Retained callbacks stay inert after
+confirmation and saving. Only a fresh Add can submit after confirmation; exact
+uncertain retries keep their body, headers and operation ID. Public results,
+shared portions and the selected local day, time and meal remain intact.
+
 If the profile read after a no-write timezone conflict fails, offer Retry diary
 time zone without reloading the page. Each accepted retry reads only the profile.
 Keep public results, shared exact portions, local time and the selected day and

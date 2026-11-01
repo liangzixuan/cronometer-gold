@@ -785,6 +785,7 @@ export function FoodSearchClient() {
       appliedSessionRoute !== sessionRouteRevision ||
       sessionState !== "ready" ||
       sessionStateRef.current !== "ready" ||
+      dateReviewRequired ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       mealGeneration.current !== renderedMealGeneration ||
       sessionRoute.current.revision !== sessionRouteRevision ||
@@ -795,11 +796,6 @@ export function FoodSearchClient() {
     const generation = ++confirmationGeneration.current;
     const context = confirmationContextRef.current;
     setConfirmation(null);
-    if (dateReviewRequired) {
-      setAddState("error");
-      setAddMessage("Review and confirm the local diary day before adding this food again.");
-      return;
-    }
     if (!isPositiveDecimal(draft.amount)) {
       setAddState("error");
       setAddMessage("Enter a positive quantity with at most 12 whole digits and 6 decimals.");
