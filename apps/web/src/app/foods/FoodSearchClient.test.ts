@@ -77,7 +77,7 @@ describe("web food quick-add time-zone recovery", () => {
 
     const unavailable = quickAddTimeZoneReviewMessage("2026-09-08", null);
     expect(unavailable).toContain("stale retry was cleared");
-    expect(unavailable).toContain("refresh this page");
+    expect(unavailable).toContain("Retry diary time zone");
   });
 });
 

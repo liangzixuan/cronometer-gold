@@ -5031,3 +5031,206 @@ describe("Food Add attempt admission", () => {
     );
   }
 });
+
+describe("Food timezone profile retry", () => {
+  function add(instance = "search") {
+    const group = elements().find(
+      (node) =>
+        node.type === "fieldset" &&
+        elements(node).some((child) => child.props.id === `quick-add-${instance}-202-amount`),
+    );
+    const action = group && elements(group).find((node) => node.type === "button");
+    if (!action) throw new Error("Missing food Add");
+    return action;
+  }
+  async function unavailableProfile(kind: string) {
+    const held = deferred<Response>();
+    let reads = 0;
+    let writes = 0;
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") {
+        reads += 1;
+        if (reads === 1) return session();
+        if (reads === 2) return failure(kind);
+        return reads === 3 ? held.promise : session("UTC");
+      }
+      if (init?.method === "POST") {
+        writes += 1;
+        if (writes === 1)
+          return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+        if (writes === 2) return failure("503");
+        const date = new URL(url, "https://fixture.invalid").searchParams.get("date");
+        const saved = await savedMutation(init, date ?? "2026-09-24").json();
+        saved.data.entry.timeZone = "UTC";
+        saved.data.entry.localTime = new Date(saved.data.entry.occurredAt)
+          .toISOString()
+          .slice(11, 19);
+        return Response.json(saved);
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    await search();
+    await change("food-barcode", "012345678905");
+    const form = elements().find(
+      (node) => node.type === "form" && node.props.className === "barcodeForm",
+    );
+    if (!form) throw new Error("Missing barcode form");
+    invoke(form, "onSubmit", { preventDefault: vi.fn() });
+    await hooks.settle();
+    await change("quick-add-search-202-amount", "2.500000");
+    await change("quick-add-time", "12:34");
+    invoke(add());
+    await hooks.settle();
+    expect(authCount(fetcher)).toBe(2);
+    expect(pendingPosts(fetcher)).toHaveLength(1);
+    expect(button("Retry diary time zone").props.disabled).toBe(false);
+    return { held, fetcher };
+  }
+
+  it.each(["503", "network", "malformed"])(
+    "recovers a %s profile failure without reloading or repeating the addition",
+    async (kind) => {
+      const { held, fetcher } = await unavailableProfile(kind);
+      const retry = button("Retry diary time zone");
+      invoke(retry);
+      invoke(retry);
+      await hooks.settle();
+      const loadingRetry = button("Retry diary time zone");
+      expect(loadingRetry.props.disabled).toBe(true);
+      expect(authCount(fetcher)).toBe(3);
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      await change("quick-add-date", "2026-09-25");
+      await change("quick-add-meal", "snacks");
+      held.resolve(session("UTC"));
+      await hooks.settle();
+      invoke(retry);
+      invoke(loadingRetry);
+      await hooks.settle();
+      expect(authCount(fetcher)).toBe(3);
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(field("quick-add-date").props.value).toBe("2026-09-25");
+      expect(field("quick-add-meal").props.value).toBe("snacks");
+      expect(field("quick-add-time").props.value).toBe("12:34");
+      for (const instance of ["search", "barcode"])
+        expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+      expect(add().props.disabled).toBe(true);
+      invoke(button("Confirm 2026-09-25 at 12:34 in UTC"));
+      await hooks.settle();
+      invoke(add());
+      await hooks.settle();
+      const barcodePanel = elements().find((node) => node.props.className === "barcodeResult");
+      if (!barcodePanel) throw new Error("Missing barcode result");
+      const barcodeAdd = elements(barcodePanel).find((node) => node.type === "button");
+      if (!barcodeAdd) throw new Error("Missing barcode Add");
+      invoke(barcodeAdd);
+      await hooks.settle();
+      const posts = pendingPosts(fetcher);
+      expect(posts).toHaveLength(3);
+      expect(posts[2]).toEqual(posts[1]);
+      expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+        mealSlot: "snacks",
+        occurredAt: "2026-09-25T12:34:00.000Z",
+        portion: { amount: "2.5" },
+      });
+      expect(operationId).toHaveBeenCalledTimes(2);
+      const receipt = elements().find(
+        (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+      );
+      expect(receipt?.props.confirmation).toMatchObject({
+        localDate: "2026-09-25",
+        timeZone: "UTC",
+        occurredAt: "2026-09-25T12:34:00.000Z",
+      });
+      const status = text();
+      invoke(retry);
+      invoke(loadingRetry);
+      await hooks.settle();
+      expect(text()).toBe(status);
+      expect(authCount(fetcher)).toBe(3);
+      expect(pendingPosts(fetcher)).toHaveLength(3);
+      expect(
+        elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+          ?.props.confirmation,
+      ).toEqual(receipt?.props.confirmation);
+    },
+  );
+
+  it.each(["503", "network", "malformed"])(
+    "offers a fresh profile retry after %s while consumed and loading callbacks stay inert",
+    async (kind) => {
+      const { held, fetcher } = await unavailableProfile("503");
+      const retry = button("Retry diary time zone");
+      invoke(retry);
+      await hooks.settle();
+      const loading = button("Retry diary time zone");
+      if (kind === "network") held.reject(new TypeError("Profile unavailable"));
+      else held.resolve(failure(kind));
+      await hooks.settle();
+      expect(button("Retry diary time zone").props.disabled).toBe(false);
+      const status = text();
+      invoke(retry);
+      invoke(loading);
+      await hooks.settle();
+      expect(authCount(fetcher)).toBe(3);
+      expect(text()).toBe(status);
+      invoke(button("Retry diary time zone"));
+      await hooks.settle();
+      expect(authCount(fetcher)).toBe(4);
+      expect(button("Confirm 2026-09-24 at 12:34 in UTC").props.disabled).toBe(false);
+      expect(add().props.disabled).toBe(true);
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      expect(operationId).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["date", "meal", "return", "unmount"])(
+    "ignores a late unauthorized profile retry after %s and preserves the destination",
+    async (transition) => {
+      const { held, fetcher } = await unavailableProfile("503");
+      const retry = button("Retry diary time zone");
+      invoke(retry);
+      await hooks.settle();
+      if (transition === "unmount") hooks.unmount();
+      else {
+        route.query =
+          transition === "meal" ? "date=2026-09-24&meal=lunch" : "date=2026-09-25&meal=dinner";
+        hooks.renderWithoutEffects();
+        if (transition === "return") {
+          route.query = "date=2026-09-24&meal=dinner";
+          hooks.renderWithoutEffects();
+        }
+        hooks.render();
+        await hooks.settle();
+      }
+      const json = vi.fn(() => {
+        throw new Error("Retired 401 must not be decoded");
+      });
+      held.resolve({ ok: false, status: 401, json } as unknown as Response);
+      await hooks.settle();
+      invoke(retry);
+      await hooks.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(authCount(fetcher)).toBe(3);
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      if (transition === "unmount") expect(hooks.afterClose()).toBe(0);
+      else {
+        expect(text()).not.toContain("Sign in to");
+        expect(field("quick-add-date").props.value).toBe(
+          transition === "date" ? "2026-09-25" : "2026-09-24",
+        );
+        expect(field("quick-add-meal").props.value).toBe(
+          transition === "meal" ? "lunch" : "dinner",
+        );
+        expect(button("Retry diary time zone").props.disabled).toBe(false);
+        invoke(button("Retry diary time zone"));
+        await hooks.settle();
+        expect(authCount(fetcher)).toBe(4);
+        expect(text()).toContain("in UTC");
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+      }
+    },
+  );
+});

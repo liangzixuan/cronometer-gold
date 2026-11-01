@@ -551,6 +551,15 @@ even before the replacement renders; returning to the earlier day does not reviv
 it. Duplicate confirmations and callbacks from a closed page do nothing. Only a
 fresh explicit Add can submit after the current day is confirmed.
 
+If the profile read after a no-write timezone conflict fails, offer Retry diary
+time zone without reloading the page. Each accepted retry reads only the profile.
+Keep public results, shared exact portions, local time and the selected day and
+meal. Manual destination edits during recovery remain available. Recovery still
+requires local-day confirmation and a fresh Add; it never repeats the rejected
+write or allocates an operation ID. Duplicate, loading and retired callbacks stay
+inert. Responses from a replaced route or closed page cannot change its settings
+or sign-in state. A fresh retry remains available after another read failure.
+
 If the profile read during timezone review confirms that the session expired,
 ask the person to sign in. Keep the public results and the selected day, meal
 and exact quantity. Do not parse the signed-out response or repeat the add.

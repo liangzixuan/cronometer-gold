@@ -143,7 +143,7 @@ export function quickAddTimeZoneReviewMessage(
 ): string {
   return currentTimeZone
     ? `Your diary time zone changed to ${currentTimeZone}. This food was not added. Review ${localDate} as a local day in that zone, then confirm the day before adding again.`
-    : "Your diary time zone changed. This food was not added, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before adding again.";
+    : "Your diary time zone changed. This food was not added, and its stale retry was cleared. Current account settings could not be reloaded. Choose Retry diary time zone, then review the local diary day before adding again.";
 }
 
 interface FoodAddSuccess {
@@ -299,6 +299,7 @@ export function FoodSearchClient() {
   const barcodeController = useRef<AbortController | null>(null);
   const renderedBarcodeController = barcodeController.current;
   const profileRefreshController = useRef<AbortController | null>(null);
+  const [refreshingDiaryProfile, setRefreshingDiaryProfile] = useState(false);
   const suppressedAutocompleteValue = useRef<string | null>(null);
 
   useEffect(() => {
@@ -689,6 +690,7 @@ export function FoodSearchClient() {
     profileRefreshController.current?.abort();
     const controller = new AbortController();
     profileRefreshController.current = controller;
+    setRefreshingDiaryProfile(true);
     const currentProfile = () =>
       !controller.signal.aborted && profileRefreshController.current === controller && currentAdd();
     try {
@@ -717,8 +719,50 @@ export function FoodSearchClient() {
     } finally {
       if (profileRefreshController.current === controller) {
         profileRefreshController.current = null;
+        if (mounted.current) setRefreshingDiaryProfile(false);
       }
     }
+  }
+
+  function canRetryDiaryProfile() {
+    return (
+      mounted.current &&
+      dateReviewRequired &&
+      timeZone === null &&
+      !refreshingDiaryProfile &&
+      profileRefreshController.current === null &&
+      addingFoodVersion === null &&
+      activeAddOperation.current === null &&
+      sessionState === "ready" &&
+      sessionStateRef.current === "ready" &&
+      sessionGeneration.current === sessionViewGeneration &&
+      appliedSessionRoute === sessionRouteRevision &&
+      sessionRoute.current.revision === sessionRouteRevision &&
+      sessionRoute.current.appliedRevision === sessionRouteRevision &&
+      dayReviewGeneration.current === renderedDayReviewGeneration
+    );
+  }
+
+  async function retryDiaryProfile() {
+    if (!canRetryDiaryProfile()) return;
+    dayReviewGeneration.current += 1;
+    const current = () =>
+      mounted.current &&
+      sessionStateRef.current === "ready" &&
+      sessionGeneration.current === sessionViewGeneration &&
+      sessionRoute.current.revision === sessionRouteRevision &&
+      sessionRoute.current.appliedRevision === sessionRouteRevision &&
+      activeAddOperation.current === null;
+    setAddState("loading");
+    setAddMessage("Checking your diary time zone…");
+    const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange(current);
+    if (!current()) return;
+    setAddState("error");
+    setAddMessage(
+      currentTimeZone
+        ? "Your diary time zone is available. Review the selected local day and time, then confirm before adding."
+        : quickAddTimeZoneReviewMessage(diaryDate, null),
+    );
   }
 
   async function addFood(
@@ -1358,6 +1402,16 @@ export function FoodSearchClient() {
                   : "Sign in to choose a quantity and add it to your diary."
                 : addMessage}
         </p>
+        {dateReviewRequired && timeZone === null && sessionState === "ready" ? (
+          <button
+            className="buttonQuiet"
+            disabled={!canRetryDiaryProfile()}
+            onClick={() => void retryDiaryProfile()}
+            type="button"
+          >
+            Retry diary time zone
+          </button>
+        ) : null}
         {sessionState === "error" ? (
           <div className="entryActions">
             <button
