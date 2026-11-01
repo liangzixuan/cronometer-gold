@@ -772,7 +772,9 @@ describe("actual saved custom-food nutrient disclosures", () => {
     await hooks.settle();
     expect(details(first).props.hidden).toBe(true);
     expect(disclosure(first).props.disabled).toBe(true);
-    expect(status()).toBe("Refresh unavailable");
+    expect(status()).toBe(
+      "Your food draft is still available. Choose Retry private data to try again. Refresh unavailable",
+    );
     expect(formValues()).toEqual(before);
     invoke(disclosure(first), "onClick");
     await hooks.settle();
@@ -5230,4 +5232,85 @@ describe("My foods pinned log recovery guidance", () => {
       },
     );
   }
+});
+
+describe("My foods initial load recovery guidance", () => {
+  it.each(["http", "network", "malformed"] as const)(
+    "explains how to retry a %s initial load while preserving the raw food draft",
+    async (failure) => {
+      const first = food();
+      const { state, fetcher, writes } = workspace([first]);
+      navigation.search = "date=2026-09-09&meal=lunch";
+      state.read = () => {
+        if (failure === "network") throw new Error("Network unavailable");
+        if (failure === "http")
+          return Response.json({ error: "Private data unavailable" }, { status: 503 });
+        return Response.json({ data: "invalid", page: { nextCursor: null } });
+      };
+      await mount();
+      const guidance =
+        "Your food draft is still available. Choose Retry private data to try again.";
+      expect(status()).toContain(guidance);
+      const detail =
+        failure === "http"
+          ? "Private data unavailable"
+          : failure === "network"
+            ? "Network unavailable"
+            : "The custom-food list was invalid.";
+      expect(status()).toBe(`${guidance} ${detail}`);
+      expect(savedCards()).toHaveLength(0);
+      expect(button("Retry private data").props.disabled).not.toBe(true);
+      await change("Name", "  Unsaved lunch food  ");
+      await change("Notes (optional)", " Keep these notes exactly ");
+      const drafts = formValues();
+      const authReads = fetcher.mock.calls.filter(([url]) => url === "/api/auth/me").length;
+      const pending = deferred<Response>();
+      state.read = () => pending.promise;
+      await click("Retry private data");
+      expect(formValues()).toEqual(drafts);
+      expect(savedCards()).toHaveLength(0);
+      expect(writes()).toHaveLength(0);
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(
+        authReads + 1,
+      );
+      const ownerCheck = deferred<Response>();
+      state.auth = () => ownerCheck.promise;
+      pending.resolve(page([first]));
+      await hooks.settle();
+      expect(savedCards()).toHaveLength(0);
+      expect(formValues()).toEqual(drafts);
+      expect(writes()).toHaveLength(0);
+      ownerCheck.resolve(session());
+      await hooks.settle();
+      expect(status()).toBe("Your personal foods are current.");
+      expect(field("Name").props.value).toBe("  Unsaved lunch food  ");
+      expect(field("Notes (optional)").props.value).toBe(" Keep these notes exactly ");
+      expect(details(first).props.hidden).toBe(true);
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(
+        authReads + 2,
+      );
+      for (const path of ["/api/nutrients/targetable", "/api/retention/custom-foods?limit=50"]) {
+        const requests = fetcher.mock.calls.filter(([url]) => url === path);
+        expect(requests).toHaveLength(2);
+        const initial = requiredCustom(requests[0]?.[1]);
+        const retry = requiredCustom(requests[1]?.[1]);
+        expect(retry.method).toBe(initial.method);
+        expect(retry.body).toBe(initial.body);
+        expect(retry.headers).toEqual(initial.headers);
+        expect(retry.cache).toBe("no-store");
+        expect(retry.credentials).toBe(initial.credentials);
+        expect(retry.signal).not.toBe(initial.signal);
+        expect(retry.signal?.aborted).toBe(false);
+      }
+      const reads = fetcher.mock.calls.length;
+      await toggle(first);
+      expect(details(first).props.hidden).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(reads);
+      expect(writes()).toHaveLength(0);
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(
+        elements().some((node) => node.type === "button" && text(node) === "Retry private data"),
+      ).toBe(false);
+    },
+  );
 });

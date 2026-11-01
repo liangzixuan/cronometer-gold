@@ -872,7 +872,7 @@ export function CustomFoodsClient() {
       if (error instanceof PrivateOwnerFenceError) return signInAgain();
       setState("error");
       setMessage(
-        error instanceof Error ? error.message : "Your personal foods could not be loaded.",
+        `Your food draft is still available. Choose Retry private data to try again. ${error instanceof Error ? error.message : "Your personal foods could not be loaded."}`,
       );
     } finally {
       privateReadControllers.current.delete(controller);
