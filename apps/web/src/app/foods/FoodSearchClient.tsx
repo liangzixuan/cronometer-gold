@@ -260,6 +260,12 @@ export function FoodSearchClient() {
         : null,
     [diaryDate, localTime, timeZone],
   );
+  const localTimeError =
+    timeResolution?.kind === "invalid"
+      ? "Invalid local diary time or profile time zone."
+      : timeResolution?.kind === "gap"
+        ? "This local diary time does not exist in your profile time zone."
+        : null;
   const occurrenceRequired =
     timeResolution?.kind === "ambiguous" &&
     !timeResolution.candidates.some((candidate) => candidate.occurredAt === selectedOccurredAt);
@@ -1043,6 +1049,7 @@ export function FoodSearchClient() {
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       !dateReviewRequired ||
       !timeZone ||
+      localTimeError !== null ||
       occurrenceRequired
     ) {
       return;
@@ -1302,6 +1309,7 @@ export function FoodSearchClient() {
               value={localTime}
               disabled={!canEditDiaryCoordinates()}
               onChange={(event) => changeLocalTime(event.target.value)}
+              aria-invalid={localTimeError !== null || undefined}
               aria-describedby="quick-add-time-help"
             />
           </label>
@@ -1342,7 +1350,7 @@ export function FoodSearchClient() {
           <Link href="/login">Account</Link>
           <small id="quick-add-time-help">
             Uses {timeZone ?? "your verified profile zone"}. Leave time blank for the current
-            instant today or noon on another day.
+            instant today or noon on another day. {localTimeError}
           </small>
           {timeResolution?.kind === "ambiguous" ? (
             <fieldset className="entryActions" disabled={!canEditDiaryCoordinates()}>
@@ -1371,9 +1379,16 @@ export function FoodSearchClient() {
                 appliedSessionRoute !== sessionRouteRevision ||
                 !timeZone ||
                 addingFoodVersion !== null ||
+                localTimeError !== null ||
                 occurrenceRequired
               }
-              aria-describedby={occurrenceRequired ? "quick-add-occurrence-help" : undefined}
+              aria-describedby={
+                localTimeError
+                  ? "quick-add-time-help"
+                  : occurrenceRequired
+                    ? "quick-add-occurrence-help"
+                    : undefined
+              }
               onClick={confirmDiaryDateReview}
               type="button"
             >

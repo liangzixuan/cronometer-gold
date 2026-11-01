@@ -6265,4 +6265,164 @@ describe("Food timezone profile retry", () => {
       },
     );
   }
+
+  for (const instance of ["search", "barcode"] as const) {
+    it.each([
+      [
+        "2026-09-24",
+        "07:30 ",
+        "Invalid local diary time or profile time zone.",
+        "12:34",
+        "2026-09-24T17:34:00.000Z",
+      ],
+      [
+        "2026-09-24",
+        "24:00",
+        "Invalid local diary time or profile time zone.",
+        "12:34",
+        "2026-09-24T17:34:00.000Z",
+      ],
+      [
+        "2026-03-08",
+        "02:30",
+        "This local diary time does not exist in your profile time zone.",
+        "12:34",
+        "2026-03-08T17:34:00.000Z",
+      ],
+      [
+        "2026-03-08",
+        "02:30",
+        "This local diary time does not exist in your profile time zone.",
+        "",
+        "2026-03-08T17:00:00.000Z",
+      ],
+    ])(
+      `requires a valid entered time before ${instance} date-review confirmation (%s %s -> %s %s)`,
+      async (date, invalidTime, error, correctedTime, instant) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-25T18:00:00.000Z"));
+        let reads = 0;
+        let writes = 0;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(++reads === 1 ? "UTC" : "America/Chicago");
+          if (init?.method === "POST") {
+            if (++writes === 1)
+              return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+            if (writes === 2) return failure("503");
+            const saved = await savedMutation(init, date).json();
+            saved.data.entry.localTime = correctedTime === "" ? "12:00:00" : "12:34:00";
+            return Response.json(saved);
+          }
+          return publicResponse(url);
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(FoodSearchClient);
+        await hooks.settle();
+        await search();
+        await change("food-barcode", "012345678905");
+        const form = elements().find((node) => node.props.className === "barcodeForm");
+        if (!form) throw new Error("Missing barcode form");
+        invoke(form, "onSubmit", { preventDefault: vi.fn() });
+        await hooks.settle();
+        const kind = instance === "search" ? "grams" : "serving";
+        await change("quick-add-search-202-kind", kind);
+        await change("quick-add-search-202-amount", "2.500000");
+        await change("quick-add-date", date);
+        await change("quick-add-time", "12:34");
+        await change("quick-add-meal", "lunch");
+        invoke(add(instance));
+        await hooks.settle();
+        await change("quick-add-time", invalidTime);
+        const disabled = button(`Confirm ${date} at ${invalidTime} in America/Chicago`);
+        expect(disabled.props.disabled).toBe(true);
+        expect(disabled.props["aria-describedby"]).toBe("quick-add-time-help");
+        expect(field("quick-add-time").props["aria-invalid"]).toBe(true);
+        expect(text(field("quick-add-time-help"))).toContain(error);
+        const reviewStatus = text(elements().find((node) => node.props.role === "status"));
+        const calls = fetcher.mock.calls.length;
+        invoke(disabled);
+        await hooks.settle();
+        expect(text(elements().find((node) => node.props.role === "status"))).toBe(reviewStatus);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        expect(add("search").props.disabled).toBe(true);
+        expect(add("barcode").props.disabled).toBe(true);
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe(kind);
+        }
+        expect(field("quick-add-date").props.value).toBe(date);
+        expect(field("quick-add-time").props.value).toBe(invalidTime);
+        expect(field("quick-add-meal").props.value).toBe("lunch");
+        expect(field("food-query").props.value).toBe("apple");
+        expect(field("food-barcode").props.value).toBe("012345678905");
+        expect(
+          elements().filter((node) => node.type === "h3" && text(node) === "Apple Pie"),
+        ).toHaveLength(2);
+        await change("quick-add-time", correctedTime);
+        expect(field("quick-add-time").props["aria-invalid"]).toBeUndefined();
+        expect(text(field("quick-add-time-help"))).not.toContain(error);
+        invoke(disabled);
+        await hooks.settle();
+        expect(add(instance).props.disabled).toBe(true);
+        expect(text(elements().find((node) => node.props.role === "status"))).toBe(reviewStatus);
+        const confirmation = button(
+          correctedTime === ""
+            ? `Confirm ${date} as local day`
+            : `Confirm ${date} at ${correctedTime} in America/Chicago`,
+        );
+        expect(confirmation.props.disabled).toBe(false);
+        invoke(confirmation);
+        await hooks.settle();
+        expect(add(instance).props.disabled).toBe(false);
+        invoke(add(instance));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        const uncertain = text();
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(uncertain);
+        invoke(add(instance === "search" ? "barcode" : "search"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(posts[1]?.[0]).toContain(`date=${date}`);
+        expect(posts[1]?.[1]?.headers).not.toEqual(posts[0]?.[1]?.headers);
+        expect(posts[1]?.[1]?.headers).toMatchObject({
+          "x-expected-profile-time-zone": "America/Chicago",
+        });
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: "lunch",
+          occurredAt: instant,
+          portion: kind === "grams" ? { kind, grams: "2.5" } : { kind, amount: "2.5" },
+        });
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(authCount(fetcher)).toBe(2);
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation as Parameters<typeof FoodAddConfirmation>[0]["confirmation"];
+        expect(receipt).toMatchObject({
+          localDate: date,
+          timeZone: "America/Chicago",
+          occurredAt: instant,
+        });
+        expect(
+          elements(FoodAddConfirmation({ confirmation: receipt })).some(
+            (node) => node.props.href === `/dashboard?date=${date}`,
+          ),
+        ).toBe(true);
+        const saved = text();
+        const finalCalls = fetcher.mock.calls.length;
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(saved);
+        expect(fetcher).toHaveBeenCalledTimes(finalCalls);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+      },
+    );
+  }
 });
