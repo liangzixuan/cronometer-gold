@@ -5314,3 +5314,103 @@ describe("My foods initial load recovery guidance", () => {
     },
   );
 });
+
+describe("My foods current time-zone review guidance", () => {
+  it.each(["manual", "today", "yesterday"] as const)(
+    "keeps guidance current after %s date and time edits with an exact retry",
+    async (dateChoice) => {
+      const { state, fetcher, writes } = workspace([food()]);
+      await mount();
+      await prepareLog();
+      await change("Name", "  Unsaved private draft  ");
+      await change("Notes (optional)", "  Keep these notes  ");
+      state.write = () => {
+        state.timeZone = "America/New_York";
+        return Response.json(
+          { error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" },
+          { status: 409 },
+        );
+      };
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(1);
+      const retiredConfirmation = button("Confirm 2026-09-09 as local day");
+      const reads = fetcher.mock.calls.filter(
+        ([, init]) => !init?.method || init.method === "GET",
+      ).length;
+      const selectedDay =
+        dateChoice === "manual"
+          ? "2026-09-12"
+          : dateChoice === "today"
+            ? "2026-09-10"
+            : "2026-09-09";
+      if (dateChoice === "manual") await change("Local date", selectedDay);
+      else await click(`Set private-food diary date to ${dateChoice}`);
+      await change("Local time", "09:26");
+      const meal = requiredCustom(
+        elements(logForm()).find(
+          (node) =>
+            node.type === "select" &&
+            mealSlots.includes(node.props.value as (typeof mealSlots)[number]),
+        ),
+      );
+      invoke(meal, "onChange", { target: { value: "dinner" } });
+      await hooks.settle();
+      expect(field("Local date").props.value).toBe(selectedDay);
+      expect(field("Local time").props.value).toBe("09:26");
+      expect(field("Exact quantity").props.value).toBe("2.375");
+      expect(field("Name").props.value).toBe("  Unsaved private draft  ");
+      expect(field("Notes (optional)").props.value).toBe("  Keep these notes  ");
+      expect(status()).toContain("Review the selected local day and time in that zone");
+      expect(status()).toContain("This private food was not logged");
+      expect(status()).toContain("America/New_York");
+      expect(status()).not.toContain("Review 2026-09-09 as a local day");
+      invoke(retiredConfirmation, "onClick");
+      invoke(logForm(), "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes()).toHaveLength(1);
+      expect(button("Log exact version").props.disabled).toBe(true);
+      await click(`Confirm ${selectedDay} as local day`);
+      expect(status()).toContain(
+        `${selectedDay} is confirmed as a local diary day in America/New_York`,
+      );
+      expect(writes()).toHaveLength(1);
+      state.write = () => Response.json({ error: "Uncertain write" }, { status: 503 });
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      const initial = requiredCustom(writes()[0]?.[1]);
+      const attempted = requiredCustom(writes()[1]?.[1]);
+      const expectedTime = `${selectedDay}T13:26:00.000Z`;
+      expect(JSON.parse(String(attempted.body))).toEqual({
+        customFoodVersionId: food().currentVersion.id,
+        portion: { kind: "serving", servingId: "1", amount: "2.375" },
+        mealSlot: "dinner",
+        occurredAt: expectedTime,
+      });
+      expect(new Headers(attempted.headers).get("x-expected-profile-time-zone")).toBe(
+        "America/New_York",
+      );
+      expect(new Headers(attempted.headers).get("idempotency-key")).not.toBe(
+        new Headers(initial.headers).get("idempotency-key"),
+      );
+      const raw = formValues();
+      state.write = (_url, init) => {
+        const receipt = matchedLogData(init, true);
+        receipt.data.entry.localTime = "09:26:00";
+        return Response.json(receipt);
+      };
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(3);
+      expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+      expect(writes()[2]?.[1]).toEqual(attempted);
+      expect(confirmedCustomTime().props.dateTime).toBe(expectedTime);
+      expect(confirmedCustomLink(selectedDay).props.href).toBe(`/dashboard?date=${selectedDay}`);
+      expect(field("Name").props.value).toBe("  Unsaved private draft  ");
+      expect(field("Notes (optional)").props.value).toBe("  Keep these notes  ");
+      expect(raw.some((value) => value.value === "2.375")).toBe(true);
+      expect(
+        fetcher.mock.calls.filter(([, init]) => !init?.method || init.method === "GET"),
+      ).toHaveLength(reads);
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -124,12 +124,9 @@ export function fenceCustomFoodLogForTimeZoneChange(
   return true;
 }
 
-export function customFoodLogTimeZoneReviewMessage(
-  localDate: string,
-  currentTimeZone: string | null,
-): string {
+export function customFoodLogTimeZoneReviewMessage(currentTimeZone: string | null): string {
   return currentTimeZone
-    ? `Your profile time zone changed to ${currentTimeZone}. This private food was not logged. Review ${localDate} as a local day in that zone, then confirm the day before logging again.`
+    ? `Your profile time zone changed to ${currentTimeZone}. This private food was not logged. Review the selected local day and time in that zone, then confirm the day before logging again.`
     : "Your profile time zone changed. This private food was not logged, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before logging again.";
 }
 
@@ -1461,12 +1458,7 @@ export function CustomFoodsClient() {
         const currentTimeZone =
           await refreshCustomLogProfileAfterTimeZoneChange(initiatingOwnerUserId);
         if (!mounted.current || privateUiClosed.current || activeLog.current !== token) return;
-        setMessage(
-          customFoodLogTimeZoneReviewMessage(
-            customLogRef.current?.localDate ?? customLog.localDate,
-            currentTimeZone,
-          ),
-        );
+        setMessage(customFoodLogTimeZoneReviewMessage(currentTimeZone));
         return;
       }
       if (!ownsDraft()) return;

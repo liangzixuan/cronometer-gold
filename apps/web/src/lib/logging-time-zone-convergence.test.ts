@@ -181,7 +181,7 @@ describe("typed no-write time-zone recovery", () => {
       }),
     ).toBe(true);
     expect(pending.size).toBe(0);
-    expect(customFoodLogTimeZoneReviewMessage("2026-09-08", "America/New_York")).toContain(
+    expect(customFoodLogTimeZoneReviewMessage("America/New_York")).toContain(
       "This private food was not logged",
     );
   });

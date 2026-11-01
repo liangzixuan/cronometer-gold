@@ -385,6 +385,14 @@ instant, and the diary link keeps the confirmed day. Later log or editor drafts
 and failed writes do not change this confirmation. Private-session closure clears
 it. Keep the existing live status announcement without a second live region.
 
+After a private-food time-zone conflict proves that no write occurred, ask the
+user to review the selected local day and time in the recovered zone. Keep this
+guidance applicable after manual date, Today, Yesterday, time or meal edits.
+These edits retain the raw food draft and exact portion, and do not confirm the
+destination or submit a log. Fresh confirmation and logging use the selected
+destination. An uncertain log keeps its exact request and operation identity for
+retry; a matching saved receipt shows that destination without extra profile reads.
+
 ## Food diary date choices
 
 Catalogue food logging offers Today and Yesterday beside the diary destination.
