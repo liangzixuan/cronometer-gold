@@ -4206,9 +4206,19 @@ describe("My foods repeated local logging minute", () => {
       expect(occurrenceSelected(nextLabel)).toBe(false);
       invoke(retained, "onClick");
       await hooks.settle();
-      await click("Confirm 2026-11-01 as local day");
+      const guidance = status();
+      expect(button("Confirm 2026-11-01 as local day").props.disabled).toBe(true);
+      invoke(button("Confirm 2026-11-01 as local day"), "onClick");
+      await hooks.settle();
       expect(button("Log exact version").props.disabled).toBe(true);
-      expect(status()).toContain("Choose Earlier or Later");
+      expect(
+        text(
+          requiredCustom(
+            elements().find((node) => node.props.id === "custom-food-log-occurrence-help"),
+          ),
+        ),
+      ).toContain("Choose Earlier or Later");
+      expect(status()).toBe(guidance);
       expect(writes()).toHaveLength(1);
       expect(field("Exact quantity").props.value).toBe("0.500000");
       expect(field("Local time").props.value).toBe("01:30");
@@ -5733,6 +5743,164 @@ describe("My foods occurrence submission availability", () => {
         expect(status()).toBe(savedStatus);
         expect(confirmedCustomTime().props.dateTime).toBe(occurredAt);
         expect(confirmedCustomLink("2026-11-01").props.href).toBe("/dashboard?date=2026-11-01");
+        expect(field("Name").props.value).toBe("  Unfinished food  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep raw notes  ");
+        expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+        expect(details(first).props.hidden).toBe(false);
+        expect(
+          fetcher.mock.calls.filter(([, init]) => !init?.method || init.method === "GET"),
+        ).toHaveLength(reads);
+      },
+    );
+  }
+});
+
+describe("My foods time-review confirmation availability", () => {
+  for (const kind of ["grams", "serving"] as const) {
+    it.each([
+      ["", "13:14", "Invalid local diary time.", ""],
+      ["invalid", "13:14", "Invalid local diary time.", ""],
+      ["2026-02-29", "13:14", "Invalid local diary time.", ""],
+      ["2026-09-09", "", "Invalid local diary time.", ""],
+      ["2026-09-09", "25:99", "Invalid local diary time.", ""],
+      ["2026-03-08", "02:30", "That local time does not exist in the selected time zone.", ""],
+      [
+        "2026-11-01",
+        "01:30",
+        "Choose Earlier or Later for this repeated local minute.",
+        "Earlier occurrence · UTC−05:00",
+      ],
+      [
+        "2026-11-01",
+        "01:30",
+        "Choose Earlier or Later for this repeated local minute.",
+        "Later occurrence · UTC−06:00",
+      ],
+    ])(
+      `keeps ${kind} review closed for date %s time %s until corrected: %s %s`,
+      async (date, time, error, choice) => {
+        const first = food();
+        const { state, fetcher, writes } = workspace([first]);
+        await mount();
+        await prepareLog();
+        const portion = requiredCustom(
+          elements(logForm()).find(
+            (node) => node.type === "select" && node.props.value === "serving",
+          ),
+        );
+        invoke(portion, "onChange", { target: { value: kind } });
+        await hooks.settle();
+        const meal = requiredCustom(
+          elements(logForm()).find(
+            (node) =>
+              node.type === "select" &&
+              mealSlots.includes(node.props.value as (typeof mealSlots)[number]),
+          ),
+        );
+        invoke(meal, "onChange", { target: { value: "lunch" } });
+        await hooks.settle();
+        state.write = () =>
+          Response.json(
+            { error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" },
+            { status: 409 },
+          );
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(1);
+        await change("Name", "  Unfinished food  ");
+        await change("Notes (optional)", "  Keep raw notes  ");
+        await toggle(first);
+        await change(savedFilterLabel, "  saved  ");
+        const guidance = status();
+        expect(guidance).toContain("This private food was not logged");
+        const reads = fetcher.mock.calls.filter(
+          ([, init]) => !init?.method || init.method === "GET",
+        ).length;
+        const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        await change("Local date", date);
+        await change("Local time", time);
+        const invalidConfirmation = button(`Confirm ${date} as local day`);
+        const raw = formValues();
+        expect(invalidConfirmation.props.disabled).toBe(true);
+        const help = choice ? "custom-food-log-occurrence-help" : "custom-log-time-help";
+        expect(invalidConfirmation.props["aria-describedby"]).toBe(help);
+        expect(text(requiredCustom(elements().find((node) => node.props.id === help)))).toBe(error);
+        invoke(invalidConfirmation, "onClick");
+        invoke(logForm(), "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(guidance);
+        expect(formValues()).toEqual(raw);
+        expect(writes()).toHaveLength(1);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(details(first).props.hidden).toBe(false);
+        const day = choice ? "2026-11-01" : "2026-09-09";
+        if (choice) await click(choice);
+        else {
+          await change("Local date", day);
+          await change("Local time", "13:14");
+        }
+        const confirmation = button(`Confirm ${day} as local day`);
+        expect(confirmation.props.disabled).toBe(false);
+        expect(confirmation.props["aria-describedby"]).toBeUndefined();
+        invoke(invalidConfirmation, "onClick");
+        await hooks.settle();
+        expect(status()).toBe(guidance);
+        expect(button("Log exact version").props.disabled).toBe(true);
+        await click(`Confirm ${day} as local day`);
+        expect(status()).toContain(`${day} is confirmed as a local diary day in America/Chicago`);
+        expect(button("Log exact version").props.disabled).toBe(false);
+        expect(writes()).toHaveLength(1);
+        expect(allocate).not.toHaveBeenCalled();
+        state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(allocate).toHaveBeenCalledTimes(1);
+        const attempted = requiredCustom(writes()[1]?.[1]);
+        const occurredAt = choice
+          ? choice.startsWith("Earlier")
+            ? "2026-11-01T06:30:00.000Z"
+            : "2026-11-01T07:30:00.000Z"
+          : "2026-09-09T18:14:00.000Z";
+        expect(JSON.parse(String(attempted.body))).toEqual({
+          customFoodVersionId: first.currentVersion.id,
+          portion:
+            kind === "grams"
+              ? { kind: "grams", grams: "2.375" }
+              : { kind: "serving", servingId: "1", amount: "2.375" },
+          mealSlot: "lunch",
+          occurredAt,
+        });
+        expect(new Headers(attempted.headers).get("x-expected-profile-time-zone")).toBe(
+          "America/Chicago",
+        );
+        expect(new Headers(attempted.headers).get("idempotency-key")).not.toBe(
+          new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+        );
+        const uncertain = status();
+        invoke(invalidConfirmation, "onClick");
+        await hooks.settle();
+        expect(status()).toBe(uncertain);
+        expect(writes()).toHaveLength(2);
+        state.write = (_url, init) => {
+          const result = matchedLogData(init, true);
+          result.data.entry.resolvedGrams = kind === "grams" ? "2.375" : "297.46875";
+          return Response.json(result);
+        };
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(3);
+        expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+        expect(writes()[2]?.[1]).toEqual(attempted);
+        expect(allocate).toHaveBeenCalledTimes(1);
+        expect(confirmedCustomTime().props.dateTime).toBe(occurredAt);
+        expect(confirmedCustomLink(day).props.href).toBe(`/dashboard?date=${day}`);
+        const saved = status();
+        invoke(invalidConfirmation, "onClick");
+        await hooks.settle();
+        expect(status()).toBe(saved);
+        expect(writes()).toHaveLength(3);
+        expect(confirmedCustomTime().props.dateTime).toBe(occurredAt);
+        expect(confirmedCustomLink(day).props.href).toBe(`/dashboard?date=${day}`);
         expect(field("Name").props.value).toBe("  Unfinished food  ");
         expect(field("Notes (optional)").props.value).toBe("  Keep raw notes  ");
         expect(field(savedFilterLabel).props.value).toBe("  saved  ");

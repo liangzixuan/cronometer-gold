@@ -1493,7 +1493,13 @@ export function CustomFoodsClient() {
   }
 
   function confirmCustomFoodLogDateReview() {
-    if (!canUseCustomLogControls() || activeLog.current !== null) return;
+    if (
+      !canUseCustomLogControls() ||
+      activeLog.current !== null ||
+      customLogTimeError !== null ||
+      customLogOccurrenceRequired
+    )
+      return;
     if (!session || !customLog) {
       setMessage(
         "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
@@ -2246,7 +2252,19 @@ export function CustomFoodsClient() {
                   <div className="entryActions">
                     {customLogDateReviewRequired ? (
                       <button
-                        disabled={!canUseCustomLogControls() || activeLog.current !== null}
+                        aria-describedby={
+                          customLogTimeError !== null
+                            ? "custom-log-time-help"
+                            : customLogOccurrenceRequired
+                              ? "custom-food-log-occurrence-help"
+                              : undefined
+                        }
+                        disabled={
+                          !canUseCustomLogControls() ||
+                          activeLog.current !== null ||
+                          customLogTimeError !== null ||
+                          customLogOccurrenceRequired
+                        }
                         onClick={confirmCustomFoodLogDateReview}
                         type="button"
                       >
