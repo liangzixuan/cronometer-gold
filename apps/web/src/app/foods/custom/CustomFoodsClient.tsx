@@ -382,6 +382,12 @@ export function CustomFoodsClient() {
       ? customLog.occurrence.occurredAt
       : null;
 
+  const customLogOccurrenceRequired =
+    customLogTimeResolution?.kind === "ambiguous" &&
+    !customLogTimeResolution.candidates.some(
+      (candidate) => candidate.occurredAt === customLogOccurrence,
+    );
+
   function chooseCustomLogOccurrence(occurredAt: string) {
     if (
       !canUseCustomLogControls() ||
@@ -1350,7 +1356,8 @@ export function CustomFoodsClient() {
       !canUseCustomLogControls() ||
       activeLog.current !== null ||
       !customLogQuantityValid ||
-      customLogTimeError !== null
+      customLogTimeError !== null ||
+      customLogOccurrenceRequired
     )
       return;
     retireCustomArchive();
@@ -2247,11 +2254,15 @@ export function CustomFoodsClient() {
                       </button>
                     ) : null}
                     <button
+                      aria-describedby={
+                        customLogOccurrenceRequired ? "custom-food-log-occurrence-help" : undefined
+                      }
                       disabled={
                         !canUseCustomLogControls() ||
                         activeLog.current !== null ||
                         !customLogQuantityValid ||
                         customLogTimeError !== null ||
+                        customLogOccurrenceRequired ||
                         customLogDateReviewRequired
                       }
                       type="submit"

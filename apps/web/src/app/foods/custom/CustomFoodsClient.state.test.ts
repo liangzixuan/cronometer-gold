@@ -3876,10 +3876,19 @@ describe("My foods repeated local logging minute", () => {
     const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
     vi.stubGlobal("crypto", { randomUUID: allocate });
     state.write = (_url, init) => logReceipt(init);
+    const guidance = status();
+    expect(button("Log exact version").props.disabled).toBe(true);
     await submit("Log exact version");
     expect(writes()).toHaveLength(0);
     expect(allocate).not.toHaveBeenCalled();
-    expect(status()).toContain("Choose Earlier or Later");
+    expect(
+      text(
+        requiredCustom(
+          elements().find((node) => node.props.id === "custom-food-log-occurrence-help"),
+        ),
+      ),
+    ).toContain("Choose Earlier or Later");
+    expect(status()).toBe(guidance);
     expect(formValues()).toEqual(original);
     expect(occurrenceSelected(earlier)).toBe(false);
     expect(occurrenceSelected(later)).toBe(false);
@@ -3907,10 +3916,19 @@ describe("My foods repeated local logging minute", () => {
     const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
     vi.stubGlobal("crypto", { randomUUID: allocate });
     state.write = unavailable;
+    const guidance = status();
+    expect(button("Log exact version").props.disabled).toBe(true);
     await submit("Log exact version");
     expect(writes()).toHaveLength(0);
     expect(allocate).not.toHaveBeenCalled();
-    expect(status()).toContain("Choose Earlier or Later");
+    expect(
+      text(
+        requiredCustom(
+          elements().find((node) => node.props.id === "custom-food-log-occurrence-help"),
+        ),
+      ),
+    ).toContain("Choose Earlier or Later");
+    expect(status()).toBe(guidance);
     expect(formValues()).toEqual(original);
     expect(occurrenceSelected(earlier)).toBe(false);
     expect(occurrenceSelected(later)).toBe(false);
@@ -4278,9 +4296,18 @@ describe("My foods recent diary days", () => {
     expect(field("Local time").props.value).toBe("01:30");
     expect(button("Earlier occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
     expect(button("Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+    const guidance = status();
+    expect(button("Log exact version").props.disabled).toBe(true);
     await submit("Log exact version");
     expect(writes()).toHaveLength(0);
-    expect(status()).toContain("Choose Earlier or Later");
+    expect(
+      text(
+        requiredCustom(
+          elements().find((node) => node.props.id === "custom-food-log-occurrence-help"),
+        ),
+      ),
+    ).toContain("Choose Earlier or Later");
+    expect(status()).toBe(guidance);
   });
 
   it("keeps an older request and independent editor while changing an editable logging day", async () => {
@@ -5602,6 +5629,110 @@ describe("My foods local-time submission availability", () => {
         expect(status()).toBe(savedStatus);
         expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
         expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(field("Name").props.value).toBe("  Unfinished food  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep raw notes  ");
+        expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+        expect(details(first).props.hidden).toBe(false);
+        expect(
+          fetcher.mock.calls.filter(([, init]) => !init?.method || init.method === "GET"),
+        ).toHaveLength(reads);
+      },
+    );
+  }
+});
+
+describe("My foods occurrence submission availability", () => {
+  for (const kind of ["grams", "serving"] as const) {
+    it.each([
+      ["Earlier occurrence · UTC−05:00", "2026-11-01T06:30:00.000Z"],
+      ["Later occurrence · UTC−06:00", "2026-11-01T07:30:00.000Z"],
+    ])(
+      `requires a current occurrence for ${kind} and preserves the exact %s retry`,
+      async (label, occurredAt) => {
+        const first = food();
+        const { state, fetcher, writes } = workspace([first]);
+        await mount();
+        await prepareLog();
+        const portion = requiredCustom(
+          elements(logForm()).find(
+            (node) => node.type === "select" && node.props.value === "serving",
+          ),
+        );
+        invoke(portion, "onChange", { target: { value: kind } });
+        await hooks.settle();
+        await change("Name", "  Unfinished food  ");
+        await change("Notes (optional)", "  Keep raw notes  ");
+        await toggle(first);
+        await change(savedFilterLabel, "  saved  ");
+        await change("Local date", "2026-11-01");
+        await change("Local time", "01:30");
+        expect(button("Log exact version").props.disabled).toBe(true);
+        await click(label);
+        expect(button("Log exact version").props.disabled).toBe(false);
+        state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+        await submit("Log exact version");
+        const original = requiredCustom(writes()[0]?.[1]);
+        const guidance = status();
+        const reads = fetcher.mock.calls.filter(
+          ([, init]) => !init?.method || init.method === "GET",
+        ).length;
+        const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        await change("Local time", "01:31");
+        await change("Local time", "01:30");
+        const invalidForm = logForm();
+        const raw = formValues();
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(button("Log exact version").props["aria-describedby"]).toBe(
+          "custom-food-log-occurrence-help",
+        );
+        expect(field("Local date").props.value).toBe("2026-11-01");
+        expect(field("Local time").props.value).toBe("01:30");
+        for (const choice of ["Earlier occurrence · UTC−05:00", "Later occurrence · UTC−06:00"]) {
+          expect(button(choice).props.disabled).toBe(false);
+          expect(button(choice).props["aria-pressed"]).toBe(false);
+        }
+        expect(
+          text(
+            requiredCustom(
+              elements().find((node) => node.props.id === "custom-food-log-occurrence-help"),
+            ),
+          ),
+        ).toBe("Choose Earlier or Later for this repeated local minute.");
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(1);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(status()).toBe(guidance);
+        expect(formValues()).toEqual(raw);
+        expect(details(first).props.hidden).toBe(false);
+        await click(label);
+        expect(button(label).props["aria-pressed"]).toBe(true);
+        expect(button("Log exact version").props.disabled).toBe(false);
+        expect(button("Log exact version").props["aria-describedby"]).toBeUndefined();
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(guidance);
+        expect(writes()).toHaveLength(1);
+        state.write = (_url, init) => {
+          const result = matchedLogData(init, true);
+          result.data.entry.resolvedGrams = kind === "grams" ? "2.375" : "297.46875";
+          return Response.json(result);
+        };
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+        expect(writes()[1]?.[1]).toEqual(original);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(confirmedCustomTime().props.dateTime).toBe(occurredAt);
+        expect(confirmedCustomLink("2026-11-01").props.href).toBe("/dashboard?date=2026-11-01");
+        const savedStatus = status();
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(2);
+        expect(status()).toBe(savedStatus);
+        expect(confirmedCustomTime().props.dateTime).toBe(occurredAt);
+        expect(confirmedCustomLink("2026-11-01").props.href).toBe("/dashboard?date=2026-11-01");
         expect(field("Name").props.value).toBe("  Unfinished food  ");
         expect(field("Notes (optional)").props.value).toBe("  Keep raw notes  ");
         expect(field(savedFilterLabel).props.value).toBe("  saved  ");
