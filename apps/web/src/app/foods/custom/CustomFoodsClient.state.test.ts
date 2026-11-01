@@ -5414,3 +5414,92 @@ describe("My foods current time-zone review guidance", () => {
     },
   );
 });
+
+describe("My foods quantity submission availability", () => {
+  for (const kind of ["grams", "serving"] as const) {
+    it.each(["", "0", "0.0000001", "1000000000000"])(
+      `explains invalid ${kind} quantity %s and preserves an exact uncertain retry`,
+      async (quantity) => {
+        const first = food();
+        const { state, fetcher, writes } = workspace([first]);
+        await mount();
+        await prepareLog();
+        const portion = requiredCustom(
+          elements(logForm()).find(
+            (node) => node.type === "select" && node.props.value === "serving",
+          ),
+        );
+        invoke(portion, "onChange", { target: { value: kind } });
+        await hooks.settle();
+        await change("Name", "  Unfinished food  ");
+        await change("Notes (optional)", "  Keep raw notes  ");
+        await toggle(first);
+        await change(savedFilterLabel, "  saved  ");
+        state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+        await submit("Log exact version");
+        const original = requiredCustom(writes()[0]?.[1]);
+        const guidance = status();
+        const reads = fetcher.mock.calls.filter(
+          ([, init]) => !init?.method || init.method === "GET",
+        ).length;
+        const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        await change("Exact quantity", quantity);
+        const invalidForm = logForm();
+        const raw = formValues();
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(field("Exact quantity").props.value).toBe(quantity);
+        expect(field("Exact quantity").props["aria-invalid"]).toBe(true);
+        expect(field("Exact quantity").props["aria-describedby"]).toBe("custom-log-quantity-help");
+        expect(
+          text(
+            requiredCustom(elements().find((node) => node.props.id === "custom-log-quantity-help")),
+          ),
+        ).toBe(
+          "Enter a quantity greater than zero, with up to 12 digits before the decimal point and 6 after it.",
+        );
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(1);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(status()).toBe(guidance);
+        expect(formValues()).toEqual(raw);
+        expect(details(first).props.hidden).toBe(false);
+        await change("Exact quantity", "2.375");
+        expect(button("Log exact version").props.disabled).toBe(false);
+        expect(field("Exact quantity").props["aria-invalid"]).toBe(false);
+        expect(elements().some((node) => node.props.id === "custom-log-quantity-help")).toBe(false);
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(guidance);
+        expect(writes()).toHaveLength(1);
+        state.write = (_url, init) => {
+          const result = matchedLogData(init, true);
+          result.data.entry.resolvedGrams = kind === "grams" ? "2.375" : "297.46875";
+          return Response.json(result);
+        };
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+        expect(writes()[1]?.[1]).toEqual(original);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        const savedStatus = status();
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(2);
+        expect(status()).toBe(savedStatus);
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(field("Name").props.value).toBe("  Unfinished food  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep raw notes  ");
+        expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+        expect(details(first).props.hidden).toBe(false);
+        expect(
+          fetcher.mock.calls.filter(([, init]) => !init?.method || init.method === "GET"),
+        ).toHaveLength(reads);
+      },
+    );
+  }
+});

@@ -358,6 +358,7 @@ export function CustomFoodsClient() {
   const renderedCustomGeneration = customGeneration.current;
   const renderedCustomControl = customControlGeneration.current;
   const customScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+  const customLogQuantityValid = customLog !== null && isPositiveInputDecimal(customLog.quantity);
   const customLogDate = customLog?.localDate;
   const customLogTime = customLog?.localTime;
   const customLogZone = session?.profile.timeZone;
@@ -1339,14 +1340,12 @@ export function CustomFoodsClient() {
   }
 
   async function logCustomFood() {
-    if (!canUseCustomLogControls() || activeLog.current !== null) return;
+    if (!canUseCustomLogControls() || activeLog.current !== null || !customLogQuantityValid) return;
     retireCustomArchive();
     if (customLogDateReviewRequired) {
       return setMessage("Review and confirm the local diary day before logging again.");
     }
-    if (!session || !customLog || !isPositiveInputDecimal(customLog.quantity)) {
-      return setMessage("Choose a private food and enter a positive quantity.");
-    }
+    if (!session || !customLog) return;
     const initiatingOwnerUserId = session.user.id;
     const serving = customLog.food.currentVersion.serving;
     if (customLog.kind === "serving" && !serving)
@@ -2112,12 +2111,22 @@ export function CustomFoodsClient() {
                       <input
                         disabled={!canUseCustomLogControls()}
                         inputMode="decimal"
+                        aria-invalid={!customLogQuantityValid}
+                        aria-describedby={
+                          customLogQuantityValid ? undefined : "custom-log-quantity-help"
+                        }
                         value={customLog.quantity}
                         onChange={(event) =>
                           setCustomLog({ ...customLog, quantity: event.target.value })
                         }
                       />
                     </label>
+                    {!customLogQuantityValid ? (
+                      <small className="fieldHelp" id="custom-log-quantity-help">
+                        Enter a quantity greater than zero, with up to 12 digits before the decimal
+                        point and 6 after it.
+                      </small>
+                    ) : null}
                     <label>
                       Meal
                       <select
@@ -2216,6 +2225,7 @@ export function CustomFoodsClient() {
                       disabled={
                         !canUseCustomLogControls() ||
                         activeLog.current !== null ||
+                        !customLogQuantityValid ||
                         customLogDateReviewRequired
                       }
                       type="submit"
