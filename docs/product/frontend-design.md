@@ -551,6 +551,13 @@ even before the replacement renders; returning to the earlier day does not reviv
 it. Duplicate confirmations and callbacks from a closed page do nothing. Only a
 fresh explicit Add can submit after the current day is confirmed.
 
+Confirmation callbacks rendered disabled because the profile time zone is
+unavailable do nothing. They preserve recovery guidance while a profile read is
+pending or has failed, including a repeated failure. Retained callbacks stay
+inert after recovery and saving. A fresh confirmation is still required before
+Add becomes available; recovery does not change the selected destination or
+shared exact portions.
+
 If the profile read after a no-write timezone conflict fails, offer Retry diary
 time zone without reloading the page. Each accepted retry reads only the profile.
 Keep public results, shared exact portions, local time and the selected day and

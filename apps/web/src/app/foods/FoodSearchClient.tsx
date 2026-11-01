@@ -1044,15 +1044,9 @@ export function FoodSearchClient() {
       sessionRoute.current.revision !== sessionRouteRevision ||
       sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
-      !dateReviewRequired
+      !dateReviewRequired ||
+      !timeZone
     ) {
-      return;
-    }
-    if (!timeZone) {
-      setAddState("error");
-      setAddMessage(
-        "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
-      );
       return;
     }
     if (!validateLocalTimeInput()) return;

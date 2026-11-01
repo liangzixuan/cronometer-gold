@@ -5233,4 +5233,100 @@ describe("Food timezone profile retry", () => {
       }
     },
   );
+
+  for (const phase of ["unavailable", "retrying"] as const) {
+    it.each(["503", "network", "malformed"])(
+      `keeps timezone-disabled confirmation inert during ${phase} recovery with %s`,
+      async (kind) => {
+        const { held, fetcher } = await unavailableProfile(phase === "unavailable" ? kind : "503");
+        const unavailable = button("Confirm 2026-09-24 as local day");
+        expect(unavailable.props.disabled).toBe(true);
+        let disabled = unavailable;
+        if (phase === "retrying") {
+          invoke(button("Retry diary time zone"));
+          await hooks.settle();
+          disabled = button("Confirm 2026-09-24 as local day");
+          expect(disabled.props.disabled).toBe(true);
+        }
+        const before = text();
+        const calls = fetcher.mock.calls.length;
+        invoke(disabled);
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(before);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        if (phase === "retrying") {
+          if (kind === "network") held.reject(new TypeError("Profile unavailable"));
+          else held.resolve(failure(kind));
+          await hooks.settle();
+          const failed = text();
+          invoke(disabled);
+          invoke(button("Confirm 2026-09-24 as local day"));
+          await hooks.settle();
+          expect(text()).toBe(failed);
+          expect(authCount(fetcher)).toBe(3);
+        }
+        invoke(button("Retry diary time zone"));
+        await hooks.settle();
+        if (phase === "unavailable") {
+          held.resolve(session("UTC"));
+          await hooks.settle();
+        }
+        const recovered = text();
+        invoke(unavailable);
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(add().props.disabled).toBe(true);
+        expect(add("barcode").props.disabled).toBe(true);
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("12:34");
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        invoke(button("Confirm 2026-09-24 at 12:34 in UTC"));
+        await hooks.settle();
+        expect(add().props.disabled).toBe(false);
+        invoke(add());
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        invoke(add("barcode"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: "dinner",
+          occurredAt: "2026-09-24T12:34:00.000Z",
+          portion: { amount: "2.5" },
+        });
+        expect(posts[1]?.[1]?.headers).toMatchObject({ "x-expected-profile-time-zone": "UTC" });
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: "2026-09-24",
+          timeZone: "UTC",
+          occurredAt: "2026-09-24T12:34:00.000Z",
+        });
+        const saved = text();
+        invoke(unavailable);
+        invoke(disabled);
+        await hooks.settle();
+        expect(text()).toBe(saved);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        expect(pendingPosts(fetcher)).toEqual(posts);
+        expect(authCount(fetcher)).toBe(phase === "unavailable" ? 3 : 4);
+        expect(operationId).toHaveBeenCalledTimes(2);
+      },
+    );
+  }
 });
