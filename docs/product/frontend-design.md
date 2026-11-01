@@ -771,3 +771,11 @@ record for paired reference/render comparisons and actual source identity.
 The repository remains authoritative for shipped behavior. Catalogue capacity,
 real publisher coverage, account delivery, device qualification and release gates
 remain in the [beta checklist](beta-exit-checklist.md).
+
+### Custom-food test clock
+
+Custom-food state tests use a fixed clock for ordinary library, filter, editor and
+log scenarios. Date-specific cases set their own clock. Opening a log during either
+occurrence of a repeated local minute still requires an explicit Earlier or Later
+choice before allocating an operation or sending a write. This also keeps unrelated
+profile-recovery and exact-retry tests independent of the machine's current time.

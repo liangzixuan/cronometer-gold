@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Runs the actual component and its effects with deterministic synchronous hooks.
 // This observes request/state transitions; browser layout and concurrent React are
@@ -385,6 +385,11 @@ function visibility() {
     },
   };
 }
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(instant));
+});
+
 afterEach(() => {
   hooks.unmount();
   vi.unstubAllGlobals();
@@ -3848,6 +3853,43 @@ describe("My foods repeated local logging minute", () => {
   function occurrenceSelected(label: string) {
     return button(label).props["aria-pressed"] === true;
   }
+
+  it.each([
+    ["2026-11-01T06:30:00.000Z", earlier],
+    ["2026-11-01T07:30:00.000Z", later],
+  ])("requires a choice for a log opened during the repeated hour at %s", async (now, label) => {
+    vi.setSystemTime(new Date(now));
+    const { state, writes } = workspace([food()]);
+    await mount();
+    await click("Log pinned v1", card(food()));
+    expect(field("Local date").props.value).toBe("2026-11-01");
+    expect(field("Local time").props.value).toBe("01:30");
+    const original = formValues();
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    state.write = (_url, init) => logReceipt(init);
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(0);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(status()).toContain("Choose Earlier or Later");
+    expect(formValues()).toEqual(original);
+    expect(occurrenceSelected(earlier)).toBe(false);
+    expect(occurrenceSelected(later)).toBe(false);
+    await click(label);
+    expect(writes()).toHaveLength(0);
+    await submit("Log exact version");
+    expect(writes()).toHaveLength(1);
+    expect(allocate).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(writes()[0]?.[1]?.body))).toEqual({
+      customFoodVersionId: food().currentVersion.id,
+      portion: { kind: "serving", servingId: "1", amount: "1" },
+      mealSlot: "snacks",
+      occurredAt: now,
+    });
+    const headers = new Headers(writes()[0]?.[1]?.headers);
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+    expect(headers.get("idempotency-key")).toBe("cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+  });
 
   it("requires an explicit occurrence before allocating or posting and keeps the raw draft", async () => {
     const { state, writes } = workspace([food()]);
