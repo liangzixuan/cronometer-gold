@@ -822,3 +822,12 @@ guidance and preserve the independent barcode receipt.
   retains its exact request body, headers and operation ID through the failed
   load and retry. HTTP, network and malformed-page cases are covered by state
   tests; this does not establish real-browser, API or hosted acceptance.
+
+
+Failed saved-food conflict recovery explains that edits remain available and names
+Discard edits and reload saved food as the retry action. Keep the original error
+detail. A failed read preserves raw editor values, the loaded-name filter, open
+nutrition details and the pinned diary draft. Only a verified newer active version
+replaces the editor after an explicit retry. Recovery does not allocate a write
+operation or refresh the profile. An uncertain pinned log retains its exact request
+and operation ID; a later explicit save uses the recovered food revision.

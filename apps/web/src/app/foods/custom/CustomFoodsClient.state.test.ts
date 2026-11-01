@@ -4747,3 +4747,100 @@ describe("My foods continuation recovery guidance", () => {
     },
   );
 });
+
+describe("My foods conflicted reload recovery guidance", () => {
+  it.each(["http", "network", "malformed"] as const)(
+    "explains how to retry a %s conflicted reload while preserving raw edits and a pinned log",
+    async (failure) => {
+      navigation.search = "date=2026-09-09&meal=lunch";
+      const { state, fetcher, writes, first } = await conflictedEditor();
+      await toggle(first);
+      await toggle(food(2));
+      await prepareLog();
+      await change(savedFilterLabel, "  saved  ");
+      state.write = () => Response.json({ error: "Log response unavailable" }, { status: 503 });
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      const originalLog = requiredCustom(writes()[1]?.[1]);
+      expect(JSON.parse(String(originalLog.body))).toEqual({
+        customFoodVersionId: first.currentVersion.id,
+        portion: { kind: "serving", servingId: "1", amount: "2.375" },
+        mealSlot: "lunch",
+        occurredAt: "2026-09-09T18:14:00.000Z",
+      });
+      const drafts = formValues();
+      const authReads = fetcher.mock.calls.filter(([url]) => url === "/api/auth/me").length;
+      const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+      vi.stubGlobal("crypto", { randomUUID: allocate });
+      const pending = deferred<Response>();
+      const path = `/api/retention/custom-foods/${first.id}`;
+      state.sectionRead = (url) => {
+        if (url !== path) return undefined;
+        return pending.promise.then((response) => {
+          if (failure === "network") throw new Error("Network unavailable");
+          return response;
+        });
+      };
+      await click(reloadConflictedFood);
+      expect(button(reloadConflictedFood).props.disabled).toBe(true);
+      expect(formValues()).toEqual(drafts);
+      pending.resolve(
+        failure === "http"
+          ? Response.json({ error: "Saved food unavailable" }, { status: 503 })
+          : failure === "malformed"
+            ? Response.json({ data: { wrong: true } })
+            : new Response(null),
+      );
+      await hooks.settle();
+      const guidance =
+        "Your edits are still available. Choose Discard edits and reload saved food to try again.";
+      const detail =
+        failure === "http"
+          ? "Saved food unavailable"
+          : failure === "network"
+            ? "Network unavailable"
+            : "The custom-food response was invalid.";
+      expect(status()).toBe(`${guidance} ${detail}`);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      expect(details(food(2)).props.hidden).toBe(false);
+      expect(button("Save new version").props.disabled).toBe(true);
+      expect(button(reloadConflictedFood).props.disabled).toBe(false);
+      expect(writes()).toHaveLength(2);
+      expect(allocate).not.toHaveBeenCalled();
+      state.sectionRead = (url) =>
+        url === path ? Response.json({ data: { customFood: recoveredFood() } }) : undefined;
+      await click(reloadConflictedFood);
+      const reads = fetcher.mock.calls.filter(([url]) => url === path);
+      expect(reads).toHaveLength(2);
+      for (const [, init] of reads) {
+        expect(init?.method).toBe("GET");
+        expect(init?.headers).toEqual({ accept: "application/json" });
+        expect(init?.cache).toBe("no-store");
+        expect(init?.body).toBeUndefined();
+      }
+      expect(reads[1]?.[1]?.credentials).toBe(reads[0]?.[1]?.credentials);
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(authReads);
+      expect(writes()).toHaveLength(2);
+      expect(allocate).not.toHaveBeenCalled();
+      expect(field("Name").props.value).toBe(recoveredFood().currentVersion.name);
+      expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+      expect(details(food(2)).props.hidden).toBe(false);
+      expect(button("Save new version").props.disabled).toBe(false);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(3);
+      expect(writes()[2]?.[1]?.body).toBe(originalLog.body);
+      expect(writes()[2]?.[1]?.headers).toEqual(originalLog.headers);
+      expect(allocate).not.toHaveBeenCalled();
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      await change("Name", "Reviewed current version");
+      state.write = () => receipt(recoveredFood("3"));
+      await submit("Save new version");
+      expect(writes()).toHaveLength(4);
+      expect(new Headers(writes()[3]?.[1]?.headers).get("if-match")).toBe('"2"');
+      expect(allocate).toHaveBeenCalledOnce();
+    },
+  );
+});

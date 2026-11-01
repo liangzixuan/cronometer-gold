@@ -1107,7 +1107,11 @@ export function CustomFoodsClient() {
       setMessage("Current saved food loaded. Review its values before saving another version.");
     } catch (error) {
       if (!isCurrent()) return;
-      setMessage(error instanceof Error ? error.message : "The saved food could not be reloaded.");
+      setMessage(
+        `Your edits are still available. Choose Discard edits and reload saved food to try again. ${
+          error instanceof Error ? error.message : "The saved food could not be reloaded."
+        }`,
+      );
     } finally {
       privateReadControllers.current.delete(controller);
       if (customWrite.current === token) {
