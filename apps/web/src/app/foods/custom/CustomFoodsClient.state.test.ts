@@ -2842,12 +2842,16 @@ describe("My foods invalid local logging times", () => {
       const original = formValues();
       const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
       vi.stubGlobal("crypto", { randomUUID: allocate });
+      const guidance = status();
+      expect(
+        text(requiredCustom(elements().find((node) => node.props.id === "custom-log-time-help"))),
+      ).toBe(error);
       await submit("Log exact version");
-      expect(status()).toBe(error);
+      expect(status()).toBe(guidance);
       expect(formValues()).toEqual(original);
       expect(writes()).toHaveLength(0);
       expect(allocate).not.toHaveBeenCalled();
-      expect(button("Log exact version").props.disabled).toBe(false);
+      expect(button("Log exact version").props.disabled).toBe(true);
       await change("Local date", "2026-09-09");
       await change("Local time", "13:14");
       state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
@@ -3922,11 +3926,16 @@ describe("My foods repeated local logging minute", () => {
     const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
     vi.stubGlobal("crypto", { randomUUID: allocate });
     state.write = unavailable;
+    const guidance = status();
+    expect(button("Log exact version").props.disabled).toBe(true);
     await submit("Log exact version");
     expect(writes()).toHaveLength(0);
     expect(allocate).not.toHaveBeenCalled();
     expect(formValues()).toEqual(raw);
-    expect(status()).toContain("does not exist");
+    expect(
+      text(requiredCustom(elements().find((node) => node.props.id === "custom-log-time-help"))),
+    ).toContain("does not exist");
+    expect(status()).toBe(guidance);
   });
 
   it.each([
@@ -5469,6 +5478,107 @@ describe("My foods quantity submission availability", () => {
         expect(button("Log exact version").props.disabled).toBe(false);
         expect(field("Exact quantity").props["aria-invalid"]).toBe(false);
         expect(elements().some((node) => node.props.id === "custom-log-quantity-help")).toBe(false);
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(guidance);
+        expect(writes()).toHaveLength(1);
+        state.write = (_url, init) => {
+          const result = matchedLogData(init, true);
+          result.data.entry.resolvedGrams = kind === "grams" ? "2.375" : "297.46875";
+          return Response.json(result);
+        };
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+        expect(writes()[1]?.[1]).toEqual(original);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        const savedStatus = status();
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(2);
+        expect(status()).toBe(savedStatus);
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(field("Name").props.value).toBe("  Unfinished food  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep raw notes  ");
+        expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+        expect(details(first).props.hidden).toBe(false);
+        expect(
+          fetcher.mock.calls.filter(([, init]) => !init?.method || init.method === "GET"),
+        ).toHaveLength(reads);
+      },
+    );
+  }
+});
+
+describe("My foods local-time submission availability", () => {
+  for (const kind of ["grams", "serving"] as const) {
+    it.each([
+      ["", "13:14", "Invalid local diary time."],
+      ["invalid", "13:14", "Invalid local diary time."],
+      ["2026-02-29", "13:14", "Invalid local diary time."],
+      ["2026-09-09", "", "Invalid local diary time."],
+      ["2026-09-09", "25:99", "Invalid local diary time."],
+      ["2026-03-08", "02:30", "That local time does not exist in the selected time zone."],
+    ])(
+      `explains invalid ${kind} date %s and time %s and preserves an exact uncertain retry`,
+      async (date, time, error) => {
+        const first = food();
+        const { state, fetcher, writes } = workspace([first]);
+        await mount();
+        await prepareLog();
+        const portion = requiredCustom(
+          elements(logForm()).find(
+            (node) => node.type === "select" && node.props.value === "serving",
+          ),
+        );
+        invoke(portion, "onChange", { target: { value: kind } });
+        await hooks.settle();
+        await change("Name", "  Unfinished food  ");
+        await change("Notes (optional)", "  Keep raw notes  ");
+        await toggle(first);
+        await change(savedFilterLabel, "  saved  ");
+        state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+        await submit("Log exact version");
+        const original = requiredCustom(writes()[0]?.[1]);
+        const guidance = status();
+        const reads = fetcher.mock.calls.filter(
+          ([, init]) => !init?.method || init.method === "GET",
+        ).length;
+        const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+        vi.stubGlobal("crypto", { randomUUID: allocate });
+        await change("Local date", date);
+        await change("Local time", time);
+        const invalidForm = logForm();
+        const raw = formValues();
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(field("Local date").props.value).toBe(date);
+        expect(field("Local time").props.value).toBe(time);
+        for (const label of ["Local date", "Local time"]) {
+          expect(field(label).props.disabled).toBe(false);
+          expect(field(label).props["aria-invalid"]).toBe(true);
+          expect(field(label).props["aria-describedby"]).toBe("custom-log-time-help");
+        }
+        expect(
+          text(requiredCustom(elements().find((node) => node.props.id === "custom-log-time-help"))),
+        ).toBe(error);
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(1);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(status()).toBe(guidance);
+        expect(formValues()).toEqual(raw);
+        expect(details(first).props.hidden).toBe(false);
+        await change("Local date", "2026-09-09");
+        await change("Local time", "13:14");
+        expect(button("Log exact version").props.disabled).toBe(false);
+        for (const label of ["Local date", "Local time"]) {
+          expect(field(label).props["aria-invalid"]).toBe(false);
+          expect(field(label).props["aria-describedby"]).toBeUndefined();
+        }
+        expect(elements().some((node) => node.props.id === "custom-log-time-help")).toBe(false);
         invoke(invalidForm, "onSubmit", { preventDefault() {} });
         await hooks.settle();
         expect(status()).toBe(guidance);

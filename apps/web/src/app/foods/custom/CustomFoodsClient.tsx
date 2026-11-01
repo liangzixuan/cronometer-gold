@@ -369,6 +369,12 @@ export function CustomFoodsClient() {
         : null,
     [customLogDate, customLogTime, customLogZone],
   );
+  const customLogTimeError =
+    customLogTimeResolution?.kind === "invalid"
+      ? "Invalid local diary time."
+      : customLogTimeResolution?.kind === "gap"
+        ? "That local time does not exist in the selected time zone."
+        : null;
   const customLogOccurrence =
     customLog?.occurrence?.route === renderedRouteDestination &&
     customLog.occurrence.lifecycle === customLifecycle.current &&
@@ -1340,7 +1346,13 @@ export function CustomFoodsClient() {
   }
 
   async function logCustomFood() {
-    if (!canUseCustomLogControls() || activeLog.current !== null || !customLogQuantityValid) return;
+    if (
+      !canUseCustomLogControls() ||
+      activeLog.current !== null ||
+      !customLogQuantityValid ||
+      customLogTimeError !== null
+    )
+      return;
     retireCustomArchive();
     if (customLogDateReviewRequired) {
       return setMessage("Review and confirm the local diary day before logging again.");
@@ -2148,6 +2160,10 @@ export function CustomFoodsClient() {
                       <input
                         disabled={!canUseCustomLogControls()}
                         type="date"
+                        aria-invalid={customLogTimeError !== null}
+                        aria-describedby={
+                          customLogTimeError === null ? undefined : "custom-log-time-help"
+                        }
                         value={customLog.localDate}
                         onChange={(event) =>
                           setCustomLog({ ...customLog, localDate: event.target.value })
@@ -2159,6 +2175,10 @@ export function CustomFoodsClient() {
                       <input
                         disabled={!canUseCustomLogControls()}
                         type="time"
+                        aria-invalid={customLogTimeError !== null}
+                        aria-describedby={
+                          customLogTimeError === null ? undefined : "custom-log-time-help"
+                        }
                         value={customLog.localTime}
                         onChange={(event) =>
                           setCustomLog({ ...customLog, localTime: event.target.value })
@@ -2166,6 +2186,11 @@ export function CustomFoodsClient() {
                       />
                     </label>
                   </div>
+                  {customLogTimeError !== null ? (
+                    <small className="fieldHelp" id="custom-log-time-help">
+                      {customLogTimeError}
+                    </small>
+                  ) : null}
                   <div className="entryActions">
                     {(
                       [
@@ -2226,6 +2251,7 @@ export function CustomFoodsClient() {
                         !canUseCustomLogControls() ||
                         activeLog.current !== null ||
                         !customLogQuantityValid ||
+                        customLogTimeError !== null ||
                         customLogDateReviewRequired
                       }
                       type="submit"
