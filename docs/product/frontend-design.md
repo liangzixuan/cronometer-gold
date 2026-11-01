@@ -801,3 +801,15 @@ Lookup recovery never retries an uncertain Add. Its next explicit Add keeps the
 original body, headers and operation ID. A missing barcode remains an exact
 no-match result. An independent search result keeps its saved receipt when the
 barcode lookup fails or finds no match.
+
+## Food search recovery
+
+If a food search fails, explain that the query and food type remain selected.
+Name Search as the retry action. Use the same normalized query, food type, limit
+and headers for the retry, without a continuation cursor. Keep duplicate and
+retired submits inert.
+
+Preserve the independent barcode result, shared exact portion, local day, time
+and meal. An uncertain addition keeps its exact retry body, headers and operation
+ID without another profile read. Empty search results retain their existing
+guidance and preserve the independent barcode receipt.

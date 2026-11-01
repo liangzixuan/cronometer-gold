@@ -1235,7 +1235,7 @@ describe("web search request retirement", () => {
       failSearch = true;
       await submitQuery("pear");
       expect(searchView().status).toBe(
-        "Food search is unavailable right now. Your query was not saved; please try again.",
+        "Food search is unavailable right now. Your query and food type are still selected. Choose Search to try again.",
       );
       expect(field("food-query").props.value).toBe("pear");
       expect(searchView().names).toEqual([]);
@@ -5354,6 +5354,137 @@ describe("Food Add attempt admission", () => {
       expect(authCount(fetcher)).toBe(1);
       expect(
         fetcher.mock.calls.filter(([url]) => url.startsWith("/api/foods/search?")),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["503", "network", "malformed"])(
+    "guides a failed %s food search to an exact retry without disturbing barcode additions",
+    async (kind) => {
+      let searchReads = 0;
+      let writes = 0;
+      let empty = false;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return ++writes === 1 ? failure("503") : savedMutation(init);
+        if (url.startsWith("/api/foods/search?")) {
+          searchReads += 1;
+          if (empty) return Response.json({ data: [], page: { nextCursor: null } });
+          if (searchReads === 2) return failure(kind);
+        }
+        return publicResponse(url);
+      });
+      await ready(fetcher);
+      const foodType = () => {
+        const radio = elements().find(
+          (node) => node.props.name === "food-intent" && node.props.value === "branded",
+        );
+        if (!radio) throw new Error("Missing branded food type");
+        return radio;
+      };
+      invoke(foodType(), "onChange");
+      await hooks.settle();
+      await change("food-query", "  Apple Pie  ");
+      await change("quick-add-time", "12:00");
+      invoke(add("barcode"));
+      await hooks.settle();
+      const addStatus = () =>
+        text(elements().find((node) => String(node.props.className).startsWith("addStatus ")));
+      const uncertainStatus = addStatus();
+      expect(uncertainStatus).toContain("Choose Add again to retry safely");
+      const searchForm = () => {
+        const form = elements().find((node) => node.props.className === "foodSearchForm");
+        if (!form) throw new Error("Missing search form");
+        return form;
+      };
+      const retiredForm = searchForm();
+      invoke(retiredForm, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(field("food-query").props.value).toBe("  Apple Pie  ");
+      expect(foodType().props.checked).toBe(true);
+      expect(text(elements().find((node) => node.props.className === "barcodeResult"))).toContain(
+        "Apple Pie",
+      );
+      expect(field("food-barcode").props.value).toBe("012345678905");
+      expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+      expect(field("quick-add-barcode-202-kind").props.value).toBe("serving");
+      expect(field("quick-add-date").props.value).toBe("2026-09-24");
+      expect(field("quick-add-time").props.value).toBe("12:00");
+      expect(field("quick-add-meal").props.value).toBe("dinner");
+      expect(addStatus()).toBe(uncertainStatus);
+      expect(text()).toContain(
+        "Food search is unavailable right now. Your query and food type are still selected. Choose Search to try again.",
+      );
+      expect(button("Search").props.disabled).toBe(false);
+      expect(
+        elements().find((node) => node.props.id === "quick-add-search-202-amount"),
+      ).toBeUndefined();
+      expect(
+        elements().find((node) => node.type === "button" && text(node) === "Load more results"),
+      ).toBeUndefined();
+      invoke(retiredForm, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(searchReads).toBe(2);
+      const retryForm = searchForm();
+      invoke(retryForm, "onSubmit", { preventDefault() {} });
+      invoke(retryForm, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(searchReads).toBe(3);
+      const reads = fetcher.mock.calls.filter(([url]) => url.startsWith("/api/foods/search?"));
+      expect(reads[2]?.[0]).toBe(reads[1]?.[0]);
+      expect(reads[2]?.[1]?.headers).toEqual(reads[1]?.[1]?.headers);
+      const params = new URL(String(reads[2]?.[0]), "https://web.example.test").searchParams;
+      expect(Object.fromEntries(params)).toEqual({
+        query: "Apple Pie",
+        intent: "branded",
+        limit: "20",
+      });
+      expect(text()).toContain("1 result shown for “Apple Pie”.");
+      expect(addStatus()).toBe(uncertainStatus);
+      for (const instance of ["search", "barcode"]) {
+        expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+        expect(field(`quick-add-${instance}-202-kind`).props.value).toBe("serving");
+      }
+      invoke(add("barcode"));
+      await hooks.settle();
+      const posts = pendingPosts(fetcher);
+      expect(posts).toHaveLength(2);
+      expect(posts[1]).toEqual(posts[0]);
+      expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+        foodVersionId: hit.foodVersionId,
+        mealSlot: "dinner",
+        occurredAt: "2026-09-24T17:00:00.000Z",
+        portion: { kind: "serving", amount: "2.5" },
+      });
+      expect(posts[1]?.[1]?.headers).toMatchObject({
+        "x-expected-profile-time-zone": "America/Chicago",
+      });
+      const receipt = elements().find(
+        (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+      )?.props.confirmation;
+      expect(receipt).toMatchObject({
+        localDate: "2026-09-24",
+        occurredAt: "2026-09-24T17:00:00.000Z",
+        timeZone: "America/Chicago",
+      });
+      empty = true;
+      invoke(searchForm(), "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(text()).toContain(
+        "No public foods matched “Apple Pie”. Try fewer words or another food type.",
+      );
+      expect(field("food-query").props.value).toBe("  Apple Pie  ");
+      expect(foodType().props.checked).toBe(true);
+      expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+      expect(
+        elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+          ?.props.confirmation,
+      ).toEqual(receipt);
+      expect(pendingPosts(fetcher)).toEqual(posts);
+      expect(operationId).toHaveBeenCalledOnce();
+      expect(authCount(fetcher)).toBe(1);
+      expect(
+        fetcher.mock.calls.filter(([url]) => url.startsWith("/api/foods/barcodes/")),
       ).toHaveLength(1);
     },
   );
