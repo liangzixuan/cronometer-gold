@@ -833,3 +833,5 @@ operation or refresh the profile. An uncertain pinned log retains its exact requ
 and operation ID; a later explicit save uses the recovered food revision.
 
 A failed custom-food archive reports that the archive is not confirmed and names Archive as the retry action. The original error detail remains visible. A retry requires confirmation and uses the same request and operation ID. Cancelling confirmation sends no request. The open editor, loaded-name filter, nutrition details and local diary draft remain available. An unrelated uncertain food log keeps its exact request and produces a matching diary receipt when confirmed.
+
+An unconfirmed private-food save keeps the raw draft and names Create private food or Save new version as the retry action. Keep the original error detail. An explicit retry of the unchanged draft uses the same path, body, headers and operation ID. Preserve the loaded-name filter, open nutrition details and independent pinned diary draft. After a confirmed save, clear the editor and show the saved version. An uncertain pinned log retains its exact request and matching receipt without another profile read.

@@ -1233,7 +1233,7 @@ export function CustomFoodsClient() {
     } catch (error) {
       if (!isCurrent()) return;
       setMessage(
-        `${error instanceof Error ? error.message : "Custom food could not be saved."} Submit again to retry safely.`,
+        `The save is not confirmed. Your draft is still available. Choose ${custom.id ? "Save new version" : "Create private food"} again to retry the same request. ${error instanceof Error ? error.message : "Custom food could not be saved."}`,
       );
     } finally {
       if (customWrite.current === token) {
