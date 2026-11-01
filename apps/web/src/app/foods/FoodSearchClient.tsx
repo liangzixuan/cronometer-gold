@@ -605,6 +605,7 @@ export function FoodSearchClient() {
 
   function chooseIntent(nextIntent: FoodSearchIntent) {
     if (!currentSearchDraft() || nextIntent === intent) return;
+    suppressedAutocompleteValue.current = null;
     searchDraftGeneration.current += 1;
     autocompleteController.current?.abort();
     searchController.current?.abort();

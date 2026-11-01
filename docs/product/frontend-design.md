@@ -630,6 +630,14 @@ Same-value edits preserve it. Current suggestions recover after the existing
 debounce; barcode results, shared portions, diary coordinates, saved receipts
 and exact uncertain Add retries remain intact.
 
+Changing Food type clears suggestion suppression from a completed manual search
+or a same-label suggestion selection. Current filtered suggestions return after
+the existing debounce, including a type departure and return before effects.
+Same-value type actions keep the panel closed. Retired choices remain inert; a
+fresh choice searches the current query and type once. Barcode results, shared
+exact portions, local day, time, meal, saved receipts and uncertain Add retries
+keep their existing values and request identities without extra profile reads.
+
 Barcode lookup submits the current normalized digits. Changing those digits
 retires an older form and input before the next view renders, including after an
 edit-and-restore. A same-value event keeps the current form usable. Typing does

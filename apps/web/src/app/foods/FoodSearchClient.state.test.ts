@@ -5143,6 +5143,133 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+  for (const action of ["manual-search", "same-label-selection"] as const) {
+    it.each([false, true])(
+      `recovers type-filtered suggestions after ${action} (return=%s)`,
+      async (returns) => {
+        let save = true;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") return save ? savedMutation(init) : failure("503");
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        await change("quick-add-time", "12:00");
+        invoke(add("barcode"));
+        await hooks.settle();
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: "2026-09-24",
+          timeZone: "America/Chicago",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+        });
+        const addStatus = () =>
+          text(elements().find((node) => String(node.props.className).startsWith("addStatus ")));
+        const savedStatus = addStatus();
+        const panel = () => elements().find((node) => node.props.className === "suggestionPanel");
+        const reads = (path: string) => fetcher.mock.calls.filter(([url]) => url.startsWith(path));
+        const chooseType = (value: string) => {
+          const radio = elements().find(
+            (node) => node.props.name === "food-intent" && node.props.value === value,
+          );
+          if (!radio) throw new Error("Missing food type");
+          invoke(radio, "onChange");
+        };
+        await change("food-query", "Apple Pie");
+        for (const callback of timers.values()) callback();
+        timers.clear();
+        await hooks.settle();
+        const retiredChoice = elements(panel()).find((node) => node.type === "button");
+        if (!retiredChoice) throw new Error("Missing initial suggestion");
+        if (action === "same-label-selection") invoke(retiredChoice);
+        else {
+          const form = elements().find((node) => node.props.className === "foodSearchForm");
+          if (!form) throw new Error("Missing search form");
+          invoke(form, "onSubmit", { preventDefault() {} });
+        }
+        await hooks.settle();
+        expect(panel()).toBeUndefined();
+        expect(reads("/api/foods/autocomplete?")).toHaveLength(1);
+        expect(reads("/api/foods/search?")).toHaveLength(2);
+        expect(field("food-query").props.value).toBe("Apple Pie");
+        chooseType("all");
+        await hooks.settle();
+        expect(panel()).toBeUndefined();
+        expect(timers.size).toBe(0);
+        chooseType("branded");
+        hooks.renderWithoutEffects();
+        if (returns) {
+          chooseType("all");
+          hooks.renderWithoutEffects();
+        }
+        invoke(retiredChoice);
+        expect(panel()).toBeUndefined();
+        expect(reads("/api/foods/autocomplete?")).toHaveLength(1);
+        expect(reads("/api/foods/search?")).toHaveLength(2);
+        hooks.render();
+        await hooks.settle();
+        expect(timers.size).toBe(1);
+        expect(panel()).toBeUndefined();
+        for (const callback of timers.values()) callback();
+        timers.clear();
+        await hooks.settle();
+        const suggestions = reads("/api/foods/autocomplete?");
+        expect(suggestions).toHaveLength(2);
+        const request = new URL(String(suggestions[1]?.[0]), "https://fixture.invalid");
+        expect(request.searchParams.get("query")).toBe("Apple Pie");
+        expect(request.searchParams.get("intent")).toBe(returns ? "all" : "branded");
+        expect(text(panel())).toContain("Apple Pie");
+        expect(addStatus()).toBe(savedStatus);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        const freshChoice = elements(panel()).find((node) => node.type === "button");
+        if (!freshChoice) throw new Error("Missing filtered suggestion");
+        invoke(freshChoice);
+        invoke(freshChoice);
+        invoke(retiredChoice);
+        await hooks.settle();
+        expect(panel()).toBeUndefined();
+        expect(reads("/api/foods/search?")).toHaveLength(3);
+        const searched = new URL(
+          String(reads("/api/foods/search?")[2]?.[0]),
+          "https://fixture.invalid",
+        );
+        expect(searched.searchParams.get("query")).toBe("Apple Pie");
+        expect(searched.searchParams.get("intent")).toBe(returns ? "all" : "branded");
+        for (const instance of ["search", "barcode"]) {
+          expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${instance}-202-kind`).props.value).toBe("serving");
+        }
+        expect(field("quick-add-date").props.value).toBe("2026-09-24");
+        expect(field("quick-add-meal").props.value).toBe("dinner");
+        expect(field("quick-add-time").props.value).toBe("12:00");
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        save = false;
+        invoke(add("search"));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        save = true;
+        invoke(add("barcode"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: "dinner",
+          occurredAt: "2026-09-24T17:00:00.000Z",
+          portion: { kind: "serving", amount: "2.5" },
+        });
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(authCount(fetcher)).toBe(1);
+        expect(reads("/api/foods/barcodes/")).toHaveLength(1);
+      },
+    );
+  }
 });
 
 describe("Food timezone profile retry", () => {
