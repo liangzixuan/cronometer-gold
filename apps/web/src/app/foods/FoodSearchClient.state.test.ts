@@ -4908,4 +4908,126 @@ describe("Food Add attempt admission", () => {
       },
     );
   }
+
+  for (const coordinate of ["date", "meal"] as const) {
+    it.each([false, true])(
+      `keeps diary review unavailable until the ${coordinate} route settles (return=%s)`,
+      async (returns) => {
+        let authReads = 0;
+        let writes = 0;
+        const expectedDate = coordinate === "date" && !returns ? "2026-09-25" : "2026-09-24";
+        const expectedMeal = coordinate === "meal" && !returns ? "lunch" : "dinner";
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(++authReads === 1 ? "America/Chicago" : "UTC");
+          if (init?.method === "POST") {
+            writes += 1;
+            if (writes === 1)
+              return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+            if (writes === 2) return failure("503");
+            const saved = await savedMutation(init, expectedDate).json();
+            saved.data.entry.timeZone = "UTC";
+            saved.data.entry.localTime = "12:34:00";
+            return Response.json(saved);
+          }
+          return publicResponse(url);
+        });
+        await ready(fetcher);
+        invoke(add("search"));
+        await hooks.settle();
+        expect(text()).toContain("This food was not added");
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        await change("quick-add-time", "12:34");
+        const review = (date: string) => button(`Confirm ${date} at 12:34 in UTC`);
+        const oldReady = review("2026-09-24");
+        expect(oldReady.props.disabled).toBe(false);
+        const calls = fetcher.mock.calls.length;
+        const original = route.query;
+        route.query =
+          coordinate === "date" ? "date=2026-09-25&meal=dinner" : "date=2026-09-24&meal=lunch";
+        hooks.renderWithoutEffects();
+        const departure = review("2026-09-24");
+        expect(departure.props.disabled).toBe(true);
+        invoke(departure);
+        if (returns) {
+          route.query = original;
+          hooks.renderWithoutEffects();
+        }
+        const unsettled = review("2026-09-24");
+        expect(unsettled.props.disabled).toBe(true);
+        invoke(unsettled);
+        invoke(oldReady);
+        hooks.renderWithoutEffects();
+        expect(add("search").props.disabled).toBe(true);
+        expect(add("barcode").props.disabled).toBe(true);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        hooks.render();
+        await hooks.settle();
+        expect(review(expectedDate).props.disabled).toBe(false);
+        const recovered = text();
+        invoke(departure);
+        invoke(unsettled);
+        invoke(oldReady);
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(review(expectedDate).props.disabled).toBe(false);
+        expect(add("search").props.disabled).toBe(true);
+        expect(add("barcode").props.disabled).toBe(true);
+        expect(field("quick-add-date").props.value).toBe(expectedDate);
+        expect(field("quick-add-meal").props.value).toBe(expectedMeal);
+        expect(field("quick-add-time").props.value).toBe("12:34");
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        expect(operationId).toHaveBeenCalledOnce();
+        invoke(review(expectedDate));
+        await hooks.settle();
+        expect(text()).toContain(`${expectedDate} at 12:34 is confirmed in UTC`);
+        expect(add("search").props.disabled).toBe(false);
+        expect(add("barcode").props.disabled).toBe(false);
+        expect(fetcher).toHaveBeenCalledTimes(calls);
+        invoke(add("search"));
+        await hooks.settle();
+        expect(text()).toContain("Choose Add again to retry safely");
+        invoke(add("barcode"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(posts[1]?.[0]).toContain(`date=${expectedDate}`);
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: expectedMeal,
+          occurredAt: `${expectedDate}T12:34:00.000Z`,
+        });
+        expect(posts[1]?.[1]?.headers).toMatchObject({ "x-expected-profile-time-zone": "UTC" });
+        expect(operationId).toHaveBeenCalledTimes(2);
+        const receipt = elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+        )?.props.confirmation;
+        expect(receipt).toMatchObject({
+          localDate: expectedDate,
+          timeZone: "UTC",
+          occurredAt: `${expectedDate}T12:34:00.000Z`,
+        });
+        const saved = text();
+        invoke(departure);
+        invoke(unsettled);
+        invoke(oldReady);
+        await hooks.settle();
+        expect(text()).toBe(saved);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toEqual(receipt);
+        expect(field("quick-add-date").props.value).toBe(expectedDate);
+        expect(field("quick-add-meal").props.value).toBe(expectedMeal);
+        expect(field("quick-add-time").props.value).toBe("12:34");
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+        }
+        expect(pendingPosts(fetcher)).toEqual(posts);
+        expect(authCount(fetcher)).toBe(2);
+        expect(operationId).toHaveBeenCalledTimes(2);
+      },
+    );
+  }
 });

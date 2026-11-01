@@ -994,6 +994,7 @@ export function FoodSearchClient() {
   function confirmDiaryDateReview() {
     if (
       !mounted.current ||
+      appliedSessionRoute !== sessionRouteRevision ||
       sessionStateRef.current !== "ready" ||
       activeAddOperation.current !== null ||
       sessionRoute.current.revision !== sessionRouteRevision ||
@@ -1328,7 +1329,11 @@ export function FoodSearchClient() {
           {dateReviewRequired ? (
             <button
               className="quickAddButton"
-              disabled={!timeZone || addingFoodVersion !== null}
+              disabled={
+                appliedSessionRoute !== sessionRouteRevision ||
+                !timeZone ||
+                addingFoodVersion !== null
+              }
               onClick={confirmDiaryDateReview}
               type="button"
             >

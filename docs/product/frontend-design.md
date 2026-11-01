@@ -492,6 +492,13 @@ link. Returning to the same route before its effects run must not restore them.
 Manual draft edits and unrelated URL parameters preserve the current receipt.
 After route settlement, a fresh addition or its exact retry can show a new receipt.
 
+The diary-day review confirmation stays disabled until a requested date or meal
+route is applied, including departure and return before effects. Retained disabled
+confirmations remain inert after recovery and saving. They cannot unlock Add or
+replace its status. Fresh confirmation uses the current destination without extra
+reads and preserves exact uncertain retries, shared portions, local time and saved
+receipts.
+
 Today, Yesterday, local time and repeated-minute occurrence callbacks rendered
 disabled during a requested date or meal route change stay inert after settlement,
 including departure and return before effects. Fresh controls recover without
