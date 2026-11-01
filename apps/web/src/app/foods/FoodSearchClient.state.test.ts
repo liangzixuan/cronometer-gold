@@ -5438,4 +5438,104 @@ describe("Food timezone profile retry", () => {
       },
     );
   }
+
+  for (const phase of ["pending-add", "pending-profile", "recovered"] as const) {
+    it.each(["search", "barcode"])(
+      `keeps timezone review guidance aligned with manual edits during ${phase} from %s`,
+      async (instance) => {
+        const addition = deferred<Response>();
+        const profile = deferred<Response>();
+        let reads = 0;
+        let writes = 0;
+        const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return ++reads === 1 ? session() : profile.promise;
+          if (init?.method === "POST") {
+            writes += 1;
+            if (writes === 1) return addition.promise;
+            if (writes === 2) return failure("503");
+            const date = new URL(url, "https://fixture.invalid").searchParams.get("date");
+            const saved = await savedMutation(init, date ?? "2026-09-24").json();
+            saved.data.entry.timeZone = "UTC";
+            saved.data.entry.localTime = "12:34:00";
+            return Response.json(saved);
+          }
+          return publicResponse(url);
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(FoodSearchClient);
+        await hooks.settle();
+        await search();
+        await change("food-barcode", "012345678905");
+        const form = elements().find(
+          (node) => node.type === "form" && node.props.className === "barcodeForm",
+        );
+        if (!form) throw new Error("Missing barcode form");
+        invoke(form, "onSubmit", { preventDefault: vi.fn() });
+        await hooks.settle();
+        await change("quick-add-search-202-amount", "2.500000");
+        await change("quick-add-time", "12:34");
+        invoke(add(instance));
+        await hooks.settle();
+        if (phase !== "pending-add") {
+          addition.resolve(Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 }));
+          await hooks.settle();
+        }
+        if (phase === "recovered") {
+          profile.resolve(session("UTC"));
+          await hooks.settle();
+        }
+        await change("quick-add-date", "2026-09-25");
+        await change("quick-add-meal", "snacks");
+        if (phase === "pending-add") {
+          addition.resolve(Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 }));
+          await hooks.settle();
+        }
+        if (phase !== "recovered") {
+          profile.resolve(session("UTC"));
+          await hooks.settle();
+        }
+        expect(text()).not.toContain("Review 2026-09-24");
+        expect(text()).toContain("Review the selected local day and time in that zone");
+        expect(text()).toContain("This food was not added");
+        expect(field("quick-add-date").props.value).toBe("2026-09-25");
+        expect(field("quick-add-meal").props.value).toBe("snacks");
+        expect(field("quick-add-time").props.value).toBe("12:34");
+        for (const panel of ["search", "barcode"]) {
+          expect(field(`quick-add-${panel}-202-amount`).props.value).toBe("2.500000");
+          expect(field(`quick-add-${panel}-202-kind`).props.value).toBe("serving");
+          expect(add(panel).props.disabled).toBe(true);
+        }
+        expect(authCount(fetcher)).toBe(2);
+        expect(pendingPosts(fetcher)).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledOnce();
+        invoke(button("Confirm 2026-09-25 at 12:34 in UTC"));
+        await hooks.settle();
+        expect(add(instance).props.disabled).toBe(false);
+        invoke(add(instance));
+        await hooks.settle();
+        invoke(add(instance === "search" ? "barcode" : "search"));
+        await hooks.settle();
+        const posts = pendingPosts(fetcher);
+        expect(posts).toHaveLength(3);
+        expect(posts[2]).toEqual(posts[1]);
+        expect(posts[1]?.[0]).toContain("date=2026-09-25");
+        expect(JSON.parse(String(posts[1]?.[1]?.body))).toMatchObject({
+          mealSlot: "snacks",
+          occurredAt: "2026-09-25T12:34:00.000Z",
+          portion: { kind: "serving", amount: "2.5" },
+        });
+        expect(posts[1]?.[1]?.headers).toMatchObject({ "x-expected-profile-time-zone": "UTC" });
+        expect(operationId).toHaveBeenCalledTimes(2);
+        expect(authCount(fetcher)).toBe(2);
+        expect(
+          elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)
+            ?.props.confirmation,
+        ).toMatchObject({
+          localDate: "2026-09-25",
+          timeZone: "UTC",
+          occurredAt: "2026-09-25T12:34:00.000Z",
+        });
+      },
+    );
+  }
 });

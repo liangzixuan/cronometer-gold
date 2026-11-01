@@ -137,12 +137,9 @@ export function fenceQuickAddForTimeZoneChange(
   return true;
 }
 
-export function quickAddTimeZoneReviewMessage(
-  localDate: string,
-  currentTimeZone: string | null,
-): string {
+export function quickAddTimeZoneReviewMessage(currentTimeZone: string | null): string {
   return currentTimeZone
-    ? `Your diary time zone changed to ${currentTimeZone}. This food was not added. Review ${localDate} as a local day in that zone, then confirm the day before adding again.`
+    ? `Your diary time zone changed to ${currentTimeZone}. This food was not added. Review the selected local day and time in that zone, then confirm the day before adding again.`
     : "Your diary time zone changed. This food was not added, and its stale retry was cleared. Current account settings could not be reloaded. Choose Retry diary time zone, then review the local diary day before adding again.";
 }
 
@@ -761,7 +758,7 @@ export function FoodSearchClient() {
     setAddMessage(
       currentTimeZone
         ? "Your diary time zone is available. Review the selected local day and time, then confirm before adding."
-        : quickAddTimeZoneReviewMessage(diaryDate, null),
+        : quickAddTimeZoneReviewMessage(null),
     );
   }
 
@@ -892,7 +889,7 @@ export function FoodSearchClient() {
           const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange(currentAdd);
           if (!currentAdd()) return;
           setAddState("error");
-          setAddMessage(quickAddTimeZoneReviewMessage(diaryDate, currentTimeZone));
+          setAddMessage(quickAddTimeZoneReviewMessage(currentTimeZone));
           return;
         }
         const message =

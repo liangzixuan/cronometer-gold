@@ -565,6 +565,13 @@ confirmation and saving. Only a fresh Add can submit after confirmation; exact
 uncertain retries keep their body, headers and operation ID. Public results,
 shared portions and the selected local day, time and meal remain intact.
 
+Time-zone conflict guidance refers to the selected local day and time, not the
+date captured by the rejected addition. Manual day and meal edits during the
+addition, profile read or recovered review must not leave instructions to review
+an older day. The confirmation names the current destination. Public results,
+shared exact portions and local time remain intact; a fresh Add and its exact
+uncertain retry use the confirmed destination.
+
 If the profile read after a no-write timezone conflict fails, offer Retry diary
 time zone without reloading the page. Each accepted retry reads only the profile.
 Keep public results, shared exact portions, local time and the selected day and

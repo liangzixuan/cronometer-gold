@@ -69,13 +69,13 @@ describe("web food quick-add time-zone recovery", () => {
   });
 
   it("tells the user no write occurred and requires date review before another add", () => {
-    const refreshed = quickAddTimeZoneReviewMessage("2026-09-08", "Pacific/Kiritimati");
+    const refreshed = quickAddTimeZoneReviewMessage("Pacific/Kiritimati");
     expect(refreshed).toContain("This food was not added");
-    expect(refreshed).toContain("Review 2026-09-08");
+    expect(refreshed).toContain("Review the selected local day and time in that zone");
     expect(refreshed).toContain("confirm the day before adding again");
     expect(refreshed).toContain("Pacific/Kiritimati");
 
-    const unavailable = quickAddTimeZoneReviewMessage("2026-09-08", null);
+    const unavailable = quickAddTimeZoneReviewMessage(null);
     expect(unavailable).toContain("stale retry was cleared");
     expect(unavailable).toContain("Retry diary time zone");
   });
