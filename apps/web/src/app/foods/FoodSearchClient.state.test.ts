@@ -1145,6 +1145,113 @@ describe("web search request retirement", () => {
     },
   );
 
+  it.each(["503", "network", "malformed"])(
+    "guides a failed %s continuation to the same cursor without disturbing food additions",
+    async (kind) => {
+      const reads: string[] = [];
+      let failSearch = false;
+      let posts = 0;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return ++posts === 1 ? failure("503") : savedMutation(init);
+        if (url.startsWith("/api/foods/search?")) {
+          reads.push(url);
+          if (failSearch) return failure(kind);
+          if (url.includes("cursor="))
+            return reads.length === 2 ? failure(kind) : Response.json(page([hit, freshHit]));
+          return Response.json(page([hit], "current_cursor"));
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await submitQuery("apple");
+      await change("food-barcode", "012345678905");
+      const barcodeForm = elements().find((node) => node.props.className === "barcodeForm");
+      if (!barcodeForm) throw new Error("Missing barcode form");
+      invoke(barcodeForm, "onSubmit", { preventDefault: vi.fn() });
+      await hooks.settle();
+      await change("quick-add-search-202-amount", "2.500000");
+      await change("quick-add-time", "12:00");
+      const barcodeAdd = () => elements().find((node) => node.props.className === "barcodeResult");
+      const add = () => {
+        const action = elements(barcodeAdd()).find(
+          (node) => node.props.className === "quickAddButton",
+        );
+        if (!action) throw new Error("Missing barcode Add");
+        invoke(action);
+      };
+      add();
+      await hooks.settle();
+      const addStatus = () =>
+        text(elements().find((node) => String(node.props.className).startsWith("addStatus ")));
+      const uncertainStatus = addStatus();
+      expect(pendingPosts(fetcher)).toHaveLength(1);
+      const retired = button("Load more results");
+      invoke(retired);
+      await hooks.settle();
+      expect(searchView().names).toEqual(["Apple Pie"]);
+      expect(searchView().loadMore).toBe(true);
+      expect(addStatus()).toBe(uncertainStatus);
+      for (const instance of ["search", "barcode"]) {
+        expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
+        expect(field(`quick-add-${instance}-202-kind`).props.value).toBe("serving");
+      }
+      expect(field("quick-add-date").props.value).toBe("2026-09-24");
+      expect(field("quick-add-time").props.value).toBe("12:00");
+      expect(field("quick-add-meal").props.value).toBe("dinner");
+      expect(searchView().status).toBe(
+        "More matching foods could not be loaded. Your current results are still available. Choose Load more results to try again.",
+      );
+      invoke(retired);
+      await hooks.settle();
+      expect(reads).toHaveLength(2);
+      invoke(button("Load more results"));
+      await hooks.settle();
+      expect(reads).toHaveLength(3);
+      expect(reads[2]).toBe(reads[1]);
+      expect(new URL(reads[2] ?? "", "https://example.test").searchParams.get("cursor")).toBe(
+        "current_cursor",
+      );
+      expect(searchView().names).toEqual(["Apple Pie", "Fresh Pear"]);
+      expect(searchView().status).toBe("2 results shown for “apple”.");
+      expect(searchView().loadMore).toBe(false);
+      expect(addStatus()).toBe(uncertainStatus);
+      add();
+      await hooks.settle();
+      const writes = pendingPosts(fetcher);
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+      expect(operationId).toHaveBeenCalledOnce();
+      const receipt = elements().find(
+        (node) => node.type === FoodAddConfirmation && node.props.confirmation !== null,
+      )?.props.confirmation;
+      expect(receipt).toMatchObject({
+        localDate: "2026-09-24",
+        occurredAt: "2026-09-24T17:00:00.000Z",
+        timeZone: "America/Chicago",
+      });
+      failSearch = true;
+      await submitQuery("pear");
+      expect(searchView().status).toBe(
+        "Food search is unavailable right now. Your query was not saved; please try again.",
+      );
+      expect(field("food-query").props.value).toBe("pear");
+      expect(searchView().names).toEqual([]);
+      expect(searchView().loadMore).toBe(false);
+      expect(
+        elements().find(
+          (node) => node.type === FoodAddConfirmation && node.props.confirmation !== null,
+        )?.props.confirmation,
+      ).toEqual(receipt);
+      expect(field("quick-add-barcode-202-amount").props.value).toBe("2.500000");
+      expect(pendingPosts(fetcher)).toHaveLength(2);
+      expect(operationId).toHaveBeenCalledOnce();
+      expect(authCount(fetcher)).toBe(1);
+    },
+  );
+
   it("appends a current continuation without duplicating versions", async () => {
     const fetcher = vi.fn(async (url: string) => {
       if (url === "/api/auth/me") return session();

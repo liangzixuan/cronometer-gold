@@ -779,3 +779,14 @@ log scenarios. Date-specific cases set their own clock. Opening a log during eit
 occurrence of a repeated local minute still requires an explicit Earlier or Later
 choice before allocating an operation or sending a write. This also keeps unrelated
 profile-recovery and exact-retry tests independent of the machine's current time.
+
+
+### Food search continuation recovery
+
+If loading more catalogue results fails, explain that the current results remain
+available and name Load more results as the retry action. Retry the same query,
+food type and cursor; append matching versions without duplicates. Keep the
+barcode result, shared exact portions, diary day, time and meal, and any uncertain
+Add request unchanged. An explicit Add retry retains its body, headers and
+operation ID. Initial-search failure and expired-cursor recovery keep their
+existing guidance.

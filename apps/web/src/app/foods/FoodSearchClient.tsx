@@ -549,7 +549,9 @@ export function FoodSearchClient() {
         if (isCurrent()) {
           setSearchState("error");
           setSearchMessage(
-            "Food search is unavailable right now. Your query was not saved; please try again.",
+            cursor === undefined
+              ? "Food search is unavailable right now. Your query was not saved; please try again."
+              : "More matching foods could not be loaded. Your current results are still available. Choose Load more results to try again.",
           );
         }
       }
