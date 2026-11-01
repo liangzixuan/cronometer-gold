@@ -260,6 +260,9 @@ export function FoodSearchClient() {
         : null,
     [diaryDate, localTime, timeZone],
   );
+  const occurrenceRequired =
+    timeResolution?.kind === "ambiguous" &&
+    !timeResolution.candidates.some((candidate) => candidate.occurredAt === selectedOccurredAt);
   const [addState, setAddState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
   const [addMessage, setAddMessage] = useState("");
@@ -1039,7 +1042,8 @@ export function FoodSearchClient() {
       sessionRoute.current.appliedRevision !== sessionRouteRevision ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       !dateReviewRequired ||
-      !timeZone
+      !timeZone ||
+      occurrenceRequired
     ) {
       return;
     }
@@ -1343,7 +1347,9 @@ export function FoodSearchClient() {
           {timeResolution?.kind === "ambiguous" ? (
             <fieldset className="entryActions" disabled={!canEditDiaryCoordinates()}>
               <legend>Repeated food time</legend>
-              <small>Choose Earlier or Later for this repeated local minute.</small>
+              <small id="quick-add-occurrence-help">
+                Choose Earlier or Later for this repeated local minute.
+              </small>
               {timeResolution.candidates.map((candidate, index) => (
                 <button
                   key={candidate.occurredAt}
@@ -1364,8 +1370,10 @@ export function FoodSearchClient() {
               disabled={
                 appliedSessionRoute !== sessionRouteRevision ||
                 !timeZone ||
-                addingFoodVersion !== null
+                addingFoodVersion !== null ||
+                occurrenceRequired
               }
+              aria-describedby={occurrenceRequired ? "quick-add-occurrence-help" : undefined}
               onClick={confirmDiaryDateReview}
               type="button"
             >
