@@ -6657,3 +6657,152 @@ describe("My foods retired private-data retries", () => {
     },
   );
 });
+
+describe("My foods retired continuation actions", () => {
+  it.each(["ready", "loading"] as const)(
+    "keeps a retained %s continuation inert after failure and recovery",
+    async (phase) => {
+      let sequence = 0;
+      const operationId = vi.fn(
+        () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+      );
+      vi.stubGlobal("crypto", { randomUUID: operationId });
+      const first = food();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first]);
+      state.cursor = "next page/+?=";
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      await toggle(first);
+      await click("Revise", card(first));
+      await change("Name", "  Unsaved lunch food  ");
+      await change("Notes (optional)", "Raw notes\nkeep this line");
+      await prepareLog();
+      await change(savedFilterLabel, "  SAVED food  ");
+      state.write = () => Response.json({ error: "Log response unavailable" }, { status: 503 });
+      await submit("Log exact version");
+      const originalLog = requiredCustom(writes()[0]?.[1]);
+      const drafts = formValues();
+      const requests = fetcher.mock.calls.length;
+      const ids = operationId.mock.calls.length;
+      const pending = deferred<Response>();
+      state.continuation = () => pending.promise;
+      const ready = button("Load more private foods");
+      invoke(ready, "onClick");
+      await hooks.settle();
+      const loading = button("Load more private foods");
+      expect(loading.props.disabled).toBe(true);
+      const retained = phase === "ready" ? ready : loading;
+      pending.resolve(Response.json({ error: "Next page unavailable" }, { status: 503 }));
+      await hooks.settle();
+      const guidance = status();
+      expect(guidance).toBe(
+        "Your loaded foods are still available. Choose Load more private foods to try again. Next page unavailable",
+      );
+      invoke(retained, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+      expect(status()).toBe(guidance);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      expect(operationId).toHaveBeenCalledTimes(ids);
+      expect(writes()).toHaveLength(1);
+
+      const retry = deferred<Response>();
+      const ownerCheck = deferred<Response>();
+      state.continuation = () => retry.promise;
+      state.auth = () => ownerCheck.promise;
+      await click("Load more private foods");
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      retry.resolve(page([first, second], "terminal page"));
+      await hooks.settle();
+      expect(savedNames()).toEqual([first.currentVersion.name]);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+      ownerCheck.resolve(session(owner));
+      await hooks.settle();
+      expect(savedNames()).toEqual([first.currentVersion.name, second.currentVersion.name]);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      expect(filterStatus()).toContain("2 of 2 loaded saved foods match.");
+      const continuations = fetcher.mock.calls.filter(([url]) =>
+        url.startsWith("/api/retention/custom-foods?limit=50&cursor="),
+      );
+      expect(continuations).toHaveLength(2);
+      expect(continuations.map(([url]) => url)).toEqual(
+        Array(2).fill("/api/retention/custom-foods?limit=50&cursor=next%20page%2F%2B%3F%3D"),
+      );
+      const { signal: firstSignal, ...firstRequest } = requiredCustom(continuations[0]?.[1]);
+      const { signal: retrySignal, ...retryRequest } = requiredCustom(continuations[1]?.[1]);
+      expect(retryRequest).toEqual(firstRequest);
+      expect(retrySignal).not.toBe(firstSignal);
+      expect(retrySignal?.aborted).toBe(false);
+      const recovered = status();
+      invoke(retained, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+      expect(status()).toBe(recovered);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      expect(operationId).toHaveBeenCalledTimes(ids);
+
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[1]?.[1]).toEqual(originalLog);
+      expect(operationId).toHaveBeenCalledTimes(ids);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      const saved = status();
+      const receiptTime = confirmedCustomTime();
+      const receiptLink = confirmedCustomLink();
+      invoke(retained, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests + 4);
+      expect(status()).toBe(saved);
+      expect(confirmedCustomTime()).toEqual(receiptTime);
+      expect(confirmedCustomLink()).toEqual(receiptLink);
+      expect(field("Name").props.value).toBe("  Unsaved lunch food  ");
+      expect(field("Notes (optional)").props.value).toBe("Raw notes\nkeep this line");
+      expect(field(savedFilterLabel).props.value).toBe("  SAVED food  ");
+      expect(details(first).props.hidden).toBe(false);
+      expect(operationId).toHaveBeenCalledTimes(ids);
+
+      state.auth = null;
+      state.continuation = () => page([]);
+      await click("Load more private foods");
+      expect(fetcher).toHaveBeenCalledTimes(requests + 6);
+      expect(fetcher.mock.calls.at(-2)?.[0]).toBe(
+        "/api/retention/custom-foods?limit=50&cursor=terminal%20page",
+      );
+      expect(savedNames()).toEqual([first.currentVersion.name, second.currentVersion.name]);
+      expect(filterStatus()).toContain("No more records in this listing.");
+      expect(writes()).toHaveLength(2);
+    },
+  );
+
+  it("starts one continuation for duplicate ready and forced loading actions", async () => {
+    const { state, fetcher, writes } = workspace([food()]);
+    state.cursor = "next";
+    await mount();
+    const requests = fetcher.mock.calls.length;
+    const pending = deferred<Response>();
+    state.continuation = () => pending.promise;
+    const ready = button("Load more private foods");
+    invoke(ready, "onClick");
+    invoke(ready, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+    const loading = button("Load more private foods");
+    expect(loading.props.disabled).toBe(true);
+    invoke(loading, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+    pending.resolve(Response.json({ error: "Next page unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Load more private foods").props.disabled).toBe(false);
+    expect(status()).toContain("Next page unavailable");
+    expect(writes()).toHaveLength(0);
+  });
+});

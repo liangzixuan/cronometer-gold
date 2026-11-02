@@ -299,6 +299,8 @@ export function CustomFoodsClient() {
   const renderedFilterGeneration = savedFoodFilterGeneration.current;
   const installedFoods = useRef<readonly CustomFood[]>([]);
   const foodListGeneration = useRef(0);
+  const customPageGeneration = useRef(0);
+  const renderedPageGeneration = customPageGeneration.current;
   const foodDetailsReady = useRef(false);
   const disclosureGeneration = useRef(0);
   const disclosureVersions = useRef(new Map<CustomFood, number>());
@@ -902,10 +904,17 @@ export function CustomFoodsClient() {
     signInAgain,
   ]);
   async function loadMoreCustomFoods() {
-    if (!customFoodCursor) return;
+    if (
+      !customFoodCursor ||
+      busy === "custom-more" ||
+      customPageGeneration.current !== renderedPageGeneration ||
+      foodListGeneration.current !== renderedListGeneration
+    )
+      return;
     const initiatingOwnerUserId = ownerUserId.current;
     if (initiatingOwnerUserId === null || privateUiClosed.current) return;
     retireCustomArchive();
+    customPageGeneration.current += 1;
     const controller = new AbortController();
     privateReadControllers.current.add(controller);
     setBusy("custom-more");
