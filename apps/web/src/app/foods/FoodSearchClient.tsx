@@ -797,6 +797,8 @@ export function FoodSearchClient() {
       sessionState !== "ready" ||
       sessionStateRef.current !== "ready" ||
       dateReviewRequired ||
+      localTimeError !== null ||
+      occurrenceRequired ||
       !isPositiveDecimal(draft.amount) ||
       dayReviewGeneration.current !== renderedDayReviewGeneration ||
       mealGeneration.current !== renderedMealGeneration ||
@@ -1168,12 +1170,21 @@ export function FoodSearchClient() {
           </small>
           <button
             aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
+            aria-describedby={
+              localTimeError
+                ? "quick-add-time-help"
+                : occurrenceRequired
+                  ? "quick-add-occurrence-help"
+                  : undefined
+            }
             className="quickAddButton"
             disabled={
               busy ||
               appliedSessionRoute !== sessionRouteRevision ||
               sessionState !== "ready" ||
               dateReviewRequired ||
+              localTimeError !== null ||
+              occurrenceRequired ||
               !amountIsValid
             }
             onClick={() => void addFood(food, draft, instance, draftGeneration)}
