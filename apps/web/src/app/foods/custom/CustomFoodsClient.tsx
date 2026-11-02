@@ -1213,6 +1213,7 @@ export function CustomFoodsClient() {
   async function saveCustomFood() {
     if (
       !canUseCustomControls() ||
+      routeDestination.current !== renderedRouteDestination ||
       !session ||
       customSaving ||
       customWriteGeneration.current !== renderedWriteGeneration ||

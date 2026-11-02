@@ -7306,3 +7306,133 @@ describe("My foods conflict reload route admission", () => {
     },
   );
 });
+
+describe("My foods save route admission", () => {
+  for (const mode of ["create", "revise"] as const) {
+    it.each(["date", "meal"] as const)(
+      `retires a ${mode} submit across %s departure and return`,
+      async (transition) => {
+        let sequence = 0;
+        const operationId = vi.fn(
+          () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+        );
+        vi.stubGlobal("crypto", { randomUUID: operationId });
+        const first = food();
+        const second = food(2);
+        const { state, fetcher, writes } = workspace([first, second]);
+        state.picker = [
+          {
+            id: "2",
+            code: "protein",
+            name: "Picker protein",
+            unit: "g",
+            category: "macronutrient",
+          },
+        ];
+        navigation.search = "date=2026-09-09&meal=lunch";
+        await mount();
+        if (mode === "revise") await click("Revise", card(second));
+        await change("Name", "  Saved lunch food  ");
+        await change("Notes (optional)", "Raw notes\nkeep this line");
+        await change("Amount per 100 grams 1", "0.125");
+        await toggle(first);
+        await prepareLog();
+        await change(savedFilterLabel, "  saved  ");
+        state.write = () => Response.json({ error: "Uncertain log" }, { status: 503 });
+        await submit("Log exact version");
+        const logRequest = requiredCustom(writes()[0]?.[1]);
+        const raw = formValues();
+        const logDraft = elements(logForm()).map((node) => node.props.value);
+        const requests = fetcher.mock.calls.length;
+        const ids = operationId.mock.calls.length;
+        const label = mode === "create" ? "Create private food" : "Save new version";
+        state.write = () => Response.json({ error: "Uncertain save" }, { status: 503 });
+        await submit(label);
+        const attempted = requiredCustom(writes()[1]?.[1]);
+        expect(writes()[1]?.[0]).toBe(
+          mode === "create"
+            ? "/api/retention/custom-foods"
+            : `/api/retention/custom-foods/${second.id}/revisions`,
+        );
+        expect(JSON.parse(String(attempted.body))).toEqual({
+          name: "Saved lunch food",
+          brandName: null,
+          notes: "Raw notes\nkeep this line",
+          serving: mode === "revise" ? { label: "Saved portion", grams: "125.25" } : null,
+          nutrients: [{ nutrientId: "2", state: "quantified", amountPer100Grams: "0.125" }],
+        });
+        const uncertain = status();
+        expect(uncertain).toBe(
+          `The save is not confirmed. Your draft is still available. Choose ${label} again to retry the same request. Uncertain save`,
+        );
+        expect(button(label).props.disabled).toBe(false);
+        const retained = requiredCustom(
+          elements().find((node) => node.type === "form" && text(node).includes(label)),
+        );
+        navigation.search =
+          transition === "date" ? "date=2026-09-11&meal=lunch" : "date=2026-09-09&meal=dinner";
+        hooks.renderWithoutEffects();
+        invoke(retained, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+        expect(status()).toBe(uncertain);
+        navigation.search = "date=2026-09-09&meal=lunch";
+        hooks.renderWithoutEffects();
+        invoke(retained, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(2);
+        expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        expect(status()).toBe(uncertain);
+        expect(formValues()).toEqual(raw);
+        expect(details(first).props.hidden).toBe(false);
+        const saved = {
+          ...food(mode === "create" ? 3 : 2),
+          revision: mode === "create" ? "1" : "2",
+          currentVersion: {
+            ...second.currentVersion,
+            id: "9007199254740999",
+            versionNumber: mode === "create" ? 1 : 2,
+            name: "Saved lunch food",
+            notes: "Raw notes\nkeep this line",
+            serving: mode === "create" ? null : second.currentVersion.serving,
+            nutrients: [
+              {
+                nutrient: requiredCustom(second.currentVersion.nutrients[0]).nutrient,
+                state: "quantified" as const,
+                amountPer100Grams: "0.125",
+              },
+            ],
+          },
+        };
+        state.write = () => Response.json({ data: { replayed: true, customFood: saved } });
+        await submit(label);
+        expect(writes()).toHaveLength(3);
+        expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+        expect(writes()[2]?.[1]).toEqual(attempted);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        expect(status()).toBe(
+          `Saved private custom food version ${saved.currentVersion.versionNumber}.`,
+        );
+        expect(field("Name").props.value).toBe("");
+        expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+        expect(details(first).props.hidden).toBe(false);
+        expect(elements(logForm()).map((node) => node.props.value)).toEqual(logDraft);
+        const savedStatus = status();
+        invoke(retained, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(savedStatus);
+        expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+        state.write = (_url, init) => Response.json(matchedLogData(init, true));
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(4);
+        expect(writes()[3]?.[0]).toBe(writes()[0]?.[0]);
+        expect(writes()[3]?.[1]).toEqual(logRequest);
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      },
+    );
+  }
+});
