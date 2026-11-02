@@ -1417,13 +1417,11 @@ export function CustomFoodsClient() {
       activeLog.current !== null ||
       !customLogQuantityValid ||
       customLogTimeError !== null ||
-      customLogOccurrenceRequired
+      customLogOccurrenceRequired ||
+      customLogDateReviewRequired
     )
       return;
     retireCustomArchive();
-    if (customLogDateReviewRequired) {
-      return setMessage("Review and confirm the local diary day before logging again.");
-    }
     if (!session || !customLog) return;
     const initiatingOwnerUserId = session.user.id;
     const serving = customLog.food.currentVersion.serving;

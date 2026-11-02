@@ -6122,3 +6122,111 @@ describe("My foods diary time-zone retry", () => {
     },
   );
 });
+
+describe("My foods disabled date-review log submits", () => {
+  for (const kind of ["grams", "serving"] as const) {
+    it.each(["America/Chicago", "America/New_York"])(
+      `preserves a ${kind} draft and guidance until fresh confirmation in %s`,
+      async (zone) => {
+        let sequence = 0;
+        const operationId = vi.fn(
+          () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+        );
+        vi.stubGlobal("crypto", { randomUUID: operationId });
+        const { state, fetcher, writes } = workspace([food()]);
+        await mount();
+        await prepareLog();
+        await change("Name", "  Keep my food draft  ");
+        await change("Notes (optional)", "  Keep my notes  ");
+        const portion = requiredCustom(
+          elements(logForm()).find(
+            (node) =>
+              node.type === "select" && ["grams", "serving"].includes(String(node.props.value)),
+          ),
+        );
+        invoke(portion, "onChange", { target: { value: kind } });
+        await hooks.settle();
+        state.write = () => {
+          state.timeZone = zone;
+          return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+        };
+        await submit("Log exact version");
+        const original = requiredCustom(writes()[0]?.[1]);
+        const disabledForm = logForm();
+        const raw = formValues();
+        const requests = fetcher.mock.calls.length;
+        const ids = operationId.mock.calls.length;
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(status()).toContain("This private food was not logged");
+        expect(status()).toContain("Review the selected local day and time");
+        const reviewMessage = status();
+        invoke(disabledForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(reviewMessage);
+        expect(formValues()).toEqual(raw);
+        expect(fetcher).toHaveBeenCalledTimes(requests);
+        expect(writes()).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledTimes(ids);
+        await click("Confirm 2026-09-09 as local day");
+        const confirmed = status();
+        expect(button("Log exact version").props.disabled).toBe(false);
+        invoke(disabledForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(confirmed);
+        expect(formValues()).toEqual(raw);
+        expect(fetcher).toHaveBeenCalledTimes(requests);
+        expect(operationId).toHaveBeenCalledTimes(ids);
+        state.write = () => Response.json({ error: "Uncertain log" }, { status: 503 });
+        await submit("Log exact version");
+        const attempted = requiredCustom(writes()[1]?.[1]);
+        const instant =
+          zone === "America/Chicago" ? "2026-09-09T18:14:00.000Z" : "2026-09-09T17:14:00.000Z";
+        expect(writes()[1]?.[0]).toBe(
+          `/api/retention/custom-foods/${food().id}/log?profileTimeZonePrecondition=v1`,
+        );
+        expect(JSON.parse(String(attempted.body))).toEqual({
+          customFoodVersionId: food().currentVersion.id,
+          portion:
+            kind === "grams"
+              ? { kind: "grams", grams: "2.375" }
+              : { kind: "serving", servingId: "1", amount: "2.375" },
+          mealSlot: "snacks",
+          occurredAt: instant,
+        });
+        expect(new Headers(attempted.headers).get("x-expected-profile-time-zone")).toBe(zone);
+        expect(new Headers(attempted.headers).get("idempotency-key")).not.toBe(
+          new Headers(original.headers).get("idempotency-key"),
+        );
+        const uncertain = status();
+        expect(uncertain).toContain("The log is not confirmed");
+        invoke(disabledForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(uncertain);
+        expect(formValues()).toEqual(raw);
+        expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+        expect(writes()).toHaveLength(2);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        state.write = (_url, init) => Response.json(matchedLogData(init, true));
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(3);
+        expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+        expect(writes()[2]?.[1]).toEqual(attempted);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        expect(confirmedCustomTime().props.dateTime).toBe(instant);
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(field("Name").props.value).toBe("  Keep my food draft  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep my notes  ");
+        const saved = status();
+        const receipt = confirmedCustomTime();
+        const link = confirmedCustomLink();
+        invoke(disabledForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(saved);
+        expect(confirmedCustomTime()).toEqual(receipt);
+        expect(confirmedCustomLink()).toEqual(link);
+        expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      },
+    );
+  }
+});
