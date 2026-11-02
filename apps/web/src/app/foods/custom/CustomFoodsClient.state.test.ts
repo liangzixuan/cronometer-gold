@@ -6983,3 +6983,116 @@ describe("My foods independent page and log loading", () => {
     },
   );
 });
+
+describe("My foods continuation view admission", () => {
+  it.each(["date", "meal", "visibility"] as const)(
+    "retires the ready continuation across %s departure and return",
+    async (transition) => {
+      const life = visibility();
+      const operationId = vi.fn(() => "a14be8a7-2cf4-42ad-93f5-82cd415fa0a6");
+      vi.stubGlobal("crypto", { randomUUID: operationId });
+      const first = food();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first]);
+      state.cursor = "next page/+?=";
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      await click("Revise", card(first));
+      await change("Name", "  Keep my food draft  ");
+      await change("Notes (optional)", "Raw notes\nkeep this line");
+      await prepareLog();
+      await change(savedFilterLabel, "  SAVED food  ");
+      state.write = () => Response.json({ error: "Log response unavailable" }, { status: 503 });
+      await submit("Log exact version");
+      const originalLog = requiredCustom(writes()[0]?.[1]);
+      const drafts = formValues();
+      const ready = button("Load more private foods");
+      const requests = fetcher.mock.calls.length;
+      const uncertain = status();
+      state.continuation = () => Response.json({ error: "Next page unavailable" }, { status: 503 });
+      if (transition === "visibility") {
+        life.document.visibilityState = "hidden";
+        invoke(ready, "onClick");
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(requests);
+        await life.set("hidden");
+        await life.set("visible");
+      } else {
+        navigation.search =
+          transition === "date" ? "date=2026-09-11&meal=lunch" : "date=2026-09-09&meal=dinner";
+        hooks.renderWithoutEffects();
+        invoke(ready, "onClick");
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(requests);
+        navigation.search = "date=2026-09-09&meal=lunch";
+        hooks.renderWithoutEffects();
+      }
+      invoke(ready, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      expect(status()).toBe(uncertain);
+      expect(formValues()).toEqual(drafts);
+      expect(operationId).toHaveBeenCalledTimes(1);
+      await toggle(first);
+      const reopened = formValues();
+      invoke(ready, "onClick");
+      await hooks.settle();
+      expect(details(first).props.hidden).toBe(false);
+      expect(formValues()).toEqual(reopened);
+      expect(status()).toBe(uncertain);
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+
+      await click("Load more private foods");
+      expect(status()).toContain("Next page unavailable");
+      expect(formValues()).toEqual(drafts);
+      const retry = deferred<Response>();
+      const ownerCheck = deferred<Response>();
+      state.continuation = () => retry.promise;
+      state.auth = () => ownerCheck.promise;
+      await click("Load more private foods");
+      retry.resolve(page([first, second], "terminal page"));
+      await hooks.settle();
+      expect(savedNames()).toEqual([first.currentVersion.name]);
+      expect(button("Load more private foods").props.disabled).toBe(true);
+      ownerCheck.resolve(session(owner));
+      await hooks.settle();
+      expect(savedNames()).toEqual([first.currentVersion.name, second.currentVersion.name]);
+      expect(details(first).props.hidden).toBe(false);
+      expect(formValues()).toEqual(drafts);
+      const pages = fetcher.mock.calls.filter(([url]) => url.includes("&cursor="));
+      expect(pages).toHaveLength(2);
+      expect(pages.map(([url]) => url)).toEqual(
+        Array(2).fill("/api/retention/custom-foods?limit=50&cursor=next%20page%2F%2B%3F%3D"),
+      );
+      const { signal: originalSignal, ...originalPage } = requiredCustom(pages[0]?.[1]);
+      const { signal: retrySignal, ...retryPage } = requiredCustom(pages[1]?.[1]);
+      expect(retryPage).toEqual(originalPage);
+      expect(retrySignal).not.toBe(originalSignal);
+      expect(retrySignal?.aborted).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[1]?.[1]).toEqual(originalLog);
+      expect(operationId).toHaveBeenCalledTimes(1);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      const saved = status();
+      invoke(ready, "onClick");
+      await hooks.settle();
+      expect(status()).toBe(saved);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 4);
+      expect(field("Name").props.value).toBe("  Keep my food draft  ");
+      expect(field(savedFilterLabel).props.value).toBe("  SAVED food  ");
+      expect(details(first).props.hidden).toBe(false);
+      state.auth = null;
+      state.continuation = () => page([]);
+      await click("Load more private foods");
+      expect(fetcher.mock.calls.at(-2)?.[0]).toBe(
+        "/api/retention/custom-foods?limit=50&cursor=terminal%20page",
+      );
+      expect(fetcher).toHaveBeenCalledTimes(requests + 6);
+    },
+  );
+});

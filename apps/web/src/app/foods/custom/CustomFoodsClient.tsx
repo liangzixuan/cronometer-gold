@@ -907,6 +907,7 @@ export function CustomFoodsClient() {
   ]);
   async function loadMoreCustomFoods() {
     if (
+      !savedFoodViewIsCurrent() ||
       !customFoodCursor ||
       customPageLoading ||
       customPageGeneration.current !== renderedPageGeneration ||
@@ -1338,7 +1339,7 @@ export function CustomFoodsClient() {
     }
   }
 
-  function archiveViewIsCurrent() {
+  function savedFoodViewIsCurrent() {
     return (
       mounted.current &&
       visible.current &&
@@ -1355,7 +1356,7 @@ export function CustomFoodsClient() {
   }
   function canArchiveCustomFood(food: CustomFood) {
     return (
-      archiveViewIsCurrent() &&
+      savedFoodViewIsCurrent() &&
       archiveGeneration.current === renderedArchiveGeneration &&
       customArchive.current === null &&
       customWrite.current === null &&
@@ -1389,7 +1390,7 @@ export function CustomFoodsClient() {
     const current = () =>
       customArchive.current === token &&
       !token.controller.signal.aborted &&
-      archiveViewIsCurrent() &&
+      savedFoodViewIsCurrent() &&
       installedFoods.current.includes(food);
     setBusy(token.busyKey);
     try {
@@ -1432,7 +1433,7 @@ export function CustomFoodsClient() {
           `The archive is not confirmed. Choose Archive again to retry the same request. ${error instanceof Error ? error.message : "Custom food could not be archived."}`,
         );
     } finally {
-      if (customArchive.current === token && archiveViewIsCurrent()) retireCustomArchive();
+      if (customArchive.current === token && savedFoodViewIsCurrent()) retireCustomArchive();
     }
   }
 
