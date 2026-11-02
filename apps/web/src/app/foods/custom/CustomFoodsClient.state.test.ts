@@ -5912,3 +5912,213 @@ describe("My foods time-review confirmation availability", () => {
     );
   }
 });
+
+describe("My foods diary time-zone retry", () => {
+  async function blockedLog(kind: "grams" | "serving", failure: "http" | "network" | "malformed") {
+    let sequence = 0;
+    const operationId = vi.fn(
+      () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+    );
+    vi.stubGlobal("crypto", { randomUUID: operationId });
+    const workspaceState = workspace([food()]);
+    const { state } = workspaceState;
+    await mount();
+    await prepareLog();
+    await change("Name", "  Keep my unfinished food  ");
+    await change("Notes (optional)", "  Keep these notes  ");
+    const portion = requiredCustom(
+      elements(logForm()).find(
+        (node) => node.type === "select" && ["grams", "serving"].includes(String(node.props.value)),
+      ),
+    );
+    invoke(portion, "onChange", { target: { value: kind } });
+    await hooks.settle();
+    state.auth = () => {
+      if (failure === "network") throw new TypeError("Profile connection lost");
+      return failure === "http"
+        ? Response.json({ error: "Profile unavailable" }, { status: 503 })
+        : Response.json({ data: {} });
+    };
+    state.write = () =>
+      Response.json({ error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+    await submit("Log exact version");
+    expect(status()).toContain("Choose Retry diary time zone");
+    expect(button("Retry diary time zone").props.disabled).toBe(false);
+    expect(button("Log exact version").props.disabled).toBe(true);
+    return { ...workspaceState, operationId };
+  }
+
+  for (const kind of ["grams", "serving"] as const) {
+    it.each(["http", "network", "malformed"] as const)(
+      `recovers a retained ${kind} log after %s profile failure`,
+      async (failure) => {
+        const { state, fetcher, writes, operationId } = await blockedLog(kind, failure);
+        const original = requiredCustom(writes()[0]?.[1]);
+        const raw = formValues();
+        const reads = fetcher.mock.calls.length;
+        const ids = operationId.mock.calls.length;
+        const oldRetry = button("Retry diary time zone");
+        const pending = deferred<Response>();
+        state.auth = () => pending.promise;
+        invoke(oldRetry, "onClick");
+        invoke(oldRetry, "onClick");
+        await hooks.settle();
+        const loadingRetry = button("Retry diary time zone");
+        expect(loadingRetry.props.disabled).toBe(true);
+        expect(status()).toBe("Checking your diary time zone…");
+        expect(formValues()).toEqual(raw);
+        expect(fetcher).toHaveBeenCalledTimes(reads + 1);
+        invoke(loadingRetry, "onClick");
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(reads + 1);
+        pending.resolve(Response.json({ error: "Still unavailable" }, { status: 503 }));
+        await hooks.settle();
+        expect(status()).toContain("Choose Retry diary time zone");
+        const failedMessage = status();
+        invoke(oldRetry, "onClick");
+        invoke(loadingRetry, "onClick");
+        await hooks.settle();
+        expect(status()).toBe(failedMessage);
+        expect(fetcher).toHaveBeenCalledTimes(reads + 1);
+        expect(formValues()).toEqual(raw);
+        state.auth = () => session(owner, "America/New_York");
+        await click("Retry diary time zone");
+        expect(fetcher).toHaveBeenCalledTimes(reads + 2);
+        const profileCalls = fetcher.mock.calls.slice(reads);
+        expect(profileCalls.map(([url]) => url)).toEqual(["/api/auth/me", "/api/auth/me"]);
+        for (const [, init] of profileCalls) {
+          expect(init?.method).toBeUndefined();
+          expect(init?.body).toBeUndefined();
+          expect(init?.headers).toEqual({ accept: "application/json" });
+          expect(init?.cache).toBe("no-store");
+          expect(init?.credentials).toBeUndefined();
+          expect(init?.signal?.aborted).toBe(false);
+        }
+        expect(profileCalls[0]?.[1]?.signal).not.toBe(profileCalls[1]?.[1]?.signal);
+        expect(formValues()).toEqual(raw);
+        expect(writes()).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledTimes(ids);
+        expect(button("Log exact version").props.disabled).toBe(true);
+        expect(status()).toContain("Review the selected local day and time");
+        await click("Confirm 2026-09-09 as local day");
+        state.write = () => Response.json({ error: "Uncertain log" }, { status: 503 });
+        await submit("Log exact version");
+        const attempted = requiredCustom(writes()[1]?.[1]);
+        expect(JSON.parse(String(attempted.body))).toEqual({
+          customFoodVersionId: food().currentVersion.id,
+          portion:
+            kind === "grams"
+              ? { kind: "grams", grams: "2.375" }
+              : { kind: "serving", servingId: "1", amount: "2.375" },
+          mealSlot: "snacks",
+          occurredAt: "2026-09-09T17:14:00.000Z",
+        });
+        expect(new Headers(attempted.headers).get("x-expected-profile-time-zone")).toBe(
+          "America/New_York",
+        );
+        expect(new Headers(attempted.headers).get("idempotency-key")).not.toBe(
+          new Headers(original.headers).get("idempotency-key"),
+        );
+        state.write = (_url, init) => Response.json(matchedLogData(init, true));
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(3);
+        expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+        expect(writes()[2]?.[1]).toEqual(attempted);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T17:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(field("Name").props.value).toBe("  Keep my unfinished food  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep these notes  ");
+        const saved = status();
+        invoke(oldRetry, "onClick");
+        invoke(loadingRetry, "onClick");
+        await hooks.settle();
+        expect(status()).toBe(saved);
+        expect(fetcher).toHaveBeenCalledTimes(reads + 4);
+        expect(router.replace).not.toHaveBeenCalled();
+      },
+    );
+  }
+
+  it.each(["route", "hidden", "unmount", "signout"] as const)(
+    "ignores a late unauthorized retry after %s",
+    async (transition) => {
+      const life = visibility();
+      const { state, fetcher, writes } = await blockedLog("serving", "http");
+      const pending = deferred<Response>();
+      state.auth = () => pending.promise;
+      await click("Retry diary time zone");
+      if (transition === "route") {
+        navigation.search = "?date=2026-09-11";
+        hooks.renderWithoutEffects();
+        navigation.search = "";
+        hooks.renderWithoutEffects();
+      } else if (transition === "hidden") await life.set("hidden");
+      else if (transition === "unmount") hooks.unmount();
+      else await click("Sign out");
+      const before = {
+        message: status(),
+        redirects: router.replace.mock.calls.length,
+        requests: fetcher.mock.calls.length,
+        updates: hooks.afterClose(),
+      };
+      const response = Response.json({ error: "Retired profile" }, { status: 401 });
+      const parse = vi.spyOn(response, "json");
+      pending.resolve(response);
+      await hooks.settle();
+      expect(parse).not.toHaveBeenCalled();
+      expect(router.replace).toHaveBeenCalledTimes(before.redirects);
+      expect(fetcher).toHaveBeenCalledTimes(before.requests);
+      expect(hooks.afterClose()).toBe(before.updates);
+      expect(writes().filter(([url]) => url !== "/api/auth/logout")).toHaveLength(1);
+      expect(writes().filter(([url]) => url === "/api/auth/logout")).toHaveLength(
+        transition === "signout" ? 1 : 0,
+      );
+      expect(status()).toBe(before.message);
+    },
+  );
+
+  it.each(["response", "parsed body"] as const)(
+    "ignores recovered profile at the late %s boundary after route return",
+    async (boundary) => {
+      const { state, fetcher } = await blockedLog("serving", "http");
+      const pendingResponse = deferred<Response>();
+      const pendingBody = deferred<unknown>();
+      const recovered = session(owner, "America/New_York");
+      const recoveredBody = await recovered.json();
+      recovered.json = vi.fn(() => pendingBody.promise);
+      state.auth = () => (boundary === "response" ? pendingResponse.promise : recovered);
+      await click("Retry diary time zone");
+      navigation.search = "?meal=breakfast";
+      hooks.renderWithoutEffects();
+      navigation.search = "";
+      hooks.renderWithoutEffects();
+      const before = { message: status(), requests: fetcher.mock.calls.length, raw: formValues() };
+      if (boundary === "response") pendingResponse.resolve(session(owner, "America/New_York"));
+      else pendingBody.resolve(recoveredBody);
+      await hooks.settle();
+      expect(status()).toBe(before.message);
+      expect(formValues()).toEqual(before.raw);
+      expect(fetcher).toHaveBeenCalledTimes(before.requests);
+      expect(button("Log exact version").props.disabled).toBe(true);
+      expect(button("Confirm 2026-09-09 as local day").props.disabled).toBe(true);
+      expect(button("Retry diary time zone").props.disabled).toBe(false);
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["unauthorized", "other-owner"] as const)(
+    "closes private data for a current %s retry response",
+    async (outcome) => {
+      const { state, writes } = await blockedLog("grams", "http");
+      state.auth = () =>
+        outcome === "unauthorized"
+          ? Response.json({ error: "Expired" }, { status: 401 })
+          : session(otherOwner, "America/New_York");
+      await click("Retry diary time zone");
+      expect(router.replace).toHaveBeenCalled();
+      expect(text()).not.toContain("  Keep my unfinished food  ");
+      expect(writes()).toHaveLength(1);
+    },
+  );
+});

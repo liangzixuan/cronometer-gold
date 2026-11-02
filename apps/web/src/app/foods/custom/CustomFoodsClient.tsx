@@ -127,7 +127,7 @@ export function fenceCustomFoodLogForTimeZoneChange(
 export function customFoodLogTimeZoneReviewMessage(currentTimeZone: string | null): string {
   return currentTimeZone
     ? `Your profile time zone changed to ${currentTimeZone}. This private food was not logged. Review the selected local day and time in that zone, then confirm the day before logging again.`
-    : "Your profile time zone changed. This private food was not logged, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before logging again.";
+    : "Your profile time zone changed. This private food was not logged, and its stale retry was cleared. Current account settings could not be reloaded. Choose Retry diary time zone, then review the local diary day before logging again.";
 }
 
 export function customFoodProfileRefreshBelongsToOwner(
@@ -994,23 +994,29 @@ export function CustomFoodsClient() {
   }, [closeFoodDetails, invalidateCustomControls, loadFoods, retireCustomArchive]);
   async function refreshCustomLogProfileAfterTimeZoneChange(
     initiatingUserId: string,
+    ownsRefresh: () => boolean,
   ): Promise<string | null> {
     profileRefreshController.current?.abort();
     const controller = new AbortController();
     profileRefreshController.current = controller;
+    const current = () =>
+      !controller.signal.aborted &&
+      profileRefreshController.current === controller &&
+      ownsRefresh();
     try {
       const response = await fetch("/api/auth/me", {
         headers: { accept: "application/json" },
         cache: "no-store",
         signal: controller.signal,
       });
+      if (!current()) return null;
       if (response.status === 401) {
         signInAgain();
         return null;
       }
       if (!response.ok) return null;
       const nextSession = parseSession(await json(response));
-      if (controller.signal.aborted || privateUiClosed.current) return null;
+      if (!current() || privateUiClosed.current) return null;
       if (
         ownerUserId.current !== initiatingUserId ||
         !customFoodProfileRefreshBelongsToOwner(initiatingUserId, nextSession.user.id)
@@ -1024,6 +1030,60 @@ export function CustomFoodsClient() {
       return null;
     } finally {
       if (profileRefreshController.current === controller) profileRefreshController.current = null;
+    }
+  }
+
+  function canRetryCustomLogProfile() {
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      customLogDateReviewRequired &&
+      session === null &&
+      installedSession.current === null &&
+      ownerUserId.current !== null &&
+      customLog !== null &&
+      customLogRef.current === customLog &&
+      customLogGeneration.current === renderedLogGeneration &&
+      routeDestination.current === renderedRouteDestination &&
+      busy === null &&
+      activeLog.current === null &&
+      profileRefreshController.current === null &&
+      loadController.current === null
+    );
+  }
+
+  async function retryCustomLogProfile() {
+    if (!canRetryCustomLogProfile()) return;
+    const owner = ownerUserId.current;
+    if (owner === null) return;
+    const token = {};
+    const lifecycle = customLifecycle.current;
+    const generation = ++customLogGeneration.current;
+    activeLog.current = token;
+    const current = () =>
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      activeLog.current === token &&
+      customLifecycle.current === lifecycle &&
+      ownerUserId.current === owner &&
+      customLogRef.current === customLog &&
+      customLogGeneration.current === generation &&
+      routeDestination.current === renderedRouteDestination;
+    setBusy("custom-log");
+    setMessage("Checking your diary time zone…");
+    try {
+      const timeZone = await refreshCustomLogProfileAfterTimeZoneChange(owner, current);
+      if (current()) setMessage(customFoodLogTimeZoneReviewMessage(timeZone));
+    } finally {
+      if (activeLog.current === token) {
+        activeLog.current = null;
+        if (mounted.current && !privateUiClosed.current)
+          setBusy((value) => (value === "custom-log" ? null : value));
+      }
     }
   }
 
@@ -1473,8 +1533,10 @@ export function CustomFoodsClient() {
       ) {
         setCustomLogDateReviewRequired(true);
         setSession(null);
-        const currentTimeZone =
-          await refreshCustomLogProfileAfterTimeZoneChange(initiatingOwnerUserId);
+        const currentTimeZone = await refreshCustomLogProfileAfterTimeZoneChange(
+          initiatingOwnerUserId,
+          () => mounted.current && !privateUiClosed.current && activeLog.current === token,
+        );
         if (!mounted.current || privateUiClosed.current || activeLog.current !== token) return;
         setMessage(customFoodLogTimeZoneReviewMessage(currentTimeZone));
         return;
@@ -2250,6 +2312,15 @@ export function CustomFoodsClient() {
                     </fieldset>
                   ) : null}
                   <div className="entryActions">
+                    {customLogDateReviewRequired && session === null ? (
+                      <button
+                        disabled={!canRetryCustomLogProfile()}
+                        onClick={() => void retryCustomLogProfile()}
+                        type="button"
+                      >
+                        Retry diary time zone
+                      </button>
+                    ) : null}
                     {customLogDateReviewRequired ? (
                       <button
                         aria-describedby={
