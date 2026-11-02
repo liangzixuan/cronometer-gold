@@ -6230,3 +6230,96 @@ describe("My foods disabled date-review log submits", () => {
     );
   }
 });
+
+describe("My foods retired log submits", () => {
+  for (const kind of ["grams", "serving"] as const) {
+    it.each(["ready", "loading"] as const)(
+      `keeps a retained ${kind} %s submit inert after an uncertain log`,
+      async (phase) => {
+        let sequence = 0;
+        const operationId = vi.fn(
+          () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+        );
+        vi.stubGlobal("crypto", { randomUUID: operationId });
+        const { state, fetcher, writes } = workspace([food()]);
+        await mount();
+        await prepareLog();
+        await change("Name", "  Keep my food draft  ");
+        await change("Notes (optional)", "  Keep my notes  ");
+        const portion = requiredCustom(
+          elements(logForm()).find(
+            (node) =>
+              node.type === "select" && ["grams", "serving"].includes(String(node.props.value)),
+          ),
+        );
+        invoke(portion, "onChange", { target: { value: kind } });
+        await hooks.settle();
+        const raw = formValues();
+        const requests = fetcher.mock.calls.length;
+        const ids = operationId.mock.calls.length;
+        const pending = deferred<Response>();
+        state.write = () => pending.promise;
+        const ready = logForm();
+        invoke(ready, "onSubmit", { preventDefault() {} });
+        invoke(ready, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(1);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        const loading = logForm();
+        expect(button("Log exact version").props.disabled).toBe(true);
+        invoke(loading, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(1);
+        const retained = phase === "ready" ? ready : loading;
+        pending.resolve(Response.json({ error: "Uncertain log" }, { status: 503 }));
+        await hooks.settle();
+        const attempted = requiredCustom(writes()[0]?.[1]);
+        expect(writes()[0]?.[0]).toBe(
+          `/api/retention/custom-foods/${food().id}/log?profileTimeZonePrecondition=v1`,
+        );
+        expect(JSON.parse(String(attempted.body))).toEqual({
+          customFoodVersionId: food().currentVersion.id,
+          portion:
+            kind === "grams"
+              ? { kind: "grams", grams: "2.375" }
+              : { kind: "serving", servingId: "1", amount: "2.375" },
+          mealSlot: "snacks",
+          occurredAt: "2026-09-09T18:14:00.000Z",
+        });
+        expect(new Headers(attempted.headers).get("x-expected-profile-time-zone")).toBe(
+          "America/Chicago",
+        );
+        const uncertain = status();
+        expect(uncertain).toContain("The log is not confirmed");
+        expect(button("Log exact version").props.disabled).toBe(false);
+        invoke(retained, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(writes()).toHaveLength(1);
+        expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        expect(status()).toBe(uncertain);
+        expect(formValues()).toEqual(raw);
+        state.write = (_url, init) => Response.json(matchedLogData(init, true));
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+        expect(writes()[1]?.[1]).toEqual(attempted);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+        expect(field("Name").props.value).toBe("  Keep my food draft  ");
+        expect(field("Notes (optional)").props.value).toBe("  Keep my notes  ");
+        const saved = status();
+        const receipt = confirmedCustomTime();
+        const link = confirmedCustomLink();
+        invoke(retained, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(status()).toBe(saved);
+        expect(confirmedCustomTime()).toEqual(receipt);
+        expect(confirmedCustomLink()).toEqual(link);
+        expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+        expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      },
+    );
+  }
+});

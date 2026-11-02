@@ -1415,6 +1415,7 @@ export function CustomFoodsClient() {
     if (
       !canUseCustomLogControls() ||
       activeLog.current !== null ||
+      busy === "custom-log" ||
       !customLogQuantityValid ||
       customLogTimeError !== null ||
       customLogOccurrenceRequired ||
@@ -1447,7 +1448,7 @@ export function CustomFoodsClient() {
     const exactOperationId = operation(key);
     const token = {};
     const lifecycle = customLifecycle.current;
-    const generation = customLogGeneration.current;
+    const generation = ++customLogGeneration.current;
     const initiatingScope = JSON.stringify([session.user.id, session.profile]);
     activeLog.current = token;
     const ownsLog = () =>
@@ -2347,6 +2348,7 @@ export function CustomFoodsClient() {
                       disabled={
                         !canUseCustomLogControls() ||
                         activeLog.current !== null ||
+                        busy === "custom-log" ||
                         !customLogQuantityValid ||
                         customLogTimeError !== null ||
                         customLogOccurrenceRequired ||

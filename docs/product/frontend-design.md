@@ -865,3 +865,5 @@ Public-food Add stays disabled in both search and barcode results when an entere
 Private-food logs offer Retry diary time zone when the profile read fails after a proven no-write time-zone conflict. The action retains the raw food editor and pinned log draft, requires fresh date confirmation after recovery, and rejects duplicate, retired and late retry actions. An uncertain subsequent log keeps its exact request and operation ID for retry.
 
 Private-food log submits rendered disabled for local-date review stay inert before and after confirmation. They preserve the no-write conflict guidance, raw editor and pinned log draft without a request or operation. Fresh confirmation and submission use the reviewed time zone. A proven no-write conflict permits a new operation; an uncertain grams or serving retry keeps its exact request and operation ID, matching saved time and diary link, without extra profile reads.
+
+Private-food log submits retire when their request starts. A submit rendered while logging stays inert after settlement; a fresh explicit retry preserves the exact uncertain request and operation ID, raw drafts and matching diary receipt.
