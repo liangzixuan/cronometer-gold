@@ -256,6 +256,7 @@ export function CustomFoodsClient() {
   }, []);
   const [customLogDateReviewRequired, setCustomLogDateReviewRequired] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [customPageLoading, setCustomPageLoading] = useState(false);
   const customArchive = useRef<{
     readonly controller: AbortController;
     readonly busyKey: string;
@@ -699,6 +700,7 @@ export function CustomFoodsClient() {
     setNutrients([]);
     setCustomFoods([]);
     setCustomFoodCursor(null);
+    setCustomPageLoading(false);
     replaceCustom(blankCustom(""));
     replaceCustomLog(null);
     setCustomLogDateReviewRequired(false);
@@ -906,7 +908,7 @@ export function CustomFoodsClient() {
   async function loadMoreCustomFoods() {
     if (
       !customFoodCursor ||
-      busy === "custom-more" ||
+      customPageLoading ||
       customPageGeneration.current !== renderedPageGeneration ||
       foodListGeneration.current !== renderedListGeneration
     )
@@ -917,7 +919,7 @@ export function CustomFoodsClient() {
     customPageGeneration.current += 1;
     const controller = new AbortController();
     privateReadControllers.current.add(controller);
-    setBusy("custom-more");
+    setCustomPageLoading(true);
     try {
       await installPrivateDataForOwner({
         expectedOwnerUserId: initiatingOwnerUserId,
@@ -957,7 +959,7 @@ export function CustomFoodsClient() {
       );
     } finally {
       privateReadControllers.current.delete(controller);
-      if (!privateUiClosed.current) setBusy(null);
+      if (!privateUiClosed.current) setCustomPageLoading(false);
     }
   }
   useEffect(() => {
@@ -1059,6 +1061,7 @@ export function CustomFoodsClient() {
       customLogGeneration.current === renderedLogGeneration &&
       routeDestination.current === renderedRouteDestination &&
       busy === null &&
+      !customPageLoading &&
       activeLog.current === null &&
       profileRefreshController.current === null &&
       loadController.current === null
@@ -2181,7 +2184,7 @@ export function CustomFoodsClient() {
               </ul>
               {savedFilterScopeReady && customFoodCursor ? (
                 <button
-                  disabled={busy === "custom-more"}
+                  disabled={customPageLoading}
                   onClick={() => void loadMoreCustomFoods()}
                   type="button"
                 >

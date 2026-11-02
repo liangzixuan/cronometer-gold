@@ -6806,3 +6806,180 @@ describe("My foods retired continuation actions", () => {
     expect(writes()).toHaveLength(0);
   });
 });
+
+describe("My foods independent page and log loading", () => {
+  it.each([
+    ["page", "failure"],
+    ["page", "success"],
+    ["log", "failure"],
+    ["log", "success"],
+  ] as const)(
+    "keeps the page pending when %s starts first and the log ends with %s",
+    async (firstRequest, logResult) => {
+      let sequence = 0;
+      const operationId = vi.fn(
+        () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+      );
+      vi.stubGlobal("crypto", { randomUUID: operationId });
+      const first = food();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first]);
+      state.cursor = "next page/+?=";
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      await toggle(first);
+      await click("Revise", card(first));
+      await change("Name", "  Unsaved lunch food  ");
+      await change("Notes (optional)", "Raw notes\nkeep this line");
+      await prepareLog();
+      await change(savedFilterLabel, "  SAVED food  ");
+      const drafts = formValues();
+      const requests = fetcher.mock.calls.length;
+      const pendingPage = deferred<Response>();
+      const pendingLog = deferred<Response>();
+      state.continuation = () => pendingPage.promise;
+      state.write = () => pendingLog.promise;
+      if (firstRequest === "page") {
+        await click("Load more private foods");
+        await submit("Log exact version");
+      } else {
+        await submit("Log exact version");
+        await click("Load more private foods");
+      }
+      expect(button("Load more private foods").props.disabled).toBe(true);
+      expect(button("Log exact version").props.disabled).toBe(true);
+      expect(formValues()).toEqual(drafts);
+      expect(details(first).props.hidden).toBe(false);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+      expect(operationId).toHaveBeenCalledTimes(1);
+      const originalLog = requiredCustom(writes()[0]?.[1]);
+      const loading = button("Load more private foods");
+      pendingLog.resolve(
+        logResult === "success"
+          ? Response.json(matchedLogData(originalLog, false))
+          : Response.json({ error: "Log response unavailable" }, { status: 503 }),
+      );
+      await hooks.settle();
+      expect(button("Load more private foods").props.disabled).toBe(true);
+      const logStatus = status();
+      expect(logStatus).toContain(
+        logResult === "success" ? "Pinned private food version logged" : "The log is not confirmed",
+      );
+      if (logResult === "failure") expect(formValues()).toEqual(drafts);
+      else {
+        expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+        expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      }
+      invoke(button("Load more private foods"), "onClick");
+      invoke(loading, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+      expect(status()).toBe(logStatus);
+
+      pendingPage.resolve(Response.json({ error: "Next page unavailable" }, { status: 503 }));
+      await hooks.settle();
+      expect(button("Load more private foods").props.disabled).toBe(false);
+      expect(status()).toContain("Next page unavailable");
+      const retry = deferred<Response>();
+      const ownerCheck = deferred<Response>();
+      state.continuation = () => retry.promise;
+      state.auth = () => ownerCheck.promise;
+      await click("Load more private foods");
+      retry.resolve(page([first, second], "terminal page"));
+      await hooks.settle();
+      expect(savedNames()).toEqual([first.currentVersion.name]);
+      expect(button("Load more private foods").props.disabled).toBe(true);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 4);
+      ownerCheck.resolve(session(owner));
+      await hooks.settle();
+      expect(button("Load more private foods").props.disabled).toBe(false);
+      expect(savedNames()).toEqual([first.currentVersion.name, second.currentVersion.name]);
+      expect(details(first).props.hidden).toBe(false);
+      expect(field("Name").props.value).toBe("  Unsaved lunch food  ");
+      expect(field("Notes (optional)").props.value).toBe("Raw notes\nkeep this line");
+      expect(field(savedFilterLabel).props.value).toBe("  SAVED food  ");
+      const pages = fetcher.mock.calls.filter(([url]) => url.includes("&cursor="));
+      expect(pages).toHaveLength(2);
+      expect(pages.map(([url]) => url)).toEqual(
+        Array(2).fill("/api/retention/custom-foods?limit=50&cursor=next%20page%2F%2B%3F%3D"),
+      );
+      const { signal: originalSignal, ...originalPage } = requiredCustom(pages[0]?.[1]);
+      const { signal: retrySignal, ...retryPage } = requiredCustom(pages[1]?.[1]);
+      expect(retryPage).toEqual(originalPage);
+      expect(retrySignal).not.toBe(originalSignal);
+      expect(retrySignal?.aborted).toBe(false);
+      if (logResult === "failure") {
+        expect(formValues()).toEqual(drafts);
+        state.write = (_url, init) => Response.json(matchedLogData(init, true));
+        await submit("Log exact version");
+        expect(writes()).toHaveLength(2);
+        expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+        expect(writes()[1]?.[1]).toEqual(originalLog);
+      } else expect(writes()).toHaveLength(1);
+      expect(operationId).toHaveBeenCalledTimes(1);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      const saved = status();
+      const count = fetcher.mock.calls.length;
+      invoke(loading, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(count);
+      expect(status()).toBe(saved);
+      state.auth = null;
+      state.continuation = () => page([]);
+      await click("Load more private foods");
+      expect(fetcher.mock.calls.at(-2)?.[0]).toBe(
+        "/api/retention/custom-foods?limit=50&cursor=terminal%20page",
+      );
+      expect(fetcher).toHaveBeenCalledTimes(count + 2);
+    },
+  );
+
+  it.each(["failure", "success"] as const)(
+    "keeps a log loading callback inert when the page ends first with %s",
+    async (pageResult) => {
+      const { state, fetcher, writes } = workspace([food()]);
+      state.cursor = "next";
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      await prepareLog();
+      const drafts = formValues();
+      const pendingLog = deferred<Response>();
+      const pendingPage = deferred<Response>();
+      state.write = () => pendingLog.promise;
+      state.continuation = () => pendingPage.promise;
+      await submit("Log exact version");
+      const originalLog = requiredCustom(writes()[0]?.[1]);
+      await click("Load more private foods");
+      const retainedLog = logForm();
+      pendingPage.resolve(
+        pageResult === "success"
+          ? page([food(), food(2)], "later")
+          : Response.json({ error: "Next page unavailable" }, { status: 503 }),
+      );
+      await hooks.settle();
+      expect(button("Log exact version").props.disabled).toBe(true);
+      expect(button("Load more private foods").props.disabled).toBe(false);
+      expect(formValues()).toEqual(drafts);
+      pendingLog.resolve(Response.json({ error: "Log response unavailable" }, { status: 503 }));
+      await hooks.settle();
+      expect(button("Log exact version").props.disabled).toBe(false);
+      const uncertain = status();
+      const count = fetcher.mock.calls.length;
+      invoke(retainedLog, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(count);
+      expect(status()).toBe(uncertain);
+      expect(formValues()).toEqual(drafts);
+      expect(writes()).toHaveLength(1);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[1]?.[1]).toEqual(originalLog);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      expect(fetcher).toHaveBeenCalledTimes(count + 1);
+    },
+  );
+});
