@@ -273,8 +273,8 @@ export function CustomFoodsClient() {
   const customLifecycle = useRef(0);
   const customCreateIntent = useRef(0);
   const customWrite = useRef<object | null>(null);
-  const customSaveGeneration = useRef(0);
-  const renderedSaveGeneration = customSaveGeneration.current;
+  const customWriteGeneration = useRef(0);
+  const renderedWriteGeneration = customWriteGeneration.current;
   const customLoadReceipts = useRef<{
     readonly controller: AbortController;
     readonly generation: number;
@@ -1102,6 +1102,8 @@ export function CustomFoodsClient() {
     return (
       canUseCustomControls() &&
       session !== null &&
+      !customSaving &&
+      customWriteGeneration.current === renderedWriteGeneration &&
       hasCustomConflict() &&
       customConflictRef.current === customConflict &&
       customWrite.current === null &&
@@ -1120,6 +1122,7 @@ export function CustomFoodsClient() {
     const generation = customGeneration.current;
     const controls = customControlGeneration.current;
     const scope = customScope;
+    customWriteGeneration.current += 1;
     customWrite.current = token;
     privateReadControllers.current.add(controller);
     setCustomSaving(true);
@@ -1198,7 +1201,7 @@ export function CustomFoodsClient() {
       !canUseCustomControls() ||
       !session ||
       customSaving ||
-      customSaveGeneration.current !== renderedSaveGeneration ||
+      customWriteGeneration.current !== renderedWriteGeneration ||
       customWrite.current !== null ||
       hasCustomConflict()
     )
@@ -1244,7 +1247,7 @@ export function CustomFoodsClient() {
     const lifecycle = customLifecycle.current;
     const generation = customGeneration.current;
     const initiatingOwner = session.user.id;
-    customSaveGeneration.current += 1;
+    customWriteGeneration.current += 1;
     customWrite.current = token;
     setCustomSaving(true);
     const ownsWrite = () =>
