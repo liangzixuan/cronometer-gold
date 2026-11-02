@@ -1114,6 +1114,7 @@ export function CustomFoodsClient() {
   function canRecoverCustomFood() {
     return (
       canUseCustomControls() &&
+      routeDestination.current === renderedRouteDestination &&
       session !== null &&
       !customSaving &&
       customWriteGeneration.current === renderedWriteGeneration &&
