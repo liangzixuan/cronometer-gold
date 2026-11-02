@@ -7096,3 +7096,121 @@ describe("My foods continuation view admission", () => {
     },
   );
 });
+
+describe("My foods private-data retry view admission", () => {
+  it.each([
+    ["initial", "date"],
+    ["initial", "meal"],
+    ["initial", "visibility"],
+    ["refresh", "date"],
+    ["refresh", "meal"],
+    ["refresh", "visibility"],
+  ] as const)("retires a %s retry across %s departure and return", async (phase, transition) => {
+    const life = visibility();
+    const first = food();
+    const { state, fetcher, writes } = workspace([first]);
+    navigation.search = "date=2026-09-09&meal=lunch";
+    const unavailable = () => Response.json({ error: "Private data unavailable" }, { status: 503 });
+    if (phase === "initial") state.read = unavailable;
+    await mount();
+    await change("Name", "  Keep my food draft  ");
+    await change("Notes (optional)", "  Keep my notes  ");
+    if (phase === "refresh") {
+      await prepareLog();
+      state.write = () => Response.json({ error: "Uncertain log" }, { status: 503 });
+      await submit("Log exact version");
+      expect(status()).toContain("The log is not confirmed");
+      state.read = unavailable;
+      hooks.replayEffects();
+      await hooks.settle();
+    }
+    const raw = formValues();
+    const writeCount = writes().length;
+    const allocate = vi.fn(() => "22222222-2222-4222-8222-222222222222");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    const retry = button("Retry private data");
+    const requests = fetcher.mock.calls.length;
+    const failed = status();
+    expect(failed).toContain("Choose Retry private data to try again.");
+    if (transition === "visibility") {
+      life.document.visibilityState = "hidden";
+      invoke(retry, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      await life.set("hidden");
+      await life.set("visible");
+    } else {
+      navigation.search =
+        transition === "date" ? "date=2026-09-11&meal=lunch" : "date=2026-09-09&meal=dinner";
+      hooks.renderWithoutEffects();
+      invoke(retry, "onClick");
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      navigation.search = "date=2026-09-09&meal=lunch";
+      hooks.renderWithoutEffects();
+    }
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    expect(status()).toBe(failed);
+    expect(formValues()).toEqual(raw);
+    expect(writes()).toHaveLength(writeCount);
+    expect(allocate).not.toHaveBeenCalled();
+
+    const recovery = deferred<Response>();
+    state.read = () => recovery.promise;
+    await click("Retry private data");
+    expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+    expect(formValues()).toEqual(raw);
+    const ownerCheck = deferred<Response>();
+    state.auth = () => ownerCheck.promise;
+    recovery.resolve(page([first]));
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(requests + 4);
+    if (phase === "initial") expect(savedCards()).toHaveLength(0);
+    else expect(disclosure(first).props.disabled).toBe(true);
+    expect(formValues()).toEqual(raw);
+    ownerCheck.resolve(session());
+    await hooks.settle();
+    expect(status()).toBe("Your personal foods are current.");
+    expect(field("Name").props.value).toBe("  Keep my food draft  ");
+    expect(field("Notes (optional)").props.value).toBe("  Keep my notes  ");
+    for (const path of ["/api/nutrients/targetable", "/api/retention/custom-foods?limit=50"]) {
+      const calls = fetcher.mock.calls.filter(([url]) => url === path);
+      const attempted = requiredCustom(calls[calls.length - 2]?.[1]);
+      const recovered = requiredCustom(calls[calls.length - 1]?.[1]);
+      expect(recovered).toEqual({ ...attempted, signal: recovered.signal });
+      expect(recovered.signal).not.toBe(attempted.signal);
+      expect(recovered.signal?.aborted).toBe(false);
+    }
+    await change(savedFilterLabel, " saved ");
+    await toggle(first);
+    const restored = formValues();
+    const recoveredStatus = status();
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(fetcher).toHaveBeenCalledTimes(requests + 4);
+    expect(status()).toBe(recoveredStatus);
+    expect(formValues()).toEqual(restored);
+    expect(details(first).props.hidden).toBe(false);
+    expect(writes()).toHaveLength(writeCount);
+    expect(allocate).not.toHaveBeenCalled();
+    if (phase === "refresh") {
+      const attempted = requiredCustom(writes()[0]?.[1]);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[1]?.[1]).toEqual(attempted);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      const saved = status();
+      invoke(retry, "onClick");
+      await hooks.settle();
+      expect(status()).toBe(saved);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 5);
+      expect(details(first).props.hidden).toBe(false);
+      expect(allocate).not.toHaveBeenCalled();
+    }
+  });
+});

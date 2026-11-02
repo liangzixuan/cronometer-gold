@@ -308,7 +308,7 @@ export function CustomFoodsClient() {
   const expandedFoodsRef = useRef<ReadonlySet<CustomFood>>(new Set());
   const renderedListGeneration = foodListGeneration.current;
   const renderedDisclosureGeneration = disclosureGeneration.current;
-  const renderedArchiveLifecycle = customLifecycle.current;
+  const renderedViewLifecycle = customLifecycle.current;
   const retireCustomArchive = useCallback(() => {
     const pending = customArchive.current;
     if (!pending) return;
@@ -1348,7 +1348,7 @@ export function CustomFoodsClient() {
       session !== null &&
       installedSession.current === session &&
       ownerUserId.current === session.user.id &&
-      customLifecycle.current === renderedArchiveLifecycle &&
+      customLifecycle.current === renderedViewLifecycle &&
       foodListGeneration.current === renderedListGeneration &&
       routeDestination.current === renderedRouteDestination &&
       foodDetailsReady.current
@@ -1727,7 +1727,14 @@ export function CustomFoodsClient() {
           <button
             className="secondaryAction"
             onClick={() => {
-              if (foodListGeneration.current !== renderedListGeneration) return;
+              if (
+                !visible.current ||
+                (typeof document !== "undefined" && document.visibilityState === "hidden") ||
+                customLifecycle.current !== renderedViewLifecycle ||
+                routeDestination.current !== renderedRouteDestination ||
+                foodListGeneration.current !== renderedListGeneration
+              )
+                return;
               void loadFoods();
             }}
             type="button"
