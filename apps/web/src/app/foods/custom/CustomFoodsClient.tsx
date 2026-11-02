@@ -1711,7 +1711,14 @@ export function CustomFoodsClient() {
           </div>
         ) : null}
         {state === "error" ? (
-          <button className="secondaryAction" onClick={() => void loadFoods()} type="button">
+          <button
+            className="secondaryAction"
+            onClick={() => {
+              if (foodListGeneration.current !== renderedListGeneration) return;
+              void loadFoods();
+            }}
+            type="button"
+          >
             Retry private data
           </button>
         ) : null}
