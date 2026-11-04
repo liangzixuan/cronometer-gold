@@ -1652,6 +1652,11 @@ describe("actual saved custom-food Copy to new draft", () => {
     pending.resolve(receipt(newSaved(first)));
     await hooks.settle();
     expect(field("Name").props.value).toBe("");
+    expect(button("Create private food").props.disabled).toBe(true);
+    expect(button("Create private food").props["aria-describedby"]).toContain(
+      "custom-required-error",
+    );
+    await copyFood(first);
     expect(button("Create private food").props.disabled).toBe(false);
   });
 
@@ -1745,6 +1750,11 @@ describe("actual saved custom-food Copy to new draft", () => {
       if (newerPage) expect(savedNames()).toContain("Newer authoritative version");
       expect(field("Name").props.value).toBe("");
       expect(writes()).toHaveLength(1);
+      expect(button("Create private food").props.disabled).toBe(true);
+      expect(button("Create private food").props["aria-describedby"]).toContain(
+        "custom-required-error",
+      );
+      await copyFood(first);
       expect(button("Create private food").props.disabled).toBe(false);
       expect(filterStatus()).toContain("2 of 2 loaded saved foods match.");
     },
@@ -3821,6 +3831,11 @@ describe("web custom-food recovery operation ownership", () => {
     invoke(old, "onClick");
     await hooks.settle();
     expect(fetcher).toHaveBeenCalledTimes(count);
+    expect(button("Create private food").props.disabled).toBe(true);
+    expect(button("Create private food").props["aria-describedby"]).toContain(
+      "custom-required-error",
+    );
+    await copyFood(first);
     expect(button("Create private food").props.disabled).toBe(false);
   });
   it("rechecks ownership after deferred JSON before replacing newer raw edits", async () => {
@@ -7703,6 +7718,183 @@ describe("My foods save nutrient amount validation", () => {
       expect(field("Amount per 100 grams 1").props["aria-invalid"]).toBeUndefined();
       expect(field("Amount per 100 grams 1").props["aria-describedby"]).toBeUndefined();
       expect(elements().some((node) => node.props.id === "custom-nutrient-error")).toBe(false);
+      expect(formValues()).toEqual(validRaw);
+      invoke(retained, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(status()).toBe(uncertain);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+      const saved = {
+        ...food(mode === "create" ? 3 : 2),
+        revision: mode === "create" ? "1" : "2",
+        currentVersion: {
+          ...second.currentVersion,
+          id: "9007199254740999",
+          versionNumber: mode === "create" ? 1 : 2,
+          name: "Saved lunch food",
+          notes: "Raw notes\nkeep this line",
+          serving: second.currentVersion.serving,
+          nutrients: [
+            {
+              nutrient: requiredCustom(second.currentVersion.nutrients[0]).nutrient,
+              state: "quantified" as const,
+              amountPer100Grams: "0.125",
+            },
+          ],
+        },
+      };
+      state.write = () => Response.json({ data: { replayed: true, customFood: saved } });
+      await submit(label);
+      expect(writes()).toHaveLength(3);
+      expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+      expect(writes()[2]?.[1]).toEqual(attempted);
+      expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      expect(status()).toBe(
+        `Saved private custom food version ${saved.currentVersion.versionNumber}.`,
+      );
+      expect(field("Name").props.value).toBe("");
+      expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+      expect(details(first).props.hidden).toBe(false);
+      expect(elements(logForm()).map((node) => node.props.value)).toEqual(logDraft);
+      const savedStatus = status();
+      invoke(retained, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(status()).toBe(savedStatus);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(4);
+      expect(writes()[3]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[3]?.[1]).toEqual(logRequest);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+      expect(operationId).toHaveBeenCalledTimes(ids + 1);
+    });
+  }
+});
+
+describe("My foods save required fields", () => {
+  for (const mode of ["create", "revise"] as const) {
+    it.each([
+      { invalid: "empty name", name: "", removeNutrient: false },
+      { invalid: "whitespace name", name: "   ", removeNutrient: false },
+      { invalid: "no nutrients", name: "  Saved lunch food  ", removeNutrient: true },
+    ])(`keeps a ${mode} save disabled for $invalid until corrected`, async (invalid) => {
+      let sequence = 0;
+      const operationId = vi.fn(
+        () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+      );
+      vi.stubGlobal("crypto", { randomUUID: operationId });
+      const first = food();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first, second]);
+      state.picker = [
+        {
+          id: "2",
+          code: "protein",
+          name: "Picker protein",
+          unit: "g",
+          category: "macronutrient",
+        },
+      ];
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      if (mode === "revise") await click("Revise", card(second));
+      await change("Name", "  Saved lunch food  ");
+      await change("Notes (optional)", "Raw notes\nkeep this line");
+      await change("Amount per 100 grams 1", "0.125");
+      await change("Serving label", "  Saved portion  ");
+      await change("Serving grams", "125.25");
+      await toggle(first);
+      await prepareLog();
+      await change(savedFilterLabel, "  saved  ");
+      state.write = () => Response.json({ error: "Uncertain log" }, { status: 503 });
+      await submit("Log exact version");
+      const logRequest = requiredCustom(writes()[0]?.[1]);
+      const validRaw = formValues();
+      const logDraft = elements(logForm()).map((node) => node.props.value);
+      const requests = fetcher.mock.calls.length;
+      const ids = operationId.mock.calls.length;
+      const label = mode === "create" ? "Create private food" : "Save new version";
+      state.write = () => Response.json({ error: "Uncertain save" }, { status: 503 });
+      await submit(label);
+      const attempted = requiredCustom(writes()[1]?.[1]);
+      expect(writes()[1]?.[0]).toBe(
+        mode === "create"
+          ? "/api/retention/custom-foods"
+          : `/api/retention/custom-foods/${second.id}/revisions`,
+      );
+      expect(JSON.parse(String(attempted.body))).toEqual({
+        name: "Saved lunch food",
+        brandName: null,
+        notes: "Raw notes\nkeep this line",
+        serving: { label: "Saved portion", grams: "125.25" },
+        nutrients: [{ nutrientId: "2", state: "quantified", amountPer100Grams: "0.125" }],
+      });
+      const uncertain = status();
+      expect(uncertain).toBe(
+        `The save is not confirmed. Your draft is still available. Choose ${label} again to retry the same request. Uncertain save`,
+      );
+      expect(button(label).props.disabled).toBe(false);
+      await change("Name", invalid.name);
+      if (invalid.removeNutrient) await click("Remove nutrient 1");
+      expect(button(label).props.disabled).toBe(true);
+      expect(button(label).props["aria-describedby"]).toBe("custom-required-error");
+      const nutrientGroup = requiredCustom(
+        elements().find(
+          (node) =>
+            node.type === "fieldset" &&
+            elements(node).some(
+              (child) => child.type === "legend" && text(child) === "Nutrients per 100 g",
+            ),
+        ),
+      );
+      expect(field("Name").props["aria-invalid"]).toBe(invalid.removeNutrient ? undefined : true);
+      expect(field("Name").props["aria-describedby"]).toBe(
+        invalid.removeNutrient ? undefined : "custom-required-error",
+      );
+      expect(nutrientGroup.props["aria-invalid"]).toBe(invalid.removeNutrient ? true : undefined);
+      expect(nutrientGroup.props["aria-describedby"]).toBe(
+        invalid.removeNutrient ? "custom-required-error" : undefined,
+      );
+      expect(text(elements().find((node) => node.props.id === "custom-required-error"))).toBe(
+        "Enter a name and at least one nutrient.",
+      );
+      const raw = formValues();
+      const retained = requiredCustom(
+        elements().find((node) => node.type === "form" && text(node).includes(label)),
+      );
+      invoke(retained, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes()).toHaveLength(2);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+      expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      expect(status()).toBe(uncertain);
+      expect(formValues()).toEqual(raw);
+      expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+      expect(details(first).props.hidden).toBe(false);
+      expect(elements(logForm()).map((node) => node.props.value)).toEqual(logDraft);
+      await change("Name", "  Saved lunch food  ");
+      if (invalid.removeNutrient) {
+        await click("Add nutrient");
+        await change("Amount per 100 grams 1", "0.125");
+      }
+      expect(button(label).props.disabled).toBe(false);
+      expect(button(label).props["aria-describedby"]).toBeUndefined();
+      expect(field("Name").props["aria-invalid"]).toBeUndefined();
+      expect(field("Name").props["aria-describedby"]).toBeUndefined();
+      const correctedGroup = requiredCustom(
+        elements().find(
+          (node) =>
+            node.type === "fieldset" &&
+            elements(node).some(
+              (child) => child.type === "legend" && text(child) === "Nutrients per 100 g",
+            ),
+        ),
+      );
+      expect(correctedGroup.props["aria-invalid"]).toBeUndefined();
+      expect(correctedGroup.props["aria-describedby"]).toBeUndefined();
+      expect(elements().some((node) => node.props.id === "custom-required-error")).toBe(false);
       expect(formValues()).toEqual(validRaw);
       invoke(retained, "onSubmit", { preventDefault() {} });
       await hooks.settle();

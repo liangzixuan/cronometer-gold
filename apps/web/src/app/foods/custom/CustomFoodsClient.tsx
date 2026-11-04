@@ -1210,6 +1210,7 @@ export function CustomFoodsClient() {
     }
   }
 
+  const customRequiredFieldsInvalid = !custom.name.trim() || custom.nutrients.length < 1;
   const customServingInvalid =
     Boolean(custom.servingLabel.trim() || custom.servingGrams.trim()) &&
     (!custom.servingLabel.trim() || !isPositiveInputDecimal(custom.servingGrams));
@@ -1227,6 +1228,7 @@ export function CustomFoodsClient() {
       customSaving ||
       customWriteGeneration.current !== renderedWriteGeneration ||
       customWrite.current !== null ||
+      customRequiredFieldsInvalid ||
       customServingInvalid ||
       customInvalidNutrients.length > 0 ||
       hasCustomConflict()
@@ -1234,8 +1236,6 @@ export function CustomFoodsClient() {
       return;
     retireCustomArchive();
     clearCustomDraftChoice();
-    if (!custom.name.trim() || custom.nutrients.length < 1)
-      return setMessage("Enter a name and at least one nutrient.");
     if (
       new Set(custom.nutrients.map((nutrient) => nutrient.nutrientId)).size !==
       custom.nutrients.length
@@ -1789,6 +1789,8 @@ export function CustomFoodsClient() {
                 <input
                   maxLength={500}
                   ref={customNameInput}
+                  aria-invalid={!custom.name.trim() || undefined}
+                  aria-describedby={!custom.name.trim() ? "custom-required-error" : undefined}
                   value={custom.name}
                   onChange={(event) => setCustom({ ...custom, name: event.target.value })}
                 />
@@ -1829,7 +1831,10 @@ export function CustomFoodsClient() {
                   A serving needs both a label and positive grams.
                 </p>
               ) : null}
-              <fieldset>
+              <fieldset
+                aria-invalid={custom.nutrients.length < 1 || undefined}
+                aria-describedby={custom.nutrients.length < 1 ? "custom-required-error" : undefined}
+              >
                 <legend>Nutrients per 100 g</legend>
                 {custom.nutrients.map((row, index) => (
                   <div className="nutrientDraftRow" key={row.nutrientId}>
@@ -2006,18 +2011,25 @@ export function CustomFoodsClient() {
                   values or replace this draft.
                 </p>
               ) : null}
+              {customRequiredFieldsInvalid ? (
+                <p className="fieldHelp" id="custom-required-error">
+                  Enter a name and at least one nutrient.
+                </p>
+              ) : null}
               <div className="entryActions">
                 <button
                   disabled={
                     customSaving ||
                     !canUseCustomControls() ||
                     !session ||
+                    customRequiredFieldsInvalid ||
                     customServingInvalid ||
                     customInvalidNutrients.length > 0 ||
                     hasCustomConflict()
                   }
                   aria-describedby={
                     [
+                      customRequiredFieldsInvalid ? "custom-required-error" : null,
                       customServingInvalid ? "custom-serving-error" : null,
                       customInvalidNutrients.length > 0 ? "custom-nutrient-error" : null,
                     ]

@@ -889,3 +889,12 @@ Private-food create and revise submits retire across date or meal departure and 
 Private-food saves stay disabled while a serving has an incomplete label/grams pair or invalid grams. Both serving fields and the save action point to the correction guidance. Forced invalid submits keep uncertainty guidance and raw drafts intact without a request or operation. Restoring the original serving permits the exact save retry, including its operation ID; the loaded-name filter, open nutrition details and independent pinned log remain intact. Both serving fields can stay empty when no serving is needed.
 
 Private-food saves stay disabled while a measured nutrient amount is empty or fails the existing decimal and length rules. Invalid amount fields and the save action point to correction guidance. Forced invalid submits keep uncertainty guidance, raw drafts, the loaded-name filter, open nutrition details and the independent pinned log intact. Restoring the original amount permits the exact save retry with its operation ID; zero, trace and unknown remain valid nutrient states.
+
+Private-food create and revise actions stay disabled when the name is blank or no
+nutrient rows remain. The incomplete field or nutrient group and Save point to the
+existing required-field guidance. Forced submits preserve the raw editor and any
+uncertain-save message without a request or operation. Restoring the original
+valid name or nutrient row permits the exact save retry. Retained invalid submits
+stay inert after correction and saving. The loaded-name filter, open unrelated
+nutrition details and independent pinned diary draft remain intact, including
+the exact uncertain log retry and its saved time and diary link.
