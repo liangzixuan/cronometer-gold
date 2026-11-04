@@ -2423,3 +2423,118 @@ describe("Reports invalid range guidance", () => {
     );
   }
 });
+
+describe("Reports failed-load recovery guidance", () => {
+  for (const previouslyLoaded of [false, true]) {
+    it.each(["http", "network", "malformed"])(
+      `explains %s recovery for ${previouslyLoaded ? "changed" : "initial"} range without losing date edits`,
+      async (failure) => {
+        let phase: "ready" | "fail" | "pending" = previouslyLoaded ? "ready" : "fail";
+        const pending = deferred<Response>();
+        const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (phase === "pending") return pending.promise;
+          if (phase === "fail") {
+            if (failure === "network") throw new TypeError("Report network unavailable.");
+            return failure === "http"
+              ? Response.json({ error: "Report temporarily unavailable." }, { status: 503 })
+              : Response.json({ data: { malformed: true } });
+          }
+          return reportResponse(url);
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+        await hooks.settle();
+        if (previouslyLoaded) {
+          nutrient("15");
+          await hooks.settle();
+          phase = "fail";
+          await click("Next period");
+        }
+        const from = previouslyLoaded ? "2026-09-08" : "2026-09-01";
+        const to = previouslyLoaded ? "2026-09-14" : "2026-09-07";
+        const guidance = `Choose Retry report to reload ${from} through ${to}. Your date edits remain available.`;
+        const detail =
+          failure === "http"
+            ? "Report temporarily unavailable."
+            : failure === "network"
+              ? "Report network unavailable."
+              : "The nutrition-report response was invalid.";
+        expect(text(elements().find((node) => node.props.role === "status"))).toBe(
+          `${guidance} ${detail}`,
+        );
+        expect(text()).not.toContain("Exact daily evidence");
+        expect(button("Print current report").props.disabled).toBe(true);
+        const failedRequest = required(fetcher.mock.calls.at(-1));
+        expect(failedRequest[0]).toBe(`/api/reports/nutrition?from=${from}&to=${to}`);
+
+        inputDate(0, "2026-09-15");
+        await hooks.settle();
+        inputDate(1, "2026-09-21");
+        await hooks.settle();
+        expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+        expect(text(elements().find((node) => node.props.role === "status"))).toBe(
+          `${guidance} ${detail}`,
+        );
+        const requests = fetcher.mock.calls.length;
+        const routes = router.replace.mock.calls.length;
+        const retry = button("Retry report");
+        phase = "pending";
+        invoke(retry);
+        invoke(retry);
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(requests + 1);
+        const retried = required(fetcher.mock.calls.at(-1));
+        expect(retried[0]).toBe(failedRequest[0]);
+        expect(retried[1]).toEqual({ ...failedRequest[1], signal: expect.any(AbortSignal) });
+        expect(retried[1]?.signal).not.toBe(failedRequest[1]?.signal);
+        expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+        expect(router.replace.mock.calls).toHaveLength(routes);
+        expect(text()).not.toContain("Exact daily evidence");
+        expect(button("Print current report").props.disabled).toBe(true);
+        pending.resolve(reportResponse(retried[0]));
+        await hooks.settle();
+        expect(text()).toContain("7 profile-local days loaded from one coherent snapshot.");
+        expect(text()).toContain("Exact daily evidence");
+        expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+        const expectedNutrient = previouslyLoaded
+          ? "15"
+          : required(emptyNutritionReportFixture(from, to).data.series[0]).nutrient.id;
+        expect(elements().find((node) => node.type === "select")?.props.value).toBe(
+          expectedNutrient,
+        );
+        expect(button("Print current report").props.disabled).toBe(true);
+        const recovered = text();
+        invoke(retry);
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(fetcher.mock.calls).toHaveLength(requests + 1);
+
+        phase = "ready";
+        invoke(required(elements().find((node) => node.type === "form")), "onSubmit", {
+          preventDefault() {},
+        });
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(requests + 2);
+        const applied = required(fetcher.mock.calls.at(-1));
+        expect(applied[0]).toBe("/api/reports/nutrition?from=2026-09-15&to=2026-09-21");
+        expect(applied[1]).toEqual({ ...failedRequest[1], signal: expect.any(AbortSignal) });
+        expect(applied[1]?.signal).not.toBe(retried[1]?.signal);
+        expect(router.replace).toHaveBeenLastCalledWith("/reports?from=2026-09-15&to=2026-09-21", {
+          scroll: false,
+        });
+        expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+        expect(elements().find((node) => node.type === "select")?.props.value).toBe(
+          expectedNutrient,
+        );
+        expect(button("Print current report").props.disabled).toBe(false);
+        const appliedText = text();
+        invoke(retry);
+        await hooks.settle();
+        expect(text()).toBe(appliedText);
+        expect(fetcher.mock.calls).toHaveLength(requests + 2);
+        expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+      },
+    );
+  }
+});

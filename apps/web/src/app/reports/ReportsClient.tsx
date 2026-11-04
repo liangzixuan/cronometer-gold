@@ -445,7 +445,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         if (isCurrent()) {
           setState("error");
           setMessage(
-            error instanceof Error ? error.message : "The nutrition report could not be loaded.",
+            `Choose Retry report to reload ${requestedRange.from} through ${requestedRange.to}. Your date edits remain available. ${error instanceof Error ? error.message : "The nutrition report could not be loaded."}`,
           );
         }
       }

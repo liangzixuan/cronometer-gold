@@ -907,3 +907,11 @@ raw dates, loaded evidence and current status without a read or navigation.
 After correction, a fresh submit loads the exact selected range with a new
 request signal and retains the selected nutrient without another profile read.
 Retained invalid submits stay inert after correction and recovery.
+
+Failed report loads name Retry report and the exact committed range it reloads.
+Keep the original error detail and explain that unsaved date edits remain
+available. A retry preserves those edits and the selected nutrient, sends the
+same GET with a new signal and makes no extra profile read. Update report applies
+the edited dates only when explicitly submitted. Retained retry actions stay
+inert after recovery and after the edited range loads. This source coverage does
+not establish real-browser, API or hosted acceptance.
