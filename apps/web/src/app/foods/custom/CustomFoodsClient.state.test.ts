@@ -1921,10 +1921,15 @@ describe("web custom-food entered nutrient amounts", () => {
     await change("Name", "Measured zero");
     expect(field("Amount per 100 grams 1").props.value).toBe("");
     const draft = formValues();
+    const message = status();
+    expect(button("Create private food").props.disabled).toBe(true);
     await submit("Create private food");
     expect(writes()).toHaveLength(0);
     expect(formValues()).toEqual(draft);
-    expect(status()).toContain("Enter zero or a positive decimal");
+    expect(text(elements().find((node) => node.props.id === "custom-nutrient-error"))).toContain(
+      "Enter zero or a positive decimal",
+    );
+    expect(status()).toBe(message);
     state.write = () => receipt(food());
     await change("Amount per 100 grams 1", "0");
     await submit("Create private food");
@@ -1968,10 +1973,15 @@ describe("web custom-food entered nutrient amounts", () => {
       await change("Nutrient state 1", "quantified");
       expect(field("Amount per 100 grams 1").props.value).toBe("");
       const draft = formValues();
+      const message = status();
+      expect(button("Save new version").props.disabled).toBe(true);
       await submit("Save new version");
       expect(writes()).toHaveLength(0);
       expect(formValues()).toEqual(draft);
-      expect(status()).toContain("Enter zero or a positive decimal");
+      expect(text(elements().find((node) => node.props.id === "custom-nutrient-error"))).toContain(
+        "Enter zero or a positive decimal",
+      );
+      expect(status()).toBe(message);
     },
   );
 
@@ -1983,10 +1993,20 @@ describe("web custom-food entered nutrient amounts", () => {
     else await change("Nutrient 1", "4");
     expect(field(`Amount per 100 grams ${action === "add" ? 2 : 1}`).props.value).toBe("");
     const draft = formValues();
+    const message = status();
+    if (action === "add") {
+      expect(field("Amount per 100 grams 1").props["aria-invalid"]).toBeUndefined();
+      expect(field("Amount per 100 grams 1").props["aria-describedby"]).toBeUndefined();
+      expect(field("Amount per 100 grams 2").props["aria-invalid"]).toBe(true);
+    }
+    expect(button("Save new version").props.disabled).toBe(true);
     await submit("Save new version");
     expect(writes()).toHaveLength(0);
     expect(formValues()).toEqual(draft);
-    expect(status()).toContain("Enter zero or a positive decimal");
+    expect(text(elements().find((node) => node.props.id === "custom-nutrient-error"))).toContain(
+      "Enter zero or a positive decimal",
+    );
+    expect(status()).toBe(message);
   });
 });
 
@@ -7533,6 +7553,156 @@ describe("My foods save serving validation", () => {
       expect(field("Serving label").props["aria-invalid"]).toBeUndefined();
       expect(field("Serving grams").props["aria-invalid"]).toBeUndefined();
       expect(elements().some((node) => node.props.id === "custom-serving-error")).toBe(false);
+      expect(formValues()).toEqual(validRaw);
+      invoke(retained, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(status()).toBe(uncertain);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+      const saved = {
+        ...food(mode === "create" ? 3 : 2),
+        revision: mode === "create" ? "1" : "2",
+        currentVersion: {
+          ...second.currentVersion,
+          id: "9007199254740999",
+          versionNumber: mode === "create" ? 1 : 2,
+          name: "Saved lunch food",
+          notes: "Raw notes\nkeep this line",
+          serving: second.currentVersion.serving,
+          nutrients: [
+            {
+              nutrient: requiredCustom(second.currentVersion.nutrients[0]).nutrient,
+              state: "quantified" as const,
+              amountPer100Grams: "0.125",
+            },
+          ],
+        },
+      };
+      state.write = () => Response.json({ data: { replayed: true, customFood: saved } });
+      await submit(label);
+      expect(writes()).toHaveLength(3);
+      expect(writes()[2]?.[0]).toBe(writes()[1]?.[0]);
+      expect(writes()[2]?.[1]).toEqual(attempted);
+      expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      expect(status()).toBe(
+        `Saved private custom food version ${saved.currentVersion.versionNumber}.`,
+      );
+      expect(field("Name").props.value).toBe("");
+      expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+      expect(details(first).props.hidden).toBe(false);
+      expect(elements(logForm()).map((node) => node.props.value)).toEqual(logDraft);
+      const savedStatus = status();
+      invoke(retained, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(status()).toBe(savedStatus);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 2);
+      state.write = (_url, init) => Response.json(matchedLogData(init, true));
+      await submit("Log exact version");
+      expect(writes()).toHaveLength(4);
+      expect(writes()[3]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[3]?.[1]).toEqual(logRequest);
+      expect(confirmedCustomTime().props.dateTime).toBe("2026-09-09T18:14:00.000Z");
+      expect(confirmedCustomLink().props.href).toBe("/dashboard?date=2026-09-09");
+      expect(fetcher).toHaveBeenCalledTimes(requests + 3);
+      expect(operationId).toHaveBeenCalledTimes(ids + 1);
+    });
+  }
+});
+
+describe("My foods save nutrient amount validation", () => {
+  for (const mode of ["create", "revise"] as const) {
+    it.each([
+      { invalid: "empty amount", amount: "" },
+      { invalid: "negative amount", amount: "-0.125" },
+      { invalid: "exponent amount", amount: "1e2" },
+      { invalid: "whitespace amount", amount: " 0.125 " },
+      { invalid: "over-length amount", amount: "1".repeat(201) },
+    ])(`keeps a ${mode} save disabled for $invalid until corrected`, async (invalid) => {
+      let sequence = 0;
+      const operationId = vi.fn(
+        () => `cdfd121e-6fbc-42f5-8630-${String(++sequence).padStart(12, "0")}`,
+      );
+      vi.stubGlobal("crypto", { randomUUID: operationId });
+      const first = food();
+      const second = food(2);
+      const { state, fetcher, writes } = workspace([first, second]);
+      state.picker = [
+        {
+          id: "2",
+          code: "protein",
+          name: "Picker protein",
+          unit: "g",
+          category: "macronutrient",
+        },
+      ];
+      navigation.search = "date=2026-09-09&meal=lunch";
+      await mount();
+      if (mode === "revise") await click("Revise", card(second));
+      await change("Name", "  Saved lunch food  ");
+      await change("Notes (optional)", "Raw notes\nkeep this line");
+      await change("Amount per 100 grams 1", "0.125");
+      await change("Serving label", "  Saved portion  ");
+      await change("Serving grams", "125.25");
+      await toggle(first);
+      await prepareLog();
+      await change(savedFilterLabel, "  saved  ");
+      state.write = () => Response.json({ error: "Uncertain log" }, { status: 503 });
+      await submit("Log exact version");
+      const logRequest = requiredCustom(writes()[0]?.[1]);
+      const validRaw = formValues();
+      const logDraft = elements(logForm()).map((node) => node.props.value);
+      const requests = fetcher.mock.calls.length;
+      const ids = operationId.mock.calls.length;
+      const label = mode === "create" ? "Create private food" : "Save new version";
+      state.write = () => Response.json({ error: "Uncertain save" }, { status: 503 });
+      await submit(label);
+      const attempted = requiredCustom(writes()[1]?.[1]);
+      expect(writes()[1]?.[0]).toBe(
+        mode === "create"
+          ? "/api/retention/custom-foods"
+          : `/api/retention/custom-foods/${second.id}/revisions`,
+      );
+      expect(JSON.parse(String(attempted.body))).toEqual({
+        name: "Saved lunch food",
+        brandName: null,
+        notes: "Raw notes\nkeep this line",
+        serving: { label: "Saved portion", grams: "125.25" },
+        nutrients: [{ nutrientId: "2", state: "quantified", amountPer100Grams: "0.125" }],
+      });
+      const uncertain = status();
+      expect(uncertain).toBe(
+        `The save is not confirmed. Your draft is still available. Choose ${label} again to retry the same request. Uncertain save`,
+      );
+      expect(button(label).props.disabled).toBe(false);
+      await change("Amount per 100 grams 1", invalid.amount);
+      expect(button(label).props.disabled).toBe(true);
+      expect(button(label).props["aria-describedby"]).toBe("custom-nutrient-error");
+      for (const name of ["Amount per 100 grams 1"]) {
+        expect(field(name).props["aria-invalid"]).toBe(true);
+        expect(field(name).props["aria-describedby"]).toBe("custom-nutrient-error");
+      }
+      expect(text(elements().find((node) => node.props.id === "custom-nutrient-error"))).toBe(
+        "Enter zero or a positive decimal for each measured nutrient per 100 g.",
+      );
+      const raw = formValues();
+      const retained = requiredCustom(
+        elements().find((node) => node.type === "form" && text(node).includes(label)),
+      );
+      invoke(retained, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(writes()).toHaveLength(2);
+      expect(fetcher).toHaveBeenCalledTimes(requests + 1);
+      expect(operationId).toHaveBeenCalledTimes(ids + 1);
+      expect(status()).toBe(uncertain);
+      expect(formValues()).toEqual(raw);
+      expect(field(savedFilterLabel).props.value).toBe("  saved  ");
+      expect(details(first).props.hidden).toBe(false);
+      expect(elements(logForm()).map((node) => node.props.value)).toEqual(logDraft);
+      await change("Amount per 100 grams 1", "0.125");
+      expect(button(label).props.disabled).toBe(false);
+      expect(button(label).props["aria-describedby"]).toBeUndefined();
+      expect(field("Amount per 100 grams 1").props["aria-invalid"]).toBeUndefined();
+      expect(field("Amount per 100 grams 1").props["aria-describedby"]).toBeUndefined();
+      expect(elements().some((node) => node.props.id === "custom-nutrient-error")).toBe(false);
       expect(formValues()).toEqual(validRaw);
       invoke(retained, "onSubmit", { preventDefault() {} });
       await hooks.settle();

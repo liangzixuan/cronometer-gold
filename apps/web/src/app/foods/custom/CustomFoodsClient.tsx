@@ -1213,6 +1213,12 @@ export function CustomFoodsClient() {
   const customServingInvalid =
     Boolean(custom.servingLabel.trim() || custom.servingGrams.trim()) &&
     (!custom.servingLabel.trim() || !isPositiveInputDecimal(custom.servingGrams));
+  const customInvalidNutrients = custom.nutrients.filter(
+    (nutrient) =>
+      nutrient.state === "quantified" &&
+      (nutrient.amountPer100Grams.length > 200 ||
+        !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(nutrient.amountPer100Grams)),
+  );
   async function saveCustomFood() {
     if (
       !canUseCustomControls() ||
@@ -1222,6 +1228,7 @@ export function CustomFoodsClient() {
       customWriteGeneration.current !== renderedWriteGeneration ||
       customWrite.current !== null ||
       customServingInvalid ||
+      customInvalidNutrients.length > 0 ||
       hasCustomConflict()
     )
       return;
@@ -1234,15 +1241,6 @@ export function CustomFoodsClient() {
       custom.nutrients.length
     ) {
       return setMessage("Each nutrient can appear only once in a custom food.");
-    }
-    for (const nutrient of custom.nutrients) {
-      if (
-        nutrient.state === "quantified" &&
-        (nutrient.amountPer100Grams.length > 200 ||
-          !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(nutrient.amountPer100Grams))
-      ) {
-        return setMessage("Enter zero or a positive decimal for each measured nutrient per 100 g.");
-      }
     }
     const body = {
       name: custom.name.trim(),
@@ -1910,6 +1908,10 @@ export function CustomFoodsClient() {
                     {row.state === "quantified" ? (
                       <input
                         aria-label={`Amount per 100 grams ${index + 1}`}
+                        aria-invalid={customInvalidNutrients.includes(row) || undefined}
+                        aria-describedby={
+                          customInvalidNutrients.includes(row) ? "custom-nutrient-error" : undefined
+                        }
                         inputMode="decimal"
                         value={row.amountPer100Grams}
                         onChange={(event) =>
@@ -1967,6 +1969,11 @@ export function CustomFoodsClient() {
                     </button>
                   </div>
                 ))}
+                {customInvalidNutrients.length > 0 ? (
+                  <p className="fieldHelp" id="custom-nutrient-error">
+                    Enter zero or a positive decimal for each measured nutrient per 100 g.
+                  </p>
+                ) : null}
                 <button
                   disabled={!nextCustomNutrient}
                   aria-describedby="custom-nutrient-availability"
@@ -2006,9 +2013,17 @@ export function CustomFoodsClient() {
                     !canUseCustomControls() ||
                     !session ||
                     customServingInvalid ||
+                    customInvalidNutrients.length > 0 ||
                     hasCustomConflict()
                   }
-                  aria-describedby={customServingInvalid ? "custom-serving-error" : undefined}
+                  aria-describedby={
+                    [
+                      customServingInvalid ? "custom-serving-error" : null,
+                      customInvalidNutrients.length > 0 ? "custom-nutrient-error" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" ") || undefined
+                  }
                   type="submit"
                 >
                   {customSaving
