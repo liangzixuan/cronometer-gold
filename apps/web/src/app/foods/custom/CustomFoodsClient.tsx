@@ -1210,6 +1210,9 @@ export function CustomFoodsClient() {
     }
   }
 
+  const customServingInvalid =
+    Boolean(custom.servingLabel.trim() || custom.servingGrams.trim()) &&
+    (!custom.servingLabel.trim() || !isPositiveInputDecimal(custom.servingGrams));
   async function saveCustomFood() {
     if (
       !canUseCustomControls() ||
@@ -1218,6 +1221,7 @@ export function CustomFoodsClient() {
       customSaving ||
       customWriteGeneration.current !== renderedWriteGeneration ||
       customWrite.current !== null ||
+      customServingInvalid ||
       hasCustomConflict()
     )
       return;
@@ -1230,12 +1234,6 @@ export function CustomFoodsClient() {
       custom.nutrients.length
     ) {
       return setMessage("Each nutrient can appear only once in a custom food.");
-    }
-    if (
-      (custom.servingLabel.trim() || custom.servingGrams.trim()) &&
-      (!custom.servingLabel.trim() || !isPositiveInputDecimal(custom.servingGrams))
-    ) {
-      return setMessage("A serving needs both a label and positive grams.");
     }
     for (const nutrient of custom.nutrients) {
       if (
@@ -1810,6 +1808,8 @@ export function CustomFoodsClient() {
                   Serving label
                   <input
                     maxLength={200}
+                    aria-invalid={customServingInvalid || undefined}
+                    aria-describedby={customServingInvalid ? "custom-serving-error" : undefined}
                     value={custom.servingLabel}
                     onChange={(event) => setCustom({ ...custom, servingLabel: event.target.value })}
                   />
@@ -1819,11 +1819,18 @@ export function CustomFoodsClient() {
                   <input
                     inputMode="decimal"
                     maxLength={19}
+                    aria-invalid={customServingInvalid || undefined}
+                    aria-describedby={customServingInvalid ? "custom-serving-error" : undefined}
                     value={custom.servingGrams}
                     onChange={(event) => setCustom({ ...custom, servingGrams: event.target.value })}
                   />
                 </label>
               </div>
+              {customServingInvalid ? (
+                <p className="fieldHelp" id="custom-serving-error">
+                  A serving needs both a label and positive grams.
+                </p>
+              ) : null}
               <fieldset>
                 <legend>Nutrients per 100 g</legend>
                 {custom.nutrients.map((row, index) => (
@@ -1995,8 +2002,13 @@ export function CustomFoodsClient() {
               <div className="entryActions">
                 <button
                   disabled={
-                    customSaving || !canUseCustomControls() || !session || hasCustomConflict()
+                    customSaving ||
+                    !canUseCustomControls() ||
+                    !session ||
+                    customServingInvalid ||
+                    hasCustomConflict()
                   }
+                  aria-describedby={customServingInvalid ? "custom-serving-error" : undefined}
                   type="submit"
                 >
                   {customSaving
