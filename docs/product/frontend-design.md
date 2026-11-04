@@ -898,3 +898,12 @@ valid name or nutrient row permits the exact save retry. Retained invalid submit
 stay inert after correction and saving. The loaded-name filter, open unrelated
 nutrition details and independent pinned diary draft remain intact, including
 the exact uncertain log retry and its saved time and diary link.
+
+Report date edits show the existing range guidance before submission when either
+date is empty or invalid, From follows To, or the inclusive range exceeds 31 days.
+Both date fields and Update report reference the guidance; the fields remain
+editable and Update report stays disabled. Forced invalid submits preserve the
+raw dates, loaded evidence and current status without a read or navigation.
+After correction, a fresh submit loads the exact selected range with a new
+request signal and retains the selected nutrient without another profile read.
+Retained invalid submits stay inert after correction and recovery.

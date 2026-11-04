@@ -2309,3 +2309,117 @@ describe("Report route return readiness", () => {
     },
   );
 });
+
+describe("Reports invalid range guidance", () => {
+  for (const failed of [false, true]) {
+    it.each([
+      ["empty From", "", "2026-09-07", "Choose valid report dates with From on or before To."],
+      ["empty To", "2026-09-01", "", "Choose valid report dates with From on or before To."],
+      [
+        "invalid From",
+        "2026-02-30",
+        "2026-09-07",
+        "Choose valid report dates with From on or before To.",
+      ],
+      [
+        "invalid To",
+        "2026-09-01",
+        "2026-09-31",
+        "Choose valid report dates with From on or before To.",
+      ],
+      [
+        "reversed",
+        "2026-09-08",
+        "2026-09-07",
+        "Choose valid report dates with From on or before To.",
+      ],
+      ["32 days", "2026-08-07", "2026-09-07", "Choose an inclusive range of 1 to 31 local days."],
+    ])(
+      `keeps %s range inert with ${failed ? "failed" : "loaded"} report and recovers exact dates`,
+      async (_label, from, to, guidance) => {
+        let fail = false;
+        const fetcher = vi.fn(async (url: string, _init?: RequestInit) =>
+          url === "/api/auth/me"
+            ? session()
+            : fail
+              ? Response.json({ error: "Report remains unavailable." }, { status: 503 })
+              : reportResponse(url),
+        );
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+        await hooks.settle();
+        nutrient("15");
+        await hooks.settle();
+        if (failed) {
+          fail = true;
+          invoke(required(elements().find((node) => node.type === "form")), "onSubmit", {
+            preventDefault() {},
+          });
+          await hooks.settle();
+          expect(text()).toContain("Report remains unavailable.");
+        }
+        const previous = required(
+          fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")).at(-1),
+        );
+        inputDate(0, from);
+        await hooks.settle();
+        inputDate(1, to);
+        await hooks.settle();
+        const invalidForm = required(elements().find((node) => node.type === "form"));
+        const requests = fetcher.mock.calls.length;
+        const routes = router.replace.mock.calls.length;
+        const status = text(elements().find((node) => node.props.role === "status"));
+        const before = text();
+        expect(button("Update report").props.disabled).toBe(true);
+        expect(button("Update report").props["aria-describedby"]).toBe("report-range-error");
+        for (const field of dateFields()) {
+          expect(field.props["aria-invalid"]).toBe(true);
+          expect(field.props["aria-describedby"]).toBe("report-range-error");
+          expect(field.props.disabled).toBe(false);
+        }
+        expect(text(elements().find((node) => node.props.id === "report-range-error"))).toBe(
+          guidance,
+        );
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(text()).toBe(before);
+        expect(currentDates()).toEqual([from, to]);
+        expect(text(elements().find((node) => node.props.role === "status"))).toBe(status);
+        expect(fetcher.mock.calls).toHaveLength(requests);
+        expect(router.replace.mock.calls).toHaveLength(routes);
+
+        inputDate(0, "2026-09-01");
+        await hooks.settle();
+        inputDate(1, "2026-09-07");
+        await hooks.settle();
+        expect(button("Update report").props.disabled).toBe(false);
+        for (const field of dateFields()) expect(field.props["aria-invalid"]).toBeUndefined();
+        expect(text(elements().find((node) => node.props.id === "report-range-error"))).toBe("");
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(requests);
+        expect(text(elements().find((node) => node.props.role === "status"))).toBe(status);
+        fail = false;
+        invoke(required(elements().find((node) => node.type === "form")), "onSubmit", {
+          preventDefault() {},
+        });
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(requests + 1);
+        const recovered = required(fetcher.mock.calls.at(-1));
+        expect(recovered[0]).toBe(previous[0]);
+        expect(recovered[1]).toEqual({ ...previous[1], signal: expect.any(AbortSignal) });
+        expect(recovered[1]?.signal).not.toBe(previous[1]?.signal);
+        expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+        expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+        expect(text()).toContain("7 profile-local days loaded from one coherent snapshot.");
+        expect(text()).toContain("Exact daily evidence");
+        const saved = text();
+        invoke(invalidForm, "onSubmit", { preventDefault() {} });
+        await hooks.settle();
+        expect(text()).toBe(saved);
+        expect(fetcher.mock.calls).toHaveLength(requests + 1);
+        expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+      },
+    );
+  }
+});

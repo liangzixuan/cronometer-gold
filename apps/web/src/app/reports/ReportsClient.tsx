@@ -538,6 +538,15 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const sessionContext = sessionGeneration.current;
   const reportContext = reportGeneration.current;
   const dirtyRange = range !== null && (draftFrom !== range.from || draftTo !== range.to);
+  const draftRangeError = useMemo(() => {
+    if (!range) return "";
+    try {
+      nutritionReportDates(draftFrom, draftTo);
+      return "";
+    } catch (error) {
+      return error instanceof Error ? error.message : "Choose an inclusive range of 1 to 31 days.";
+    }
+  }, [draftFrom, draftTo, range]);
   const adjacentRanges = useMemo(() => {
     if (!report) return { previous: null, next: null };
     try {
@@ -783,9 +792,8 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
 
   function submitRange(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!canUseRangeControls()) return;
+    if (!canUseRangeControls() || draftRangeError) return;
     try {
-      nutritionReportDates(draftFrom, draftTo);
       commitRange({ from: draftFrom, to: draftTo });
     } catch (error) {
       setRangeError(
@@ -943,6 +951,8 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <label>
               <span>From</span>
               <input
+                aria-invalid={draftRangeError ? true : undefined}
+                aria-describedby={draftRangeError ? "report-range-error" : undefined}
                 disabled={!canUseRangeControls()}
                 onChange={(event) => {
                   editRangeDate("from", event.target.value);
@@ -955,6 +965,8 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <label>
               <span>To</span>
               <input
+                aria-invalid={draftRangeError ? true : undefined}
+                aria-describedby={draftRangeError ? "report-range-error" : undefined}
                 disabled={!canUseRangeControls()}
                 onChange={(event) => {
                   editRangeDate("to", event.target.value);
@@ -964,12 +976,17 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                 value={draftTo}
               />
             </label>
-            <button className="buttonPrimary" disabled={!canUseRangeControls()} type="submit">
+            <button
+              className="buttonPrimary"
+              aria-describedby={draftRangeError ? "report-range-error" : undefined}
+              disabled={!canUseRangeControls() || Boolean(draftRangeError)}
+              type="submit"
+            >
               Update report
             </button>
           </div>
-          <p className="reportRangeError" aria-live="polite">
-            {rangeError}
+          <p id="report-range-error" className="reportRangeError" aria-live="polite">
+            {draftRangeError || rangeError}
           </p>
         </form>
 
