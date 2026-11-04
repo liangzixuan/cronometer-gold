@@ -755,7 +755,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       clearInspection();
       invalidatePrint(false);
       setPrintMessage(
-        error instanceof Error ? error.message : "Your print session could not be verified.",
+        `Choose Print current report to retry session verification. Your loaded report and selected nutrient remain available. ${error instanceof Error ? error.message : "Your print session could not be verified."}`,
       );
     }
   }

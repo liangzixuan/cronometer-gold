@@ -915,3 +915,12 @@ same GET with a new signal and makes no extra profile read. Update report applie
 the edited dates only when explicitly submitted. Retained retry actions stay
 inert after recovery and after the edited range loads. This source coverage does
 not establish real-browser, API or hosted acceptance.
+
+Failed print-session verification names Print current report as the retry action
+and explains that the loaded report and selected nutrient remain available.
+Keep the original HTTP, network or malformed-response detail. Retry only the
+session request with a fresh signal; duplicate pending actions do not add reads.
+Preserve the report dates, selected nutrient, loaded evidence and report status
+without reloading the report. Printing remains closed until verification succeeds,
+then uses the exact loaded snapshot and selected nutrient and closes its gate.
+This source coverage does not establish a real browser print or hosted acceptance.

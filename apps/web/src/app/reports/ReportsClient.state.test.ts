@@ -2538,3 +2538,112 @@ describe("Reports failed-load recovery guidance", () => {
     );
   }
 });
+
+describe("Reports print-verification recovery guidance", () => {
+  it.each(["http", "network", "malformed"] as const)(
+    "retains the loaded report and verifies only the session again after %s failure",
+    async (failure) => {
+      const pending = deferred<Response>();
+      let phase: "ready" | "fail" | "pending" = "ready";
+      const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+        if (url !== "/api/auth/me") return reportResponse(url);
+        if (phase === "pending") return pending.promise;
+        if (phase === "fail") {
+          if (failure === "http") {
+            return Response.json({ error: "Print session unavailable." }, { status: 503 });
+          }
+          if (failure === "network") throw new Error("Print connection interrupted.");
+          return Response.json({ data: {} });
+        }
+        return session();
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+      await hooks.settle();
+      nutrient("15");
+      await hooks.settle();
+      const dates = currentDates();
+      const status = text(
+        required(elements().find((node) => node.props.className === "workspaceStatus")),
+      );
+      phase = "fail";
+      startPrint();
+      await hooks.settle();
+      const detail =
+        failure === "http"
+          ? "Print session unavailable."
+          : failure === "network"
+            ? "Print connection interrupted."
+            : "The session response was invalid.";
+      expect(text()).toContain("Choose Print current report to retry session verification.");
+      expect(text()).toContain("Your loaded report and selected nutrient remain available.");
+      expect(text()).toContain(detail);
+      expect(text()).toContain("Exact daily evidence");
+      expect(currentDates()).toEqual(dates);
+      expect(required(elements().find((node) => node.type === "select")).props.value).toBe("15");
+      expect(
+        text(required(elements().find((node) => node.props.className === "workspaceStatus"))),
+      ).toBe(status);
+      expect(button("Print current report").props.disabled).toBe(false);
+      expect(nativePrint).not.toHaveBeenCalled();
+      expect(printedComponent()).toBeUndefined();
+      printEvents.dispatchEvent(new Event("beforeprint"));
+      expect(printGate()).toBe("false");
+      expect(fetcher.mock.calls).toHaveLength(3);
+      const failedRequest = required(fetcher.mock.calls[2]);
+      expect(failedRequest[0]).toBe("/api/auth/me");
+
+      phase = "pending";
+      const retry = button("Print current report");
+      invoke(retry);
+      invoke(retry);
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(4);
+      const retriedRequest = required(fetcher.mock.calls[3]);
+      const { signal: failedSignal, ...failedOptions } = required(failedRequest[1]);
+      const { signal: retrySignal, ...retryOptions } = required(retriedRequest[1]);
+      expect(retriedRequest[0]).toBe(failedRequest[0]);
+      expect(retryOptions).toEqual(failedOptions);
+      expect(retryOptions).toEqual({ headers: { accept: "application/json" }, cache: "no-store" });
+      expect(retrySignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).not.toBe(failedSignal);
+      expect(button("Preparing print…").props.disabled).toBe(true);
+      expect(currentDates()).toEqual(dates);
+      expect(required(elements().find((node) => node.type === "select")).props.value).toBe("15");
+      expect(text()).toContain("Exact daily evidence");
+      expect(nativePrint).not.toHaveBeenCalled();
+      printEvents.dispatchEvent(new Event("beforeprint"));
+      expect(printGate()).toBe("false");
+
+      nativePrint.mockImplementation(() => {
+        expect(printedComponent()?.props.report).toEqual(
+          emptyNutritionReportFixture("2026-09-01", "2026-09-07").data,
+        );
+        expect(printedComponent()?.props.nutrientId).toBe("15");
+        printEvents.dispatchEvent(new Event("beforeprint"));
+        expect(printGate()).toBe("true");
+        printEvents.dispatchEvent(new Event("afterprint"));
+        expect(printGate()).toBe("false");
+      });
+      pending.resolve(session());
+      await hooks.settle();
+      expect(nativePrint).toHaveBeenCalledTimes(1);
+      expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(3);
+      expect(
+        fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+      ).toHaveLength(1);
+      expect(fetcher.mock.calls).toHaveLength(4);
+      expect(currentDates()).toEqual(dates);
+      expect(required(elements().find((node) => node.type === "select")).props.value).toBe("15");
+      expect(
+        text(required(elements().find((node) => node.props.className === "workspaceStatus"))),
+      ).toBe(status);
+      expect(text()).toContain("Exact daily evidence");
+      expect(button("Print current report").props.disabled).toBe(false);
+      expect(printedComponent()).toBeUndefined();
+      expect(printGate()).toBe("false");
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(router.push).not.toHaveBeenCalled();
+    },
+  );
+});
