@@ -1010,3 +1010,13 @@ food. Loaded diary entries and totals remain available. The message names Delete
 for that food as the retry action. Cancelling the confirmation sends no request
 and preserves the guidance. A confirmed retry keeps the original entry revision,
 request path and operation key; the existing receipt checks determine success.
+
+### Diary repeat recovery guidance
+
+An unconfirmed repeat keeps the original error detail and fixed destination date.
+For Repeat today, the message names **Repeat today** as the retry action. This
+retry retains the original destination even after local midnight. For a custom
+destination, the message names **Retry pinned repeat** and keeps the selected day
+and meal. Both retries use the same operation, source version and request
+until a matching response confirms the repeat. Existing route and response
+checks remain unchanged.

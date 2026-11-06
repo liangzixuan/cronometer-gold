@@ -1534,57 +1534,71 @@ describe("Expand all diary meals", () => {
   });
 });
 
-describe("actual Diary Repeat retry identity", () => {
-  it.each([
-    ["minute", "2026-08-15T18:00:59.000Z", "2026-08-15T18:01:01.000Z", "2026-08-15T18:00:59.000Z"],
-    [
-      "local midnight",
-      "2026-08-16T04:59:59.000Z",
-      "2026-08-16T05:00:01.000Z",
-      "2026-08-16T04:59:59.000Z",
-    ],
-  ])(
-    "pins unresolved Repeat across a %s boundary",
-    async (_boundary, firstTime, retryTime, occurredAt) => {
-      vi.useFakeTimers({ toFake: ["Date"] });
-      vi.setSystemTime(new Date(firstTime));
-      if (_boundary === "local midnight") route.date = null;
-      const writes: Array<{ url: string; body: string | null; headers: Record<string, string> }> =
-        [];
-      const base = fetcher();
-      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
-        if (init?.method === "POST" && url.includes("/repeat?")) {
-          writes.push({
-            url,
-            body: typeof init.body === "string" ? init.body : null,
-            headers: Object.fromEntries(new Headers(init.headers)),
-          });
-          return Response.json(
-            { error: "The accepted response may have been lost." },
-            { status: 503 },
-          );
-        }
-        return base(url, init);
-      });
-      await mount(fetch);
-      await click("Repeat Apple 0 today");
-      expect(writes).toHaveLength(1);
-      expect(writes[0]?.url).toBe(
-        `/api/diary/entries/${entry(0).id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
-      );
-      expect(writes[0]?.body).toBe(JSON.stringify({ occurredAt, mealSlot: "breakfast" }));
-      expect(writes[0]?.headers["if-match"]).toBe('"3"');
-      expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
-      expect(text()).toContain(
-        "Choose Repeat again to retry the same operation for 2026-08-15 safely.",
-      );
-      vi.setSystemTime(new Date(retryTime));
-      await click("Repeat Apple 0 today");
-      expect(writes).toHaveLength(2);
-      expect(writes[1]).toEqual(writes[0]);
-    },
-  );
-});
+describe.each(["Repeat Apple 0 today", "Retry pinned repeat"])(
+  "actual Diary Repeat retry identity via %s",
+  (retryAction) => {
+    it.each([
+      [
+        "minute",
+        "2026-08-15T18:00:59.000Z",
+        "2026-08-15T18:01:01.000Z",
+        "2026-08-15T18:00:59.000Z",
+      ],
+      [
+        "local midnight",
+        "2026-08-16T04:59:59.000Z",
+        "2026-08-16T05:00:01.000Z",
+        "2026-08-16T04:59:59.000Z",
+      ],
+    ])(
+      "pins unresolved Repeat across a %s boundary",
+      async (_boundary, firstTime, retryTime, occurredAt) => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date(firstTime));
+        if (_boundary === "local midnight" && retryAction === "Repeat Apple 0 today")
+          route.date = null;
+        const writes: Array<{
+          url: string;
+          body: string | null;
+          headers: Record<string, string>;
+        }> = [];
+        const base = fetcher();
+        const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+          if (init?.method === "POST" && url.includes("/repeat?")) {
+            writes.push({
+              url,
+              body: typeof init.body === "string" ? init.body : null,
+              headers: Object.fromEntries(new Headers(init.headers)),
+            });
+            return Response.json(
+              { error: "The accepted response may have been lost." },
+              { status: 503 },
+            );
+          }
+          return base(url, init);
+        });
+        await mount(fetch);
+        await click("Repeat Apple 0 today");
+        expect(writes).toHaveLength(1);
+        expect(writes[0]?.url).toBe(
+          `/api/diary/entries/${entry(0).id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+        );
+        expect(writes[0]?.body).toBe(JSON.stringify({ occurredAt, mealSlot: "breakfast" }));
+        expect(writes[0]?.headers["if-match"]).toBe('"3"');
+        expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+        expect(text()).toContain(
+          "Your repeat is not confirmed. Choose Repeat today to retry the same operation for 2026-08-15 safely.",
+        );
+        expect(text()).toContain("The accepted response may have been lost.");
+        expect(button("Retry pinned repeat").props.disabled).toBe(false);
+        vi.setSystemTime(new Date(retryTime));
+        await click(retryAction);
+        expect(writes).toHaveLength(2);
+        expect(writes[1]).toEqual(writes[0]);
+      },
+    );
+  },
+);
 
 interface CapturedRepeat {
   readonly url: string;
@@ -2243,6 +2257,11 @@ describe("web diary repeat destination", () => {
     await change("Repeat meal", "dinner");
     await click("Confirm repeat destination");
     expect(text()).toContain("Pending repeat: 2026-10-04 · Dinner · America/Chicago");
+    expect(text()).toContain("Response lost");
+    expect(text()).toContain(
+      "Your repeat is not confirmed. Choose Retry pinned repeat to retry the same operation for 2026-10-04 safely.",
+    );
+    expect(text(button("Retry repeat for Apple 0"))).toBe("Retry pinned repeat");
     expect(button("Repeat Apple 0 to another day or meal").props.disabled).toBe(true);
     expect(elements().some((node) => node.props["aria-label"] === "Repeat Apple 0 today")).toBe(
       false,

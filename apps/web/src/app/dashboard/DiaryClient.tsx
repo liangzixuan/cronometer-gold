@@ -1819,7 +1819,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       if (pageIsCurrent()) {
         if (requestIsCurrent()) {
           setMessage(
-            `${error instanceof Error ? error.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation for ${operation.targetDate} safely.`,
+            `${error instanceof Error ? error.message : "The entry could not be repeated."} Your repeat is not confirmed. Choose ${operation.customDestination ? "Retry pinned repeat" : "Repeat today"} to retry the same operation for ${operation.targetDate} safely.`,
           );
         } else if (!repeatOperations.current.has(slot)) {
           setMessage(resolvedMessage);
