@@ -920,6 +920,14 @@ the edited dates only when explicitly submitted. Retained retry actions stay
 inert after recovery and after the edited range loads. This source coverage does
 not establish real-browser, API or hosted acceptance.
 
+Starting print verification retires its ready action before paint. Ready and
+loading actions stay inert after failed verification, a failed native dialog or
+completed printing. They cannot start another session read, replace recovery
+guidance or reopen the print dialog. A fresh action verifies the session again
+with the same GET options and a new signal, then prints the exact loaded report
+and selected nutrient. Keep dates, report status and evidence unchanged; close
+the print gate after each attempt.
+
 Failed print-session verification names Print current report as the retry action
 and explains that the loaded report and selected nutrient remain available.
 Keep the original HTTP, network or malformed-response detail. Retry only the

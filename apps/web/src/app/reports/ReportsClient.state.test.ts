@@ -2751,3 +2751,115 @@ describe("Reports session-verification recovery guidance", () => {
     );
   }
 });
+
+describe("Reports retired print actions", () => {
+  it.each(["http", "network", "malformed", "native failure", "completed"] as const)(
+    "keeps ready and loading actions retired after %s and a fresh print",
+    async (outcome) => {
+      let pending = deferred<Response | Error>();
+      let printing = false;
+      const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+        if (url !== "/api/auth/me") return reportResponse(url);
+        const result = printing ? await pending.promise : session();
+        if (result instanceof Error) throw result;
+        return result;
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+      await hooks.settle();
+      nutrient("15");
+      await hooks.settle();
+      const dates = currentDates();
+      const ready = button("Print current report");
+      const status = text(
+        required(elements().find((node) => node.props.className === "workspaceStatus")),
+      );
+      printing = true;
+      invoke(ready);
+      invoke(ready);
+      expect(fetcher.mock.calls).toHaveLength(3);
+      await hooks.settle();
+      const loading = button("Preparing print…");
+      expect(loading.props.disabled).toBe(true);
+      invoke(loading);
+      expect(fetcher.mock.calls).toHaveLength(3);
+      expect(printGate()).toBe("false");
+      expect(nativePrint).not.toHaveBeenCalled();
+      nativePrint.mockImplementation(() => {
+        expect(printedComponent()?.props.report).toEqual(
+          emptyNutritionReportFixture("2026-09-01", "2026-09-07").data,
+        );
+        expect(printedComponent()?.props.nutrientId).toBe("15");
+        printEvents.dispatchEvent(new Event("beforeprint"));
+        expect(printGate()).toBe("true");
+        if (outcome === "native failure") throw new Error("Native dialog unavailable.");
+        printEvents.dispatchEvent(new Event("afterprint"));
+      });
+      if (outcome === "http")
+        pending.resolve(Response.json({ error: "Print session unavailable." }, { status: 503 }));
+      else if (outcome === "network") pending.resolve(new Error("Print connection interrupted."));
+      else if (outcome === "malformed") pending.resolve(Response.json({ data: {} }));
+      else pending.resolve(session());
+      await hooks.settle();
+      const firstPrints = outcome === "completed" || outcome === "native failure" ? 1 : 0;
+      expect(nativePrint).toHaveBeenCalledTimes(firstPrints);
+      expect(button("Print current report").props.disabled).toBe(false);
+      expect(printedComponent()).toBeUndefined();
+      expect(printGate()).toBe("false");
+      const settledText = text();
+      invoke(ready);
+      invoke(loading);
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(3);
+      expect(nativePrint).toHaveBeenCalledTimes(firstPrints);
+      expect(text()).toBe(settledText);
+
+      pending = deferred<Response | Error>();
+      const retry = button("Print current report");
+      invoke(retry);
+      invoke(retry);
+      await hooks.settle();
+      const retryLoading = button("Preparing print…");
+      expect(fetcher.mock.calls).toHaveLength(4);
+      const original = required(fetcher.mock.calls[2]);
+      const retried = required(fetcher.mock.calls[3]);
+      const { signal: firstSignal, ...firstOptions } = required(original[1]);
+      const { signal: nextSignal, ...nextOptions } = required(retried[1]);
+      expect(original[0]).toBe("/api/auth/me");
+      expect(retried[0]).toBe(original[0]);
+      expect(nextOptions).toEqual(firstOptions);
+      expect(nextOptions).toEqual({ headers: { accept: "application/json" }, cache: "no-store" });
+      expect(nextSignal).toBeInstanceOf(AbortSignal);
+      expect(nextSignal).not.toBe(firstSignal);
+      nativePrint.mockImplementation(() => {
+        expect(printedComponent()?.props.report).toEqual(
+          emptyNutritionReportFixture("2026-09-01", "2026-09-07").data,
+        );
+        expect(printedComponent()?.props.nutrientId).toBe("15");
+        printEvents.dispatchEvent(new Event("beforeprint"));
+        expect(printGate()).toBe("true");
+        printEvents.dispatchEvent(new Event("afterprint"));
+      });
+      pending.resolve(session());
+      await hooks.settle();
+      const recoveredText = text();
+      for (const retired of [ready, loading, retry, retryLoading]) invoke(retired);
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(4);
+      expect(nativePrint).toHaveBeenCalledTimes(firstPrints + 1);
+      expect(text()).toBe(recoveredText);
+      expect(currentDates()).toEqual(dates);
+      expect(required(elements().find((node) => node.type === "select")).props.value).toBe("15");
+      expect(
+        text(required(elements().find((node) => node.props.className === "workspaceStatus"))),
+      ).toBe(status);
+      expect(text()).toContain("Exact daily evidence");
+      expect(button("Print current report").props.disabled).toBe(false);
+      expect(printedComponent()).toBeUndefined();
+      printEvents.dispatchEvent(new Event("beforeprint"));
+      expect(printGate()).toBe("false");
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(router.push).not.toHaveBeenCalled();
+    },
+  );
+});

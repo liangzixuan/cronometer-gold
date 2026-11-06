@@ -537,6 +537,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const controlContext = controlGeneration.current;
   const sessionContext = sessionGeneration.current;
   const reportContext = reportGeneration.current;
+  const printContext = printGeneration.current;
   const dirtyRange = range !== null && (draftFrom !== range.from || draftTo !== range.to);
   const draftRangeError = useMemo(() => {
     if (!range) return "";
@@ -692,6 +693,9 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   async function printCurrentReport() {
     const view = printView.current;
     if (
+      !printable ||
+      printBusy ||
+      printGeneration.current !== printContext ||
       !view ||
       view.report !== report ||
       view.nutrientId !== selectedSeries?.nutrient.id ||
