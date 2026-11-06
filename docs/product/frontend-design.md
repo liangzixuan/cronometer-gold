@@ -958,3 +958,10 @@ Preserve the report dates, selected nutrient, loaded evidence and report status
 without reloading the report. Printing remains closed until verification succeeds,
 then uses the exact loaded snapshot and selected nutrient and closes its gate.
 This source coverage does not establish a real browser print or hosted acceptance.
+
+Failed Dashboard and Diary day loads name Retry and the exact date it reloads,
+while retaining the original HTTP, network or malformed-response detail. Explain
+that another date can be selected. Retry sends the same day request with a fresh
+signal; duplicate actions start one read without reloading the session or other
+summaries. Recovery shows the correct day and totals. Retained retries cannot
+replace the recovered overview or raw editor draft, send requests or navigate.

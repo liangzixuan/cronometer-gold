@@ -8934,3 +8934,103 @@ describe("Diary session recovery guidance", () => {
     );
   }
 });
+
+describe("Diary day recovery guidance", () => {
+  for (const view of ["diary", "overview"] as const) {
+    it.each(["HTTP503", "network", "malformed"] as const)(
+      `explains and preserves exact ${view} day recovery after %s`,
+      async (failure) => {
+        route.date = "2026-08-14";
+        const pending = deferred<Response>();
+        let dayCalls = 0;
+        const base = fetcher();
+        const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url.startsWith("/api/diary?")) {
+            dayCalls += 1;
+            if (dayCalls === 1) {
+              if (failure === "network") throw new Error("Connection unavailable.");
+              if (failure === "malformed") return Response.json({ data: {} });
+              return Response.json({ error: "Day unavailable." }, { status: 503 });
+            }
+            if (dayCalls === 2) return pending.promise;
+          }
+          return base(url, init);
+        });
+        await mount(fetch, view);
+        const detail =
+          failure === "network"
+            ? "Connection unavailable."
+            : failure === "malformed"
+              ? "The diary response was invalid."
+              : "Day unavailable.";
+        const status = () => text(elements().find((node) => node.props.role === "status"));
+        expect(status()).toBe(
+          `${detail} Choose Retry to reload the diary for 2026-08-14, or select another date.`,
+        );
+        expect(field("Local date").props.value).toBe("2026-08-14");
+        expect(field("Local date").props.disabled).not.toBe(true);
+        expect(button("Previous day").props.disabled).not.toBe(true);
+        expect(button("Next day").props.disabled).not.toBe(true);
+        expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+        expect(text()).not.toContain("Apple 2");
+        expect(text()).not.toContain("No entries");
+        const retry = button("Retry");
+        expect(retry.props.disabled).not.toBe(true);
+        const beforeRetry = fetch.mock.calls.length;
+        invoke(retry);
+        invoke(retry);
+        await hooks.settle();
+        expect(dayCalls).toBe(2);
+        expect(fetch).toHaveBeenCalledTimes(beforeRetry + 1);
+        const reads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+        expect(reads).toHaveLength(2);
+        expect(reads[1]?.[0]).toBe(reads[0]?.[0]);
+        expect(
+          new URL(String(reads[0]?.[0]), "https://app.example.test").searchParams.get("date"),
+        ).toBe("2026-08-14");
+        const first = reads[0]?.[1],
+          second = reads[1]?.[1];
+        expect(first).toEqual({
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: expect.any(AbortSignal),
+        });
+        expect(second).toEqual({ ...first, signal: expect.any(AbortSignal) });
+        expect(second?.signal).not.toBe(first?.signal);
+        expect(second?.signal?.aborted).toBe(false);
+        expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+        expect(text()).not.toContain("Apple 2");
+        pending.resolve(
+          Response.json(page([entry(2, "breakfast", "2026-08-14")], null, 1, "2026-08-14")),
+        );
+        await hooks.settle();
+        expect(fetch).toHaveBeenCalledTimes(beforeRetry + 1);
+        expect(status()).toContain("1 of 1 entry loaded. Nutrition totals include all 1.");
+        if (view === "overview") {
+          const summary = elements().find((node) => node.type === CalmOverview);
+          expect(summary?.props.day).toMatchObject({ localDate: "2026-08-14", totals: [nutrient] });
+          expect(summary?.props.totalEntries).toBe(1);
+        } else {
+          expect(text()).toContain("Apple 2");
+          await click("Edit Apple 2");
+          await change("Quantity", "2.125000");
+          await change("Private note", "  keep this diary draft  ");
+        }
+        const before = text(),
+          requests = fetch.mock.calls.length;
+        invoke(retry);
+        await hooks.settle();
+        expect(text()).toBe(before);
+        expect(fetch).toHaveBeenCalledTimes(requests);
+        if (view === "diary") {
+          expect(field("Quantity").props.value).toBe("2.125000");
+          expect(field("Private note").props.value).toBe("  keep this diary draft  ");
+        }
+        expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+        expect(fetch.mock.calls.every(([, init]) => init?.method === undefined)).toBe(true);
+        expect(router.replace).not.toHaveBeenCalled();
+        expect(router.refresh).not.toHaveBeenCalled();
+      },
+    );
+  }
+});

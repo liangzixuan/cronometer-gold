@@ -704,7 +704,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         if (!isCurrent()) return false;
         setDiaryPage(null);
         setState("error");
-        setMessage(error instanceof Error ? error.message : "The diary could not be loaded.");
+        setMessage(
+          `${error instanceof Error ? error.message : "The diary could not be loaded."} Choose Retry to reload the diary for ${requestedDate}, or select another date.`,
+        );
         return false;
       } finally {
         if (isCurrent()) dayReadRoute.current = null;
