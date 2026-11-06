@@ -1952,7 +1952,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     } catch (error) {
       if (responseIsCurrent()) {
         setMessage(
-          `${error instanceof Error ? error.message : "The diary order could not be saved."} Choose Move again to retry safely.`,
+          `${error instanceof Error ? error.message : "The diary order could not be saved."} The diary order change is not confirmed. Your loaded entries and order remain available. Choose Move ${direction} for ${entryName(entry)} again to retry safely.`,
         );
       }
     } finally {

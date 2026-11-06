@@ -893,65 +893,74 @@ describe("diary collapse snapshot invariants", () => {
     },
   );
 
-  it("reveals a retained reorder operation while preserving its complete-day permutation and retry key", async () => {
-    const fixture = page([entry(0), entry(1)]);
-    const parsed = parseDiaryPage(fixture);
-    const orderGroup = (mealSlot: MealSlot) => ({
-      mealSlot,
-      entries: parsed.data.entries
-        .filter((row) => row.mealSlot === mealSlot)
-        .map((row) => ({
-          entryId: row.id,
-          entryRevision: row.revision,
-          position: row.position,
-        })),
-    });
-    fixture.data.orderDigest = await diaryDayOrderDigest(
-      parsed.data.localDate,
-      parsed.data.timeZone,
-      [orderGroup("breakfast"), orderGroup("lunch"), orderGroup("dinner"), orderGroup("snacks")],
-    );
-    const pending = deferred<Response>();
-    const writes: RequestInit[] = [];
-    const base = fetcher(fixture);
-    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") {
-        writes.push(init);
-        return writes.length === 1
-          ? pending.promise
-          : Response.json({ error: "Response unavailable." }, { status: 503 });
-      }
-      return base(url, init);
-    });
-    await mount(fetch);
-    const move = button("Move Apple 0 down within Breakfast");
-    await click("Collapse Breakfast");
-    const expand = button("Expand Breakfast");
-    invoke(move);
-    invoke(expand);
-    await hooks.settle();
-    expect(button("Collapse Breakfast").props.disabled).toBe(true);
-    expect(text(group("breakfast"))).toContain("Apple 0");
-    expect(writes).toHaveLength(1);
-    await toggleNutrients(0);
-    await toggleNutrients(0);
-    expect(writes).toHaveLength(1);
-    pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
-    await hooks.settle();
-    await click("Expand Breakfast");
-    await click("Move Apple 0 down within Breakfast");
-    expect(writes).toHaveLength(2);
-    expect(writes[0]?.body).toBe(
-      '{"groups":{"breakfast":[1,0],"lunch":[],"dinner":[],"snacks":[]}}',
-    );
-    expect(writes[1]?.body).toBe(writes[0]?.body);
-    expect(new Headers(writes[1]?.headers).get("idempotency-key")).toBe(
-      new Headers(writes[0]?.headers).get("idempotency-key"),
-    );
-    expect(new Headers(writes[1]?.headers).get("x-expected-diary-order-digest")).toBe(
-      fixture.data.orderDigest,
-    );
-  });
+  it.each(["down", "up"] as const)(
+    "reveals a retained %s reorder operation while preserving its complete-day permutation and retry key",
+    async (direction) => {
+      const food = direction === "down" ? "Apple 0" : "Apple 1";
+      const action = `Move ${food} ${direction} within Breakfast`;
+      const fixture = page([entry(0), entry(1)]);
+      const parsed = parseDiaryPage(fixture);
+      const orderGroup = (mealSlot: MealSlot) => ({
+        mealSlot,
+        entries: parsed.data.entries
+          .filter((row) => row.mealSlot === mealSlot)
+          .map((row) => ({
+            entryId: row.id,
+            entryRevision: row.revision,
+            position: row.position,
+          })),
+      });
+      fixture.data.orderDigest = await diaryDayOrderDigest(
+        parsed.data.localDate,
+        parsed.data.timeZone,
+        [orderGroup("breakfast"), orderGroup("lunch"), orderGroup("dinner"), orderGroup("snacks")],
+      );
+      const pending = deferred<Response>();
+      const writes: RequestInit[] = [];
+      const base = fetcher(fixture);
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "PUT") {
+          writes.push(init);
+          return writes.length === 1
+            ? pending.promise
+            : Response.json({ error: "Response unavailable." }, { status: 503 });
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      const move = button(action);
+      await click("Collapse Breakfast");
+      const expand = button("Expand Breakfast");
+      invoke(move);
+      invoke(expand);
+      await hooks.settle();
+      expect(button("Collapse Breakfast").props.disabled).toBe(true);
+      expect(text(group("breakfast"))).toContain("Apple 0");
+      expect(writes).toHaveLength(1);
+      await toggleNutrients(0);
+      await toggleNutrients(0);
+      expect(writes).toHaveLength(1);
+      pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(text()).toContain("Response unavailable.");
+      expect(text()).toContain(
+        `The diary order change is not confirmed. Your loaded entries and order remain available. Choose Move ${direction} for ${food} again to retry safely.`,
+      );
+      await click("Expand Breakfast");
+      await click(action);
+      expect(writes).toHaveLength(2);
+      expect(writes[0]?.body).toBe(
+        '{"groups":{"breakfast":[1,0],"lunch":[],"dinner":[],"snacks":[]}}',
+      );
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      expect(new Headers(writes[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(writes[0]?.headers).get("idempotency-key"),
+      );
+      expect(new Headers(writes[1]?.headers).get("x-expected-diary-order-digest")).toBe(
+        fixture.data.orderDigest,
+      );
+    },
+  );
 
   it("rejects the old toggle while a replacement day fails, then permits a fresh loaded scope", async () => {
     const base = fetcher();
@@ -6363,6 +6372,9 @@ describe("Diary entry reorder lifecycle ownership", () => {
       Object.fromEntries(new Headers(writes[0]?.headers)),
     );
     expect(text()).toContain("Fresh move unavailable.");
+    expect(text()).toContain(
+      "The diary order change is not confirmed. Your loaded entries and order remain available. Choose Move down for Apple 0 again to retry safely.",
+    );
     const before = text(),
       requests = fetch.mock.calls.length;
     pending.resolve(Response.json({}, { status: 401 }));

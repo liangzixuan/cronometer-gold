@@ -993,3 +993,12 @@ Retry water or Retry activity with the selected date. Each retry reloads only
 that summary. The other summary and the diary keep their independent states.
 Duplicate pending actions and retired retry actions cannot start another read.
 A fresh retry uses the same date and owner headers with a new abort signal.
+
+### Diary reorder retry guidance
+
+An unconfirmed diary reorder retains its original error detail. The message
+states that the change is not confirmed and that loaded entries and order remain
+available, including in a collapsed meal. It names Move up or Move down for the
+affected food. Retrying preserves the complete-day permutation, original revision,
+order digest and operation key. Pending controls and retired responses keep their
+existing protections; a matching receipt is still required to confirm the change.
