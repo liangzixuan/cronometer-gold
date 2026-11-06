@@ -1549,7 +1549,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     } catch (error) {
       if (responseIsCurrent()) {
         setMessage(
-          `${error instanceof Error ? error.message : "The entry could not be deleted."} Choose Delete again to retry safely.`,
+          `${error instanceof Error ? error.message : "The entry could not be deleted."} Deletion of ${entryName(entry)} is not confirmed. Your loaded diary entries and totals remain available. Choose Delete for ${entryName(entry)} again to retry safely.`,
         );
       }
     } finally {

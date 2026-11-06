@@ -1002,3 +1002,11 @@ available, including in a collapsed meal. It names Move up or Move down for the
 affected food. Retrying preserves the complete-day permutation, original revision,
 order digest and operation key. Pending controls and retired responses keep their
 existing protections; a matching receipt is still required to confirm the change.
+
+### Diary deletion recovery guidance
+
+An unconfirmed deletion retains the original error detail and identifies the
+food. Loaded diary entries and totals remain available. The message names Delete
+for that food as the retry action. Cancelling the confirmation sends no request
+and preserves the guidance. A confirmed retry keeps the original entry revision,
+request path and operation key; the existing receipt checks determine success.

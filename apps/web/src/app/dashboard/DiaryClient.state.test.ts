@@ -4254,6 +4254,16 @@ describe("Diary Delete admission", () => {
       expect(button("Delete Apple 0").props.disabled).toBe(true);
       pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
       await hooks.settle();
+      expect(text()).toContain("Response unavailable.");
+      expect(text()).toContain(
+        "Deletion of Apple 0 is not confirmed. Your loaded diary entries and totals remain available. Choose Delete for Apple 0 again to retry safely.",
+      );
+      expect(button("Delete Apple 0").props.disabled).toBe(false);
+      const failedMessage = text();
+      vi.mocked(window.confirm).mockReturnValueOnce(false);
+      await click("Delete Apple 0");
+      expect(writes).toHaveLength(1);
+      expect(text()).toBe(failedMessage);
       await click("Delete Apple 0");
       expect(writes).toHaveLength(2);
       expect(writes[1]).toEqual(writes[0]);
@@ -4389,6 +4399,11 @@ describe("Diary Delete admission", () => {
     expect(writes[0]?.headers["idempotency-key"]).toMatch(/^[0-9a-f-]{36}$/);
     pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
     await hooks.settle();
+    expect(text()).toContain("Response unavailable.");
+    expect(text()).toContain(
+      "Deletion of Apple 0 is not confirmed. Your loaded diary entries and totals remain available. Choose Delete for Apple 0 again to retry safely.",
+    );
+    expect(button("Delete Apple 0").props.disabled).toBe(false);
   });
 });
 
