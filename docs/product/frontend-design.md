@@ -985,3 +985,11 @@ diary; Sign out remains an alternative. Do not claim that unverified content is
 open. Preserve the raw editor, totals, duplicate and retained-action protection,
 exact logout request and 204-only closure. A fresh session retry recovers without
 reviving earlier session responses or sign-out actions.
+
+### Dashboard summary retry guidance
+
+A failed water or activity summary retains its original error detail and names
+Retry water or Retry activity with the selected date. Each retry reloads only
+that summary. The other summary and the diary keep their independent states.
+Duplicate pending actions and retired retry actions cannot start another read.
+A fresh retry uses the same date and owner headers with a new abort signal.

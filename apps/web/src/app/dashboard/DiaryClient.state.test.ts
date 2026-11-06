@@ -7445,12 +7445,20 @@ describe("Dashboard card retry ownership", () => {
       );
       await hooks.settle();
       expect(cardProps()[kind].status).toBe("error");
+      expect(cardProps()[kind]).toMatchObject({
+        message: `Summary temporarily unavailable. Choose ${kind === "hydration" ? "Retry water" : "Retry activity"} to reload the summary for 2026-08-15.`,
+      });
+      expect(cardProps()[otherKind]).toEqual(otherCard);
       oldRetry();
       expect(reads).toBe(2);
       const freshRetry = retry();
       freshRetry();
       await hooks.settle();
       expect(reads).toBe(3);
+      const retrySignal = fetch.mock.calls.filter(([url]) => url.startsWith(endpoint))[2]?.[1]
+        ?.signal;
+      expect(retrySignal).toBeInstanceOf(AbortSignal);
+      expect(retrySignal).not.toBe(signal);
       expect(cardProps()[kind]).toEqual({ status: "empty", count: 0, total: 0 });
       expect(cardProps()[otherKind]).toEqual(otherCard);
       const count = fetch.mock.calls.length;

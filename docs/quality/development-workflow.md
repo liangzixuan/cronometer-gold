@@ -246,3 +246,24 @@ dimension explicit; they do not redefine those existing terms.
 Report the user's new capability first, then validation and material limitations.
 Do not describe unit tests, source bundles or synthetic data as physical-device,
 live-catalogue, or production acceptance.
+
+## Storage use and routine cleanup
+
+Check free space at the start of work and before large installs, builds,
+snapshots or emulator work. Reuse current checkouts and shared package stores.
+Avoid repeated full clones, installs and unchanged dataset copies.
+
+After each completed increment and at session end, remove only owned, inactive
+temporary test apps, fixtures and duplicate generated outputs. First save concise
+results and unique or mutable state. Verify exact paths and ownership, and
+coordinate shared resources. Use temporary restore-test destinations; retain
+results and needed mutable state before removing copied apps and duplicate
+immutable catalogs. Do not recreate closed historical outputs or copy evidence
+trees to refresh receipts. Link existing evidence. No cleanup automation is needed.
+
+Keep recent backups and all unique or unmirrored data. Retire older duplicate
+local backups only after full file-by-file external-mirror payload verification.
+Retain original manifests and current location notes. Preserve unfinished source,
+live databases and WAL files, credentials, signing material, current or shared
+toolchains, active candidates and chat history. Existing custody and archive
+retention limits still apply.

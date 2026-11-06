@@ -853,11 +853,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           scopedDailyOverviewCard(
             expected,
             failedDailyOverviewCard(
-              error instanceof Error
-                ? error.message
-                : kind === "hydration"
-                  ? "The plain-water summary could not be loaded."
-                  : "The manual-activity summary could not be loaded.",
+              `${error instanceof Error ? error.message : kind === "hydration" ? "The plain-water summary could not be loaded." : "The manual-activity summary could not be loaded."} Choose ${kind === "hydration" ? "Retry water" : "Retry activity"} to reload the summary for ${requestedDate}.`,
             ),
           ),
         );
