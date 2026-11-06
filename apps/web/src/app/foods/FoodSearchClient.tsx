@@ -942,7 +942,7 @@ export function FoodSearchClient() {
       if (!currentAdd()) return;
       setAddState("error");
       setAddMessage(
-        `${error instanceof Error ? error.message : "The food could not be added."} Choose Add again to retry safely.`,
+        `${error instanceof Error ? error.message : "The food could not be added."} Adding ${food.name} to ${diaryDate} is not confirmed. Choose Add again to retry safely.`,
       );
     } finally {
       if (activeAddOperation.current === operation.operationId) {

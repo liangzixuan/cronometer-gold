@@ -1028,3 +1028,11 @@ are not confirmed and explains that the edit remains available. Save retries the
 unchanged draft with the same request and operation identity. Pending controls
 and retired actions retain their existing protection. Local-time validation keeps
 its separate correction guidance.
+
+### Food addition uncertainty context
+
+When a food addition is unconfirmed, its error keeps the original detail and
+identifies the submitted food and local diary date. It names Add as the retry
+action. Search and barcode results keep their exact portion and destination
+controls. An unchanged retry retains its request body, headers and operation
+identity; only a matching saved response confirms the addition.

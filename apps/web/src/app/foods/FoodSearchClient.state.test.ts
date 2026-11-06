@@ -669,6 +669,11 @@ describe("initial retry preserves quick-add operations", () => {
           kind === "503" ? failure("503") : Response.json({ data: { invalid: true } }),
         );
       await hooks.settle();
+      expect(text()).toContain(
+        "Adding Apple Pie to 2026-09-24 is not confirmed. Choose Add again to retry safely.",
+      );
+      if (kind === "503") expect(text()).toContain("Synthetic unavailable");
+      if (kind === "network") expect(text()).toContain("Unknown write outcome");
       invoke(retry);
       route.query = "date=2026-09-25&meal=lunch";
       hooks.render();
@@ -1693,6 +1698,10 @@ describe("food Add response matches the submitted operation", () => {
         expect(operationId).toHaveBeenCalledOnce();
         expect(text()).not.toContain("was added to");
         expect(text()).toContain("Choose Add again to retry safely");
+        expect(text()).toContain(
+          "Adding Apple Pie to 2026-09-24 is not confirmed. Choose Add again to retry safely.",
+        );
+        expect(text()).toContain("The server returned a diary entry for a different addition.");
         expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");
         expect(field("quick-add-date").props.value).toBe("2026-09-24");
         expect(field("quick-add-meal").props.value).toBe("dinner");
