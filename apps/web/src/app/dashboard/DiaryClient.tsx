@@ -925,7 +925,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
         if (!isCurrent()) return;
         setSessionState("error");
         setSessionMessage(
-          error instanceof Error ? error.message : "Your session could not be verified.",
+          `${error instanceof Error ? error.message : "Your session could not be verified."} Use Retry session to verify your account and load the diary for this page.`,
         );
       } finally {
         if (sessionController.current === controller) sessionController.current = null;

@@ -8843,3 +8843,94 @@ describe("Diary retired sign-out actions", () => {
     },
   );
 });
+
+describe("Diary session recovery guidance", () => {
+  for (const view of ["diary", "overview"] as const) {
+    it.each(["HTTP503", "network", "malformed"] as const)(
+      `explains and preserves exact ${view} session recovery after %s`,
+      async (failure) => {
+        route.date = "2026-08-14";
+        const pending = deferred<Response>();
+        let authCalls = 0;
+        const base = fetcher();
+        const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") {
+            authCalls += 1;
+            if (authCalls === 1) {
+              if (failure === "network") throw new Error("Connection unavailable.");
+              if (failure === "malformed") return Response.json({ data: {} });
+              return Response.json({ error: "Session unavailable." }, { status: 503 });
+            }
+            if (authCalls === 2) return pending.promise;
+          }
+          return base(url, init);
+        });
+        await mount(fetch, view);
+        const detail =
+          failure === "network"
+            ? "Connection unavailable."
+            : failure === "malformed"
+              ? "The session response was invalid."
+              : "Session unavailable.";
+        const status = () => text(elements().find((node) => node.props.role === "status"));
+        expect(status()).toBe(
+          `${detail} Use Retry session to verify your account and load the diary for this page.`,
+        );
+        expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/auth/me"]);
+        expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+        expect(text()).not.toContain("Apple 2");
+        expect(text()).not.toContain("No entries");
+        const retry = button("Retry session");
+        expect(retry.props.disabled).not.toBe(true);
+        invoke(retry);
+        invoke(retry);
+        await hooks.settle();
+        expect(authCalls).toBe(2);
+        expect(fetch.mock.calls.map(([url]) => url)).toEqual(["/api/auth/me", "/api/auth/me"]);
+        const first = fetch.mock.calls[0]?.[1];
+        const second = fetch.mock.calls[1]?.[1];
+        expect(first).toEqual({
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: expect.any(AbortSignal),
+        });
+        expect(second).toEqual({ ...first, signal: expect.any(AbortSignal) });
+        expect(second?.signal).not.toBe(first?.signal);
+        expect(second?.signal?.aborted).toBe(false);
+        expect(elements().some((node) => node.type === CalmOverview)).toBe(false);
+        expect(text()).not.toContain("Apple 2");
+        pending.resolve(Response.json(session()));
+        await hooks.settle();
+        const dayReads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"));
+        expect(dayReads).toHaveLength(1);
+        expect(
+          new URL(String(dayReads[0]?.[0]), "https://app.example.test").searchParams.get("date"),
+        ).toBe("2026-08-14");
+        expect(field("Local date").props.value).toBe("2026-08-14");
+        if (view === "overview") {
+          const summary = elements().find((node) => node.type === CalmOverview);
+          expect(summary?.props.day).toMatchObject({ localDate: "2026-08-14" });
+          expect(summary?.props.totalEntries).toBe(1);
+        } else {
+          expect(text()).toContain("Apple 2");
+          await click("Edit Apple 2");
+          await change("Quantity", "2.125000");
+          await change("Private note", "  keep this diary draft  ");
+        }
+        const before = text();
+        const requests = fetch.mock.calls.length;
+        invoke(retry);
+        await hooks.settle();
+        expect(text()).toBe(before);
+        expect(fetch).toHaveBeenCalledTimes(requests);
+        if (view === "diary") {
+          expect(field("Quantity").props.value).toBe("2.125000");
+          expect(field("Private note").props.value).toBe("  keep this diary draft  ");
+        }
+        expect(fetch.mock.calls.every(([, init]) => init?.method === undefined)).toBe(true);
+        expect(router.replace).not.toHaveBeenCalled();
+        expect(router.refresh).not.toHaveBeenCalled();
+      },
+    );
+  }
+});

@@ -55,6 +55,13 @@ correction. Existing email, origin, session-cookie and response checks still app
 
 ## Diary session recovery
 
+A failed Dashboard or Diary session check names Retry session and explains that
+it verifies the account and loads the diary for this page. Keep the original
+HTTP, network or invalid-response detail. Retry uses the same session request
+with a fresh signal; duplicate pending actions send one read. Keep private day
+content hidden until verification succeeds, then load the current route date.
+Retired retries cannot reload recovered content or clear an editor draft.
+
 Starting diary sign-out retires its ready action before paint. Ready and loading
 actions remain inert after an unconfirmed HTTP or network result, preserving
 recovery guidance, the loaded diary, selected date and raw editor. A fresh Sign
