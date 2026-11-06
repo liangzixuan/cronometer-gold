@@ -215,7 +215,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
           ...(acknowledgement
             ? {
                 acknowledgement: { date, failed: true },
-                message: `Your save for ${date} was acknowledged. The current note could not be reloaded; retry the read.`,
+                message: `Your save for ${date} was acknowledged. The current note could not be reloaded. Choose Reload saved note to check it without repeating the save.`,
               }
             : {
                 message:

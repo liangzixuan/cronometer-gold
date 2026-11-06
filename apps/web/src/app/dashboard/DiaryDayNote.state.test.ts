@@ -461,10 +461,27 @@ describe("actual web day-note state transitions", () => {
     expect(puts()).toHaveLength(1);
     expect(text()).toContain("was acknowledged");
     expect(text()).not.toContain("Retry note save");
+    expect(text()).toContain(
+      `Your save for ${noteDate} was acknowledged. The current note could not be reloaded. Choose Reload saved note to check it without repeating the save.`,
+    );
+    const failedRead = calls.at(-1);
+    const retry = button("Reload saved note");
+    const before = calls.length;
     read = async () => noteResponse(head);
     await click("Reload saved note");
+    expect(calls.slice(before)).toHaveLength(1);
+    expect(calls[before]).toEqual({
+      url: failedRead?.url,
+      init: { ...failedRead?.init, signal: expect.any(AbortSignal) },
+    });
+    expect(calls[before]?.init.signal).not.toBe(failedRead?.init.signal);
     expect(puts()).toHaveLength(1);
     expect(field().props.value).toBe("saved");
+    expect(text()).toContain(`Note saved for ${noteDate}. Current saved state checked.`);
+    const recovered = text();
+    invoke(retry);
+    expect(calls).toHaveLength(before + 1);
+    expect(text()).toBe(recovered);
   });
   it("reconciles a historical replay to a newer current head, never installing the old result", async () => {
     head = noteFixture("old", "4");
@@ -907,6 +924,9 @@ describe("day-note controls while the diary view is paused", () => {
     read = async () => Response.json({}, { status: 503 });
     await click("Save note");
     expect(puts()).toHaveLength(1);
+    expect(text()).toContain(
+      `Your save for ${noteDate} was acknowledged. The current note could not be reloaded. Choose Reload saved note to check it without repeating the save.`,
+    );
     pauseBeforeEffects();
     const requests = calls.length;
     expect(button("Reload saved note").props.disabled).toBe(true);

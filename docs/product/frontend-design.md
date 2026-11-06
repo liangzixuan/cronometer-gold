@@ -1044,3 +1044,11 @@ The message keeps the warning that the note may already have been saved.
 Navigating to another date or changing the profile does not retarget the request.
 The raw note and exact PUT body, revision, owner and operation headers remain
 unchanged for retry. Pending, paused and retired controls keep their protections.
+
+### Acknowledged day-note read recovery
+
+If the current-note read fails after a save is acknowledged, keep that status and
+the saved date in the message. Name Reload saved note and explain that it checks
+the note without repeating the save. Recovery uses the same note GET with a new
+signal, then displays the checked current head. Paused controls stay disabled;
+retained recovery actions cannot repeat a read after recovery.
