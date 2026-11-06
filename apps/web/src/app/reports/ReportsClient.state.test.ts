@@ -2863,3 +2863,152 @@ describe("Reports retired print actions", () => {
     },
   );
 });
+
+describe("Reports sign-out recovery", () => {
+  it.each(["http", "network", "unexpected success"] as const)(
+    "keeps a loaded report usable after %s without reloading it",
+    async (failure) => {
+      let pending = deferred<Response | Error>();
+      const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+        if (url === "/api/auth/logout") {
+          const result = await pending.promise;
+          if (result instanceof Error) throw result;
+          return result;
+        }
+        return url === "/api/auth/me" ? session() : reportResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+      await hooks.settle();
+      nutrient("15");
+      await hooks.settle();
+      await openInspector();
+      const ready = button("Sign out");
+      invoke(ready);
+      invoke(ready);
+      await hooks.settle();
+      const loading = button("Sign out");
+      expect(loading.props.disabled).toBe(true);
+      expect(button("Print current report").props.disabled).toBe(true);
+      expect(inspections()).toHaveLength(0);
+      invoke(loading);
+      expect(fetcher.mock.calls).toHaveLength(3);
+      pending.resolve(
+        failure === "network"
+          ? new Error("Sign-out connection interrupted.")
+          : new Response(null, { status: failure === "http" ? 503 : 200 }),
+      );
+      await hooks.settle();
+      expect(button("Print current report").props.disabled).toBe(false);
+      expect(
+        required(elements().find((node) => node.props.className === "workspaceStatus")).props[
+          "data-state"
+        ],
+      ).toBe("ready");
+      expect(text()).toContain(
+        "Sign out could not be confirmed. Your private report remains open. Choose Sign out to retry.",
+      );
+      expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+      expect(required(elements().find((node) => node.type === "select")).props.value).toBe("15");
+      expect(text()).toContain("Exact daily evidence");
+      expect(
+        elements().some((node) => node.type === "button" && text(node) === "Retry report"),
+      ).toBe(false);
+      expect(fetcher.mock.calls).toHaveLength(3);
+      expect(router.replace).not.toHaveBeenCalled();
+      await openInspector();
+      const recovered = text();
+      invoke(ready);
+      invoke(loading);
+      await hooks.settle();
+      expect(text()).toBe(recovered);
+      expect(fetcher.mock.calls).toHaveLength(3);
+
+      nativePrint.mockImplementation(() => {
+        expect(printedComponent()?.props.report).toEqual(
+          emptyNutritionReportFixture("2026-09-01", "2026-09-07").data,
+        );
+        expect(printedComponent()?.props.nutrientId).toBe("15");
+        printEvents.dispatchEvent(new Event("beforeprint"));
+        expect(printGate()).toBe("true");
+        printEvents.dispatchEvent(new Event("afterprint"));
+      });
+      await click("Print current report");
+      expect(nativePrint).toHaveBeenCalledTimes(1);
+      expect(printGate()).toBe("false");
+      expect(fetcher.mock.calls).toHaveLength(4);
+      expect(required(fetcher.mock.calls[3])[0]).toBe("/api/auth/me");
+      expect(
+        fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+      ).toHaveLength(1);
+      inputDate(0, "2026-09-02");
+      await hooks.settle();
+      pending = deferred<Response | Error>();
+      const retry = button("Sign out");
+      invoke(retry);
+      invoke(retry);
+      await hooks.settle();
+      expect(currentDates()).toEqual(["2026-09-02", "2026-09-07"]);
+      expect(fetcher.mock.calls).toHaveLength(5);
+      expect(fetcher.mock.calls[4]).toEqual(fetcher.mock.calls[2]);
+      expect(fetcher.mock.calls[4]).toEqual([
+        "/api/auth/logout",
+        { method: "POST", cache: "no-store" },
+      ]);
+      pending.resolve(new Response(null, { status: 204 }));
+      await hooks.settle();
+      expect(router.replace).toHaveBeenCalledExactlyOnceWith("/login");
+      expect(text()).not.toContain("Exact daily evidence");
+      expect(text()).not.toContain("owner@example.test");
+      expect(printGate()).toBe("false");
+      invoke(ready);
+      invoke(loading);
+      invoke(retry);
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(5);
+      expect(router.push).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["pending", "failed"] as const)(
+    "preserves a %s report load when sign-out fails",
+    async (reportState) => {
+      const pendingReport = deferred<Response>();
+      const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url === "/api/auth/logout") return new Response(null, { status: 503 });
+        return pendingReport.promise;
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+      await hooks.settle();
+      if (reportState === "failed") {
+        pendingReport.resolve(Response.json({ error: "Report unavailable." }, { status: 503 }));
+        await hooks.settle();
+      }
+      await click("Sign out");
+      expect(
+        required(elements().find((node) => node.props.className === "workspaceStatus")).props[
+          "data-state"
+        ],
+      ).toBe(reportState === "pending" ? "loading" : "error");
+      expect(button("Update report").props.disabled).toBe(reportState === "pending");
+      expect(button("Print current report").props.disabled).toBe(true);
+      expect(
+        elements().some((node) => node.type === "button" && text(node) === "Retry report"),
+      ).toBe(reportState === "failed");
+      expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+      expect(fetcher.mock.calls).toHaveLength(3);
+      expect(router.replace).not.toHaveBeenCalled();
+      if (reportState === "pending") {
+        pendingReport.resolve(
+          reportResponse("/api/reports/nutrition?from=2026-09-01&to=2026-09-07"),
+        );
+        await hooks.settle();
+        expect(button("Print current report").props.disabled).toBe(false);
+        expect(text()).toContain("7 profile-local days loaded from one coherent snapshot.");
+        expect(fetcher.mock.calls).toHaveLength(3);
+      }
+    },
+  );
+});

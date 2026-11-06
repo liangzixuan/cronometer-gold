@@ -834,8 +834,9 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       signInAgain,
     );
     if (!confirmed && !privateUiClosed.current) {
-      setMessage("Sign out could not be confirmed. Your private report remains open; retry.");
-      setState("error");
+      setMessage(
+        "Sign out could not be confirmed. Your private report remains open. Choose Sign out to retry.",
+      );
       setLogoutBusy(false);
     }
   }

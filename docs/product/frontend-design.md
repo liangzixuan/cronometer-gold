@@ -323,6 +323,14 @@ reminder and privacy-action drafts alone.
 
 ## Reports session recovery
 
+An unconfirmed sign-out keeps the current report load state and names Sign out
+as its retry action. A loaded snapshot remains available for day inspection and
+fresh session-verified printing without another report read. Keep the selected
+nutrient and date drafts. A pending report stays loading until its own request
+settles; an existing report error remains retryable. Duplicate or retired
+sign-out actions send no extra request. Only a confirmed sign-out closes the
+private report.
+
 An external report route change retires unfinished report and profile responses,
 even if the route returns before effects run. Late data, errors and unauthorized
 responses cannot replace or close the returned report. The report's own range URL
