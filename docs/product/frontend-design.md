@@ -55,6 +55,13 @@ correction. Existing email, origin, session-cookie and response checks still app
 
 ## Diary session recovery
 
+Starting diary sign-out retires its ready action before paint. Ready and loading
+actions remain inert after an unconfirmed HTTP or network result, preserving
+recovery guidance, the loaded diary, selected date and raw editor. A fresh Sign
+out retries the same POST without extra diary or profile reads; only HTTP 204
+confirms closure. Sign-out remains available during initial or retried session
+discovery, and failed confirmation leaves a fresh Retry session available.
+
 Dashboard and Diary verify the session before loading a private day. A temporary
 session failure offers Retry session without presenting an empty day or zero
 nutrition. Keep a valid selected date; otherwise use the recovered profile's local

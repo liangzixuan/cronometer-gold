@@ -8709,3 +8709,137 @@ describe("Diary Repeat control route ownership", () => {
     );
   }
 });
+
+describe("Diary retired sign-out actions", () => {
+  for (const activation of ["duplicate before paint", "retained after failure"] as const) {
+    it.each(["HTTP 503", "network", "HTTP 200"] as const)(
+      `keeps ${activation} inert after %s and permits one fresh exact retry`,
+      async (failure) => {
+        const pending = deferred<Response | Error>();
+        const base = fetcher();
+        const logouts: RequestInit[] = [];
+        const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/logout") {
+            logouts.push(init ?? {});
+            if (logouts.length > 1) return new Response(null, { status: 204 });
+            const result = await pending.promise;
+            if (result instanceof Error) throw result;
+            return result;
+          }
+          return base(url, init);
+        });
+        await mount(fetch);
+        await click("Edit Apple 0");
+        await change("Quantity", "2.125000");
+        await change("Private note", "  keep my diary draft  ");
+        const labels = ["Quantity", "Private note", "Meal", "Local date", "Local time"];
+        const raw = labels.map((label) => field(label).props.value);
+        const totals = () =>
+          text(
+            elements().find((node) => node.props["aria-labelledby"] === "nutrition-summary-title"),
+          );
+        const evidence = totals();
+        const reads = fetch.mock.calls.length;
+        const ready = button("Sign out");
+        invoke(ready);
+        if (activation === "duplicate before paint") invoke(ready);
+        expect(logouts).toHaveLength(1);
+        await hooks.settle();
+        const loading = button("Sign out");
+        expect(loading.props.disabled).toBe(true);
+        if (activation === "duplicate before paint") {
+          invoke(loading);
+          expect(logouts).toHaveLength(1);
+        }
+        pending.resolve(
+          failure === "network"
+            ? new Error("Logout interrupted.")
+            : new Response(null, { status: failure === "HTTP 503" ? 503 : 200 }),
+        );
+        await hooks.settle();
+        expect(text()).toContain("Sign out could not be confirmed.");
+        const recovery = text();
+        invoke(loading);
+        invoke(ready);
+        await hooks.settle();
+        expect(logouts).toHaveLength(1);
+        expect(fetch.mock.calls).toHaveLength(reads + 1);
+        expect(text()).toBe(recovery);
+        expect(labels.map((label) => field(label).props.value)).toEqual(raw);
+        expect(totals()).toBe(evidence);
+        expect(text()).toContain("Apple 0");
+        expect(router.replace).not.toHaveBeenCalledWith("/login");
+        const retry = button("Sign out");
+        expect(retry.props.disabled).not.toBe(true);
+        invoke(retry);
+        invoke(retry);
+        await hooks.settle();
+        expect(logouts).toEqual([
+          { method: "POST", cache: "no-store" },
+          { method: "POST", cache: "no-store" },
+        ]);
+        expect(fetch.mock.calls).toHaveLength(reads + 2);
+        expect(router.replace).toHaveBeenLastCalledWith("/login");
+        expect(router.refresh).toHaveBeenCalledTimes(1);
+        expect(text()).not.toContain("Apple 0");
+        invoke(ready);
+        invoke(loading);
+        invoke(retry);
+        await hooks.settle();
+        expect(logouts).toHaveLength(2);
+        expect(router.refresh).toHaveBeenCalledTimes(1);
+      },
+    );
+  }
+
+  it.each(["initial", "retried"] as const)(
+    "keeps one sign-out during %s session discovery and allows fresh session recovery",
+    async (phase) => {
+      const oldSession = deferred<Response>();
+      const logout = deferred<Response>();
+      const base = fetcher();
+      let authCalls = 0;
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          if (phase === "retried" && authCalls === 1) return Response.json({}, { status: 503 });
+          if (authCalls === (phase === "initial" ? 1 : 2)) return oldSession.promise;
+        }
+        if (url === "/api/auth/logout") return logout.promise;
+        return base(url, init);
+      });
+      await mount(fetch);
+      if (phase === "retried") await click("Retry session");
+      const ready = button("Sign out");
+      invoke(ready);
+      invoke(ready);
+      await hooks.settle();
+      const loading = button("Sign out");
+      expect(loading.props.disabled).toBe(true);
+      expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/logout")).toHaveLength(1);
+      const sessionRead = fetch.mock.calls.filter(([url]) => url === "/api/auth/me").at(-1);
+      expect(sessionRead?.[1]?.signal?.aborted).toBe(true);
+      logout.resolve(new Response(null, { status: 503 }));
+      oldSession.resolve(Response.json(session()));
+      await hooks.settle();
+      const recovery = text();
+      invoke(ready);
+      invoke(loading);
+      await hooks.settle();
+      expect(text()).toBe(recovery);
+      expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/logout")).toHaveLength(1);
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(0);
+      expect(button("Retry session").props.disabled).not.toBe(true);
+      await click("Retry session");
+      expect(authCalls).toBe(phase === "initial" ? 2 : 3);
+      expect(text()).toContain("Apple 0");
+      const requests = fetch.mock.calls.length;
+      invoke(ready);
+      invoke(loading);
+      await hooks.settle();
+      expect(fetch.mock.calls).toHaveLength(requests);
+      expect(text()).toContain("Apple 0");
+      expect(router.replace).not.toHaveBeenCalledWith("/login");
+    },
+  );
+});

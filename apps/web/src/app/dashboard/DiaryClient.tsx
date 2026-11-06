@@ -2095,7 +2095,13 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
   }
 
   async function signOut() {
-    if (!sessionActive.current || privateUiClosed.current) return;
+    if (
+      !sessionActive.current ||
+      privateUiClosed.current ||
+      mutationBusy === "logout" ||
+      sessionRequestGeneration.current !== renderedSessionRequestGeneration
+    )
+      return;
     const generation = privateUiGeneration.current;
     const ownsCurrentPage = () =>
       sessionActive.current &&
