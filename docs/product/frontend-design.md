@@ -129,6 +129,10 @@ owner and profile revision through a failed save and retry. While the profile
 write is pending, retained label, reorder, Reset and Cancel actions cannot change
 or discard the submitted draft. A failed write keeps those names and that order
 available for retry; fresh controls allow changes again after the request settles.
+Failed group saves retain the original error detail and state that the save is
+not confirmed. The message explains that group names and order remain available
+and names Save groups as the retry action. This guidance does not change profile
+revision checks, matched-response confirmation or the existing retry request.
 The settings launcher also preserves the open form and submitted draft during a
 profile save. Active diary corrections block retained settings launchers and
 profile submits, matching the disabled controls. Fresh settings actions work

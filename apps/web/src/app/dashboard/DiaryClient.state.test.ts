@@ -5405,6 +5405,9 @@ describe("Diary group save lifecycle ownership", () => {
     expect(button("Save groups").props.disabled).toBe(false);
     submit();
     await hooks.settle();
+    expect(text()).toContain(
+      "Your diary group save is not confirmed. Your group names and order are still here. Choose Save groups to try again.",
+    );
     expect(text()).toContain("Try saving again.");
     expect(field("Group 1 label").props.value).toBe("Morning meal");
     expect(button("Save groups").props.disabled).toBe(false);
@@ -5544,6 +5547,9 @@ describe("Diary meal-group draft pending save", () => {
       expect(text()).toContain("Saving your diary group names and order");
       pending.resolve(Response.json({ error: "Save unavailable." }, { status: 503 }));
       await hooks.settle();
+      expect(text()).toContain(
+        "Your diary group save is not confirmed. Your group names and order are still here. Choose Save groups to try again.",
+      );
       expect(fields()).toEqual(before);
       expect(form().props["aria-busy"]).toBe(false);
       expect(button("Save groups").props.disabled).toBe(false);
@@ -5646,6 +5652,9 @@ describe("Diary meal-group matched save confirmation", () => {
       expect(text()).not.toContain("Diary group names and order saved everywhere");
       expect(text()).toContain(
         "The returned diary groups did not match your changes. Your edits are still here; try saving again.",
+      );
+      expect(text()).toContain(
+        "Your diary group save is not confirmed. Your group names and order are still here. Choose Save groups to try again.",
       );
       expect(draft()).toEqual(submitted);
       expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);

@@ -2080,7 +2080,9 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       setMessage("Diary group names and order saved everywhere you log food.");
     } catch (error) {
       if (!requestOwnsUi()) return;
-      setMessage(error instanceof Error ? error.message : "The diary groups could not be saved.");
+      setMessage(
+        `${error instanceof Error ? error.message : "The diary groups could not be saved."} Your diary group save is not confirmed. Your group names and order are still here. Choose Save groups to try again.`,
+      );
     } finally {
       if (profileController.current === controller) {
         profileController.current = null;
