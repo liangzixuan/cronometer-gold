@@ -1102,6 +1102,15 @@ describe("local diary dates", () => {
     expect(shiftLocalDate("2026-12-31", 1)).toBe("2027-01-01");
   });
 
+  it.each([
+    [new Error("Connection lost."), "Connection lost."],
+    [null, "The entry could not be saved."],
+  ])("explains unconfirmed edit recovery for %s", (error, detail) => {
+    expect(diaryEditErrorMessage(error)).toBe(
+      `${detail} Your changes are not confirmed. Your edit remains available. Press Save again to retry safely.`,
+    );
+  });
+
   it("maps a wall-clock time through the persisted IANA zone", () => {
     expect(localDateTimeToInstant("2026-08-15", "08:30", "America/Chicago")).toBe(
       "2026-08-15T13:30:00.000Z",

@@ -2772,6 +2772,9 @@ describe("Diary save lock", () => {
       firstReady.resolve();
       await hooks.settle();
       expect(editorValues()).toEqual(raw);
+      expect(text()).toContain(
+        "Your changes are not confirmed. Your edit remains available. Press Save again to retry safely.",
+      );
       for (const label of saveLockFields) expect(editorField(label).props.disabled).not.toBe(true);
       const failedStatus = text();
       invokeEditorControls(preSave);
@@ -4998,6 +5001,10 @@ describe("Diary editor saved context", () => {
     await changeEditorField("Private note", "Draft note");
     expect(text(savedContext(saved.id).summary)).toBe(summary);
     await click("Save changes to Apple 0");
+    expect(text()).toContain("Response unavailable.");
+    expect(text()).toContain(
+      "Your changes are not confirmed. Your edit remains available. Press Save again to retry safely.",
+    );
     expect(text(savedContext(saved.id).summary)).toBe(summary);
     expect(writes).toHaveLength(1);
     expect(writes[0]?.url).toBe(`/api/diary/entries/${saved.id}?date=2026-11-01`);
@@ -6760,6 +6767,10 @@ describe("Diary edit response lifecycle ownership", () => {
       Promise.resolve(Response.json({ error: "Edit unavailable." }, { status: 503 })),
     );
     expect(editorValues()).toEqual(draft);
+    expect(text()).toContain("Edit unavailable.");
+    expect(text()).toContain(
+      "Your changes are not confirmed. Your edit remains available. Press Save again to retry safely.",
+    );
     expect(button("Save changes to Apple 0").props.disabled).toBe(false);
     await click("Save changes to Apple 0");
     expect(writes).toHaveLength(2);

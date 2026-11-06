@@ -1020,3 +1020,11 @@ destination, the message names **Retry pinned repeat** and keeps the selected da
 and meal. Both retries use the same operation, source version and request
 until a matching response confirms the repeat. Existing route and response
 checks remain unchanged.
+
+### Diary edit-save recovery guidance
+
+An unconfirmed edit save keeps the original error detail, states that the changes
+are not confirmed and explains that the edit remains available. Save retries the
+unchanged draft with the same request and operation identity. Pending controls
+and retired actions retain their existing protection. Local-time validation keeps
+its separate correction guidance.

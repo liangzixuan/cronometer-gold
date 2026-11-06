@@ -1384,7 +1384,7 @@ export function diaryEditErrorMessage(error: unknown): string {
   if (error instanceof RangeError) {
     return "That local time does not exist in your current diary time zone. Choose another time.";
   }
-  return `${error instanceof Error ? error.message : "The entry could not be saved."} Press Save again to retry safely.`;
+  return `${error instanceof Error ? error.message : "The entry could not be saved."} Your changes are not confirmed. Your edit remains available. Press Save again to retry safely.`;
 }
 
 /** Preserve the real current instant, including the second DST fold occurrence. */
