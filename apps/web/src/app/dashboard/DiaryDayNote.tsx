@@ -380,8 +380,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
       install({
         ...stateRef.current,
         busy: false,
-        message:
-          "The save was not confirmed. Retry this exact request; your note may already have been saved.",
+        message: `The save for ${operation.identity.localDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
       });
     }
   }

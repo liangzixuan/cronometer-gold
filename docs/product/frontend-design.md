@@ -1036,3 +1036,11 @@ identifies the submitted food and local diary date. It names Add as the retry
 action. Search and barcode results keep their exact portion and destination
 controls. An unchanged retry retains its request body, headers and operation
 identity; only a matching saved response confirms the addition.
+
+### Day-note save retry guidance
+
+An unconfirmed day-note save names Retry note save and the original note date.
+The message keeps the warning that the note may already have been saved.
+Navigating to another date or changing the profile does not retarget the request.
+The raw note and exact PUT body, revision, owner and operation headers remain
+unchanged for retry. Pending, paused and retired controls keep their protections.

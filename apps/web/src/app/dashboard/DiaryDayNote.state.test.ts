@@ -401,6 +401,9 @@ describe("actual web day-note state transitions", () => {
       await mount();
       await change(" raw\r\n retry ");
       await click("Save note");
+      expect(text()).toContain(
+        `The save for ${noteDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
+      );
       const oldRetry = button("Retry note save");
       expect(field().props.disabled).toBe(true);
       expect(button("Cancel note draft").props.disabled).toBe(true);
@@ -408,6 +411,9 @@ describe("actual web day-note state transitions", () => {
       vi.setSystemTime(new Date("2026-09-16T00:01:00Z"));
       props = { ...props, session: parseSession(noteSession(noteOwner, "America/New_York")) };
       await navigate("2026-09-16");
+      expect(text()).toContain(
+        `The save for ${noteDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
+      );
       invoke(oldRetry);
       expect(puts()).toHaveLength(1);
       expect(field().props.value).toBe(" raw\r\n retry ");
@@ -432,6 +438,9 @@ describe("actual web day-note state transitions", () => {
     expect(field().props.value).toBe("draft");
     first.resolve(Response.json({}, { status: 503 }));
     await hooks.settle();
+    expect(text()).toContain(
+      `The save for ${noteDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
+    );
     const retry = button("Retry note save");
     const next = deferred<Response>();
     put = async () => next.promise;
@@ -440,6 +449,9 @@ describe("actual web day-note state transitions", () => {
     expect(puts()).toHaveLength(2);
     next.resolve(Response.json({}, { status: 503 }));
     await hooks.settle();
+    expect(text()).toContain(
+      `The save for ${noteDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
+    );
   });
   it("retires accepted intent before read failure and retries only the note read", async () => {
     await mount();
@@ -814,6 +826,9 @@ describe("day-note controls while the diary view is paused", () => {
     await mount();
     await change(" uncertain raw\r\n ");
     await click("Save note");
+    expect(text()).toContain(
+      `The save for ${noteDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
+    );
     const original = puts()[0];
     pauseBeforeEffects();
     expect(button("Retry note save").props.disabled).toBe(true);
@@ -825,6 +840,9 @@ describe("day-note controls while the diary view is paused", () => {
     expect(puts()).toHaveLength(2);
     expect(puts()[1]).toEqual(original);
     expect(field().props.value).toBe(" uncertain raw\r\n ");
+    expect(text()).toContain(
+      `The save for ${noteDate} was not confirmed. Choose Retry note save to retry this exact request; your note may already have been saved.`,
+    );
   });
 
   it("disables an unavailable note read while the selected view is not current", async () => {
