@@ -9034,3 +9034,104 @@ describe("Diary day recovery guidance", () => {
     );
   }
 });
+
+describe("Diary continuation recovery guidance", () => {
+  it.each(["HTTP503", "network", "malformed"] as const)(
+    "names the exact retry and preserves loaded diary content after %s",
+    async (failure) => {
+      const firstPage = page(
+        Array.from({ length: 20 }, (_, index) => entry(index)),
+        "d1.next-page",
+        21,
+      );
+      const pending = deferred<Response>();
+      const base = fetcher(firstPage);
+      let pageCalls = 0;
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("cursor=")) {
+          pageCalls += 1;
+          if (pageCalls === 1) {
+            if (failure === "network") throw new Error("Connection unavailable.");
+            if (failure === "malformed") return Response.json({ data: {} });
+            return Response.json({ error: "Next page unavailable." }, { status: 503 });
+          }
+          return pending.promise;
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await click("Edit Apple 0");
+      await change("Quantity", "2.125000");
+      await change("Private note", "  retain this raw note  ");
+      await toggleNutrients(1);
+      const savedDetails = nutrientDetailText(1);
+      const raw = ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+        (label) => field(label).props.value,
+      );
+      await click("Load more");
+      const detail =
+        failure === "network"
+          ? "Connection unavailable."
+          : failure === "malformed"
+            ? "The diary response was invalid."
+            : "Next page unavailable.";
+      const status = () => text(elements().find((node) => node.props.role === "status"));
+      expect(status()).toBe(
+        `${detail} Loaded entries remain available; choose Retry load more to load the next entries for 2026-08-15.`,
+      );
+      expect(text()).toContain("Apple 19");
+      expect(text()).not.toContain("Apple 20");
+      expect(nutrientDetailText(1)).toBe(savedDetails);
+      expect(
+        ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+          (label) => field(label).props.value,
+        ),
+      ).toEqual(raw);
+      const retry = button("Retry load more");
+      expect(retry.props.disabled).not.toBe(true);
+      const beforeRetry = fetch.mock.calls.length;
+      invoke(retry);
+      invoke(retry);
+      await hooks.settle();
+      expect(pageCalls).toBe(2);
+      expect(fetch).toHaveBeenCalledTimes(beforeRetry + 1);
+      const reads = fetch.mock.calls.filter(([url]) => url.includes("cursor="));
+      expect(reads).toHaveLength(2);
+      expect(reads[1]?.[0]).toBe(reads[0]?.[0]);
+      const requestUrl = new URL(String(reads[0]?.[0]), "https://app.example.test");
+      expect(requestUrl.searchParams.get("date")).toBe("2026-08-15");
+      expect(requestUrl.searchParams.get("cursor")).toBe("d1.next-page");
+      const first = reads[0]?.[1],
+        second = reads[1]?.[1];
+      expect(first).toEqual({
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: expect.any(AbortSignal),
+      });
+      expect(second).toEqual({ ...first, signal: expect.any(AbortSignal) });
+      expect(second?.signal).not.toBe(first?.signal);
+      expect(second?.signal?.aborted).toBe(false);
+      expect(nutrientDetailText(1)).toBe(savedDetails);
+      pending.resolve(Response.json(page([entry(20)], null, 21)));
+      await hooks.settle();
+      expect(status()).toBe("21 of 21 entries loaded. Nutrition totals include all 21.");
+      expect(text()).toContain("Apple 20");
+      expect(nutrientDetailText(1)).toBe(savedDetails);
+      expect(
+        ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+          (label) => field(label).props.value,
+        ),
+      ).toEqual(raw);
+      expect(fetch).toHaveBeenCalledTimes(beforeRetry + 1);
+      const recovered = text();
+      invoke(retry);
+      await hooks.settle();
+      expect(text()).toBe(recovered);
+      expect(fetch).toHaveBeenCalledTimes(beforeRetry + 1);
+      expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+      expect(fetch.mock.calls.every(([, init]) => init?.method === undefined)).toBe(true);
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(router.refresh).not.toHaveBeenCalled();
+    },
+  );
+});

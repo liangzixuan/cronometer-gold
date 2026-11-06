@@ -1175,7 +1175,7 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
       if (!isCurrent()) return;
       setPageState("error");
       setMessage(
-        `${error instanceof Error ? error.message : "More diary entries could not be loaded."} Loaded entries remain available; choose Load more to retry.`,
+        `${error instanceof Error ? error.message : "More diary entries could not be loaded."} Loaded entries remain available; choose Retry load more to load the next entries for ${requestedDate}.`,
       );
     } finally {
       if (requestGeneration.current === generation && loadController.current === controller) {

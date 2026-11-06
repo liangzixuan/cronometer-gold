@@ -965,3 +965,11 @@ that another date can be selected. Retry sends the same day request with a fresh
 signal; duplicate actions start one read without reloading the session or other
 summaries. Recovery shows the correct day and totals. Retained retries cannot
 replace the recovered overview or raw editor draft, send requests or navigate.
+
+Failed diary continuation names Retry load more and the selected date, while
+keeping the original HTTP, network or malformed-response detail. Loaded entries,
+whole-day totals, open nutrient details and the raw editor remain available.
+A fresh retry keeps the same date and cursor request with a new signal; duplicate
+pending actions send one read. A coherent append preserves the editor and details
+without another session or profile read. Retained retry actions stay inert after
+recovery and cannot replace the recovered content or start another request.
