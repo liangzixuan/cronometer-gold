@@ -8758,6 +8758,9 @@ describe("Diary retired sign-out actions", () => {
         );
         await hooks.settle();
         expect(text()).toContain("Sign out could not be confirmed.");
+        expect(text()).toContain(
+          "Your diary and edits remain available. Choose Sign out to try again.",
+        );
         const recovery = text();
         invoke(loading);
         invoke(ready);
@@ -8822,6 +8825,10 @@ describe("Diary retired sign-out actions", () => {
       logout.resolve(new Response(null, { status: 503 }));
       oldSession.resolve(Response.json(session()));
       await hooks.settle();
+      expect(text()).toContain(
+        "Use Retry session to verify your account and load the diary for this page, or choose Sign out to try again.",
+      );
+      expect(text()).not.toContain("Your diary and edits remain available.");
       const recovery = text();
       invoke(ready);
       invoke(loading);

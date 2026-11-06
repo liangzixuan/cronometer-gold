@@ -973,3 +973,11 @@ A fresh retry keeps the same date and cursor request with a new signal; duplicat
 pending actions send one read. A coherent append preserves the editor and details
 without another session or profile read. Retained retry actions stay inert after
 recovery and cannot replace the recovered content or start another request.
+
+Unconfirmed diary sign-out names Sign out as the retry action and explains that
+the diary and edits remain available. During unresolved session verification,
+name Retry session and explain that it verifies the account and loads this page's
+diary; Sign out remains an alternative. Do not claim that unverified content is
+open. Preserve the raw editor, totals, duplicate and retained-action protection,
+exact logout request and 204-only closure. A fresh session retry recovers without
+reviving earlier session responses or sign-out actions.

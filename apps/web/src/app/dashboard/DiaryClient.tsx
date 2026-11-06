@@ -2124,11 +2124,14 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     );
     if (!confirmed && activeMutation.current === token && ownsCurrentPage()) {
       activeMutation.current = null;
-      const failure = "Sign out could not be confirmed. Your diary remains open; please retry.";
+      const failure =
+        "Sign out could not be confirmed. Your diary and edits remain available. Choose Sign out to try again.";
       setMessage(failure);
       if (sessionRef.current === null) {
         setSessionState("error");
-        setSessionMessage("Sign out could not be confirmed. Retry your session or sign out again.");
+        setSessionMessage(
+          "Sign out could not be confirmed. Use Retry session to verify your account and load the diary for this page, or choose Sign out to try again.",
+        );
       }
       setMutationBusy(null);
     }
