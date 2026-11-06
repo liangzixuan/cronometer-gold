@@ -321,7 +321,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         if (isCurrent()) {
           setState("error");
           setMessage(
-            error instanceof Error ? error.message : "Your report session could not be verified.",
+            `Choose Retry session to verify your account and load the report for this page. ${error instanceof Error ? error.message : "Your report session could not be verified."}`,
           );
         }
       } finally {

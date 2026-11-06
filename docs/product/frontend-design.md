@@ -332,8 +332,12 @@ route effects verify its session. Hide the prior report and disable dates,
 presets, submission and period navigation during that transition. Returning to
 the same URL alone does not restore the previous route's readiness.
 
-A temporary failure to verify the Reports session offers Retry session. It verifies
-the current route and profile before loading its report. Keep report content,
+A temporary failure to verify the Reports session names Retry session in its
+message and explains that it verifies the account and loads the report for this
+page. Keep the original HTTP, network or malformed-response detail. Retry sends
+the same session GET with a fresh signal; duplicate pending actions send one read.
+It verifies the current route and profile before loading its report, preserves
+the selected nutrient and loads the exact current route dates. Keep report content,
 printing and day inspection unavailable during verification. A failed report read
 uses its own Retry report action after the session is verified.
 

@@ -2647,3 +2647,107 @@ describe("Reports print-verification recovery guidance", () => {
     },
   );
 });
+
+describe("Reports session-verification recovery guidance", () => {
+  for (const changedRoute of [false, true]) {
+    it.each(["http", "network", "malformed"] as const)(
+      `explains %s recovery for the ${changedRoute ? "changed" : "initial"} report route`,
+      async (failure) => {
+        let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+        let phase: "ready" | "fail" | "pending" = changedRoute ? "ready" : "fail";
+        const pending = deferred<Response>();
+        const fetcher = vi.fn(async (url: string, _init?: RequestInit) => {
+          if (url !== "/api/auth/me") return reportResponse(url);
+          if (phase === "pending") return pending.promise;
+          if (phase === "fail") {
+            if (failure === "network")
+              throw new TypeError("Report session connection interrupted.");
+            return failure === "http"
+              ? Response.json({ error: "Report session temporarily unavailable." }, { status: 503 })
+              : Response.json({ data: {} });
+          }
+          return session();
+        });
+        vi.stubGlobal("fetch", fetcher);
+        hooks.mount(() => ReportsClient(props));
+        await hooks.settle();
+        if (changedRoute) {
+          nutrient("15");
+          await hooks.settle();
+          phase = "fail";
+          props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+          hooks.render();
+          await hooks.settle();
+        }
+        const detail =
+          failure === "http"
+            ? "Report session temporarily unavailable."
+            : failure === "network"
+              ? "Report session connection interrupted."
+              : "The session response was invalid.";
+        expect(text(required(elements().find((node) => node.props.role === "status")))).toBe(
+          `Choose Retry session to verify your account and load the report for this page. ${detail}`,
+        );
+        expectReportUnavailable();
+        expect(button("Update report").props.disabled).toBe(true);
+        expect(
+          elements().some((node) => node.type === "button" && text(node) === "Retry report"),
+        ).toBe(false);
+        const requests = fetcher.mock.calls.length;
+        const reportReads = fetcher.mock.calls.filter(([url]) =>
+          url.startsWith("/api/reports/nutrition?"),
+        ).length;
+        const failedRequest = required(fetcher.mock.calls.at(-1));
+        expect(failedRequest[0]).toBe("/api/auth/me");
+        const retry = button("Retry session");
+        phase = "pending";
+        invoke(retry);
+        invoke(retry);
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(requests + 1);
+        const retryRequest = required(fetcher.mock.calls.at(-1));
+        const { signal: failedSignal, ...failedOptions } = required(failedRequest[1]);
+        const { signal: retrySignal, ...retryOptions } = required(retryRequest[1]);
+        expect(retryRequest[0]).toBe(failedRequest[0]);
+        expect(retryOptions).toEqual(failedOptions);
+        expect(retryOptions).toEqual({
+          headers: { accept: "application/json" },
+          cache: "no-store",
+        });
+        expect(retrySignal).toBeInstanceOf(AbortSignal);
+        expect(retrySignal).not.toBe(failedSignal);
+        expect(
+          fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+        ).toHaveLength(reportReads);
+        expectReportUnavailable();
+        expect(button("Update report").props.disabled).toBe(true);
+        pending.resolve(session());
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(requests + 2);
+        expect(required(fetcher.mock.calls.at(-1))[0]).toBe(
+          `/api/reports/nutrition?from=${props.initialFrom}&to=${props.initialTo}`,
+        );
+        expect(currentDates()).toEqual([props.initialFrom, props.initialTo]);
+        const expectedNutrient = changedRoute
+          ? "15"
+          : required(emptyNutritionReportFixture(props.initialFrom, props.initialTo).data.series[0])
+              .nutrient.id;
+        expect(required(elements().find((node) => node.type === "select")).props.value).toBe(
+          expectedNutrient,
+        );
+        expect(text()).toContain("7 profile-local days loaded from one coherent snapshot.");
+        expect(text()).toContain("Exact daily evidence");
+        expect(button("Print current report").props.disabled).toBe(false);
+        const recovered = text();
+        invoke(retry);
+        await hooks.settle();
+        expect(text()).toBe(recovered);
+        expect(fetcher.mock.calls).toHaveLength(requests + 2);
+        expect(nativePrint).not.toHaveBeenCalled();
+        expect(printGate()).toBe("false");
+        expect(router.replace).not.toHaveBeenCalled();
+        expect(router.push).not.toHaveBeenCalled();
+      },
+    );
+  }
+});
