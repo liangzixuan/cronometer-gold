@@ -1070,3 +1070,13 @@ checking, name Reload saved note with that save's original date instead, includi
 after a different selected date fails to load. Recovery keeps the existing GET
 requests and never repeats the save. Paused controls and retained retry actions
 keep their protections; an unavailable note is not presented as an empty note.
+
+
+### Saved-target snapshot recovery guidance
+
+If saved targets do not match the selected diary snapshot, or the account profile
+has changed, keep that reason visible and name Reload day with the selected date.
+This action reloads the diary and its saved targets. Mismatched targets stay hidden;
+existing nutrition totals and missing-value qualifications remain unchanged.
+The progress and session reads keep their exact no-store options and shared abort
+signal. These mismatches do not write data or sign the account out.

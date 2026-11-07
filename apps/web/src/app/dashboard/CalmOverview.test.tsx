@@ -322,7 +322,21 @@ describe("Calm goal response ownership and freshness", () => {
           .mockResolvedValueOnce(Response.json({ data: progress(change) }))
           .mockResolvedValueOnce(Response.json(noteSession())),
       );
-      await expect(load()).rejects.toThrow("Your diary changed");
+      const onUnauthorized = vi.fn();
+      const signal = new AbortController().signal;
+      const request = load({ onUnauthorized, signal });
+      await expect(request).rejects.toThrow("Your diary changed");
+      await expect(request).rejects.toThrow(
+        `Choose Reload day to reload ${day.localDate} and its saved targets.`,
+      );
+      expect(vi.mocked(fetch).mock.calls).toEqual([
+        [
+          `/api/goals/progress?date=${day.localDate}`,
+          { cache: "no-store", headers: { accept: "application/json" }, signal },
+        ],
+        ["/api/auth/me", { cache: "no-store", headers: { accept: "application/json" }, signal }],
+      ]);
+      expect(onUnauthorized).not.toHaveBeenCalled();
     },
   );
   it("closes private UI for a current unauthorized response or another owner", async () => {
@@ -348,7 +362,21 @@ describe("Calm goal response ownership and freshness", () => {
         .mockResolvedValueOnce(Response.json({ data: progress() }))
         .mockResolvedValueOnce(Response.json(noteSession(undefined, "UTC"))),
     );
-    await expect(load()).rejects.toThrow("Your profile changed");
+    const onUnauthorized = vi.fn();
+    const signal = new AbortController().signal;
+    const request = load({ onUnauthorized, signal });
+    await expect(request).rejects.toThrow("Your profile changed");
+    await expect(request).rejects.toThrow(
+      `Choose Reload day to reload ${day.localDate} and its saved targets.`,
+    );
+    expect(vi.mocked(fetch).mock.calls).toEqual([
+      [
+        `/api/goals/progress?date=${day.localDate}`,
+        { cache: "no-store", headers: { accept: "application/json" }, signal },
+      ],
+      ["/api/auth/me", { cache: "no-store", headers: { accept: "application/json" }, signal }],
+    ]);
+    expect(onUnauthorized).not.toHaveBeenCalled();
   });
   it("ignores an old date/generation response, including a stale 401", async () => {
     const pending = deferred<Response>();

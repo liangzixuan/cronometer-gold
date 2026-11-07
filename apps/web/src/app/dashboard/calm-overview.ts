@@ -180,12 +180,16 @@ export async function loadCalmGoalProgress({
     verified.profile.revision !== session.profile.revision ||
     verified.profile.timeZone !== session.profile.timeZone
   )
-    throw new Error("Your profile changed. Reload this day to see saved targets.");
+    throw new Error(
+      `Your profile changed. Choose Reload day to reload ${day.localDate} and its saved targets.`,
+    );
   if (
     progress.localDate !== day.localDate ||
     progress.timeZone !== day.timeZone ||
     progress.diaryRevision !== day.revision
   )
-    throw new Error("Your diary changed. Reload this day to see matching targets.");
+    throw new Error(
+      `Your diary changed. Choose Reload day to reload ${day.localDate} and its saved targets.`,
+    );
   return current() ? progress : null;
 }
