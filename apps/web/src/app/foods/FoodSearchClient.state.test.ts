@@ -3216,6 +3216,7 @@ describe("Current barcode draft actions", () => {
     await hooks.settle();
     expect(barcodeReads(fetcher)).toHaveLength(1);
     expect(text()).toContain("Found Apple Pie.");
+    expect(text()).toContain("The lookup was for 012345678905.");
     expect(pendingPosts(fetcher)).toHaveLength(0);
   });
   it("keeps an earlier lookup owned until a fresh form replaces it", async () => {
@@ -3245,6 +3246,7 @@ describe("Current barcode draft actions", () => {
     await hooks.settle();
     expect(text()).not.toContain("Retired lookup");
     expect(text()).toContain("Found Apple Pie.");
+    expect(text()).toContain("The lookup was for 036000291452.");
     expect(operationId).not.toHaveBeenCalled();
   });
 });
@@ -5312,6 +5314,107 @@ describe("Food Add attempt admission", () => {
     );
   }
 
+  it("identifies a completed barcode lookup beside edited digits and adds the matched food", async () => {
+    const held = deferred<Response>();
+    const recoveredHit = { ...hit, foodId: "102", foodVersionId: "203", name: "Fresh Pear" };
+    const reads: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "/api/auth/me") return session();
+      if (init?.method === "POST") return savedMutation(init);
+      if (url.startsWith("/api/foods/barcodes/")) {
+        reads.push({ url, init });
+        return reads.length === 1
+          ? held.promise
+          : Response.json({ data: url.endsWith("012345678905") ? hit : recoveredHit });
+      }
+      return publicResponse(url);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(FoodSearchClient);
+    await hooks.settle();
+    const form = () => {
+      const node = elements().find((item) => item.props.className === "barcodeForm");
+      if (!node) throw new Error("Missing barcode form");
+      return node;
+    };
+    const status = () =>
+      text(elements().find((node) => String(node.props.className).startsWith("barcodeStatus ")));
+    await change("food-barcode", "012345678905");
+    const retired = form();
+    invoke(retired, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    await change("food-barcode", "4006381333931");
+    held.resolve(Response.json({ data: hit }));
+    await hooks.settle();
+    expect(status()).toContain("Found Apple Pie.");
+    expect(status()).toContain("The lookup was for 012345678905.");
+    expect(field("food-barcode").props.value).toBe("4006381333931");
+    expect(reads).toHaveLength(1);
+    expect(reads[0]?.url).toBe("/api/foods/barcodes/012345678905");
+    expect(reads[0]?.init).toEqual({
+      headers: { accept: "application/json" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(pendingPosts(fetcher)).toHaveLength(0);
+    await change("quick-add-time", "12:00");
+    invoke(add("barcode"));
+    await hooks.settle();
+    const posts = pendingPosts(fetcher);
+    expect(posts).toHaveLength(1);
+    expect(posts[0]?.[0]).toBe("/api/diary/entries?date=2026-09-24&profileTimeZonePrecondition=v1");
+    expect(JSON.parse(String(posts[0]?.[1]?.body))).toMatchObject({
+      foodVersionId: "202",
+      mealSlot: "dinner",
+      occurredAt: "2026-09-24T17:00:00.000Z",
+    });
+    const receipt = elements().find(
+      (node) => node.type === FoodAddConfirmation && node.props.confirmation,
+    )?.props.confirmation;
+    expect(receipt).toMatchObject({ localDate: "2026-09-24", timeZone: "America/Chicago" });
+    expect(field("food-barcode").props.value).toBe("4006381333931");
+    expect(reads).toHaveLength(1);
+    invoke(retired, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(reads).toHaveLength(1);
+    const next = form();
+    invoke(next, "onSubmit", { preventDefault() {} });
+    invoke(next, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(reads).toHaveLength(2);
+    expect(reads[1]?.url).toBe("/api/foods/barcodes/4006381333931");
+    expect(reads[1]?.init).toEqual({
+      headers: { accept: "application/json" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(reads[1]?.init?.signal).not.toBe(reads[0]?.init?.signal);
+    expect(status()).toBe("Found Fresh Pear. The lookup was for 4006381333931.");
+    expect(
+      elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation),
+    ).toBeUndefined();
+    await change("food-barcode", "012345678905");
+    invoke(form(), "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(reads).toHaveLength(3);
+    expect(reads[2]?.url).toBe("/api/foods/barcodes/012345678905");
+    expect(reads[2]?.init).toEqual({
+      headers: { accept: "application/json" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(reads[2]?.init?.signal).not.toBe(reads[1]?.init?.signal);
+    expect(status()).toBe("Found Apple Pie. The lookup was for 012345678905.");
+    expect(
+      elements().find((node) => node.type === FoodAddConfirmation && node.props.confirmation)?.props
+        .confirmation,
+    ).toEqual(receipt);
+    invoke(retired, "onSubmit", { preventDefault() {} });
+    invoke(next, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(reads).toHaveLength(3);
+    expect(pendingPosts(fetcher)).toEqual(posts);
+    expect(authCount(fetcher)).toBe(1);
+    expect(operationId).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [
       404,
@@ -5386,13 +5489,13 @@ describe("Food Add attempt admission", () => {
         signal: expect.any(AbortSignal),
       });
       expect(reads[1]?.init?.signal).not.toBe(reads[0]?.init?.signal);
-      expect(status()).toBe("Found Fresh Pear.");
+      expect(status()).toBe("Found Fresh Pear. The lookup was for 4006381333931.");
       expect(field("food-barcode").props.value).toBe("4006381333931");
       invoke(retired, "onSubmit", { preventDefault() {} });
       invoke(next, "onSubmit", { preventDefault() {} });
       await hooks.settle();
       expect(reads).toHaveLength(2);
-      expect(status()).toBe("Found Fresh Pear.");
+      expect(status()).toBe("Found Fresh Pear. The lookup was for 4006381333931.");
       expect(authCount(fetcher)).toBe(1);
       expect(pendingPosts(fetcher)).toHaveLength(0);
       expect(operationId).not.toHaveBeenCalled();
@@ -5446,12 +5549,12 @@ describe("Food Add attempt admission", () => {
         signal: expect.any(AbortSignal),
       });
       expect(reads[1]?.init?.signal).not.toBe(reads[0]?.init?.signal);
-      expect(status()).toBe("Found Fresh Pear.");
+      expect(status()).toBe("Found Fresh Pear. The lookup was for 4006381333931.");
       expect(field("food-barcode").props.value).toBe("4006381333931");
       invoke(retired, "onSubmit", { preventDefault() {} });
       await hooks.settle();
       expect(reads).toHaveLength(2);
-      expect(status()).toBe("Found Fresh Pear.");
+      expect(status()).toBe("Found Fresh Pear. The lookup was for 4006381333931.");
       expect(authCount(fetcher)).toBe(1);
       expect(pendingPosts(fetcher)).toHaveLength(0);
       expect(operationId).not.toHaveBeenCalled();
@@ -5519,7 +5622,7 @@ describe("Food Add attempt admission", () => {
       expect(reads[2]?.[0]).toBe(reads[1]?.[0]);
       expect(reads[2]?.[1]?.headers).toEqual(reads[1]?.[1]?.headers);
       expect(reads[2]?.[0]).toBe("/api/foods/barcodes/012345678905");
-      expect(barcodeStatus()).toBe("Found Apple Pie.");
+      expect(barcodeStatus()).toBe("Found Apple Pie. The lookup was for 012345678905.");
       expect(addStatus()).toBe(uncertainStatus);
       for (const instance of ["search", "barcode"]) {
         expect(field(`quick-add-${instance}-202-amount`).props.value).toBe("2.500000");

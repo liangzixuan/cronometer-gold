@@ -686,7 +686,7 @@ export function FoodSearchClient() {
       if (!controller.signal.aborted) {
         setBarcodeResult(payload.data);
         setBarcodeState("ready");
-        setBarcodeMessage(`Found ${payload.data.name}.`);
+        setBarcodeMessage(`Found ${payload.data.name}. The lookup was for ${barcode}.`);
       }
     } catch {
       if (!controller.signal.aborted) {

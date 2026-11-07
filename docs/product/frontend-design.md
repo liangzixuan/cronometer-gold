@@ -1107,3 +1107,7 @@ No-match and invalid-barcode results identify the submitted digits, including wh
 the input changes during the lookup. No match suggests checking the digits or
 searching by food name. Invalid results suggest checking the digits and choosing
 Look up. The next lookup uses the current input; these results do not add food.
+
+Successful barcode lookups name both the matched food and the submitted digits.
+Editing the input during a lookup keeps those edits available. Add uses the food
+returned by that lookup; the next explicit lookup uses the current digits.
