@@ -1098,3 +1098,7 @@ Food-search failures name the submitted search term, including continuation
 failures. A query edited while a request is pending remains available. Search
 uses the current draft; Load more results keeps the original query and cursor.
 Existing results and uncertain food additions keep their own recovery state.
+
+Unavailable barcode lookups name the submitted digits. Digits edited while the
+request is pending remain available, and Look up submits the current input.
+Search results and uncertain food additions retain their own recovery state.
