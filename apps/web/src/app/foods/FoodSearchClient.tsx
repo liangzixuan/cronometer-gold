@@ -669,12 +669,16 @@ export function FoodSearchClient() {
       if (controller.signal.aborted) return;
       if (response.status === 404) {
         setBarcodeState("not-found");
-        setBarcodeMessage("No current public food matches that exact barcode.");
+        setBarcodeMessage(
+          `No current public food matches that exact barcode. The lookup was for ${barcode}. Check the digits or search by food name.`,
+        );
         return;
       }
       if (isInvalidBarcodeResponse(response.status)) {
         setBarcodeState("error");
-        setBarcodeMessage("That barcode has an invalid length or check digit.");
+        setBarcodeMessage(
+          `That barcode has an invalid length or check digit. The lookup was for ${barcode}. Check the digits, then choose Look up.`,
+        );
         return;
       }
       if (!response.ok) throw new Error("barcode-unavailable");

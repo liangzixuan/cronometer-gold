@@ -5312,6 +5312,93 @@ describe("Food Add attempt admission", () => {
     );
   }
 
+  it.each([
+    [
+      404,
+      "012345678905",
+      "No current public food matches that exact barcode.",
+      "Check the digits or search by food name.",
+    ],
+    [
+      400,
+      "012345678906",
+      "That barcode has an invalid length or check digit.",
+      "Check the digits, then choose Look up.",
+    ],
+  ] as const)(
+    "identifies the submitted barcode for HTTP %s beside edited digits and recovers",
+    async (httpStatus, submitted, reason, nextStep) => {
+      const held = deferred<Response>();
+      const recoveredHit = { ...hit, foodId: "102", foodVersionId: "203", name: "Fresh Pear" };
+      const reads: Array<{ url: string; init: RequestInit | undefined }> = [];
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/barcodes/")) {
+          reads.push({ url, init });
+          return reads.length === 1 ? held.promise : Response.json({ data: recoveredHit });
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      const form = () => {
+        const node = elements().find((item) => item.props.className === "barcodeForm");
+        if (!node) throw new Error("Missing barcode form");
+        return node;
+      };
+      const status = () =>
+        text(elements().find((node) => String(node.props.className).startsWith("barcodeStatus ")));
+      await change("food-barcode", submitted);
+      const retired = form();
+      invoke(retired, "onSubmit", { preventDefault() {} });
+      invoke(retired, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(reads).toHaveLength(1);
+      expect(reads[0]?.url).toBe(`/api/foods/barcodes/${submitted}`);
+      expect(reads[0]?.init).toEqual({
+        headers: { accept: "application/json" },
+        signal: expect.any(AbortSignal),
+      });
+      await change("food-barcode", "4006381333931");
+      const response = Response.json({ error: "Terminal lookup response" }, { status: httpStatus });
+      const responseJson = vi.spyOn(response, "json");
+      held.resolve(response);
+      await hooks.settle();
+      expect(status()).toContain(reason);
+      expect(status()).toContain(`The lookup was for ${submitted}.`);
+      expect(status()).toContain(nextStep);
+      expect(responseJson).not.toHaveBeenCalled();
+      expect(field("food-barcode").props.value).toBe("4006381333931");
+      expect(elements().find((node) => node.props.className === "barcodeResult")).toBeUndefined();
+      expect(button("Look up").props.disabled).toBe(false);
+      invoke(retired, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(reads).toHaveLength(1);
+      const next = form();
+      invoke(next, "onSubmit", { preventDefault() {} });
+      invoke(next, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(reads).toHaveLength(2);
+      expect(reads[1]?.url).toBe("/api/foods/barcodes/4006381333931");
+      expect(reads[1]?.init).toEqual({
+        headers: { accept: "application/json" },
+        signal: expect.any(AbortSignal),
+      });
+      expect(reads[1]?.init?.signal).not.toBe(reads[0]?.init?.signal);
+      expect(status()).toBe("Found Fresh Pear.");
+      expect(field("food-barcode").props.value).toBe("4006381333931");
+      invoke(retired, "onSubmit", { preventDefault() {} });
+      invoke(next, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(reads).toHaveLength(2);
+      expect(status()).toBe("Found Fresh Pear.");
+      expect(authCount(fetcher)).toBe(1);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["503", "network", "malformed"])(
     "identifies the submitted barcode after a %s failure beside edited digits",
     async (kind) => {
@@ -5462,7 +5549,9 @@ describe("Food Add attempt admission", () => {
       missing = true;
       invoke(barcodeForm(), "onSubmit", { preventDefault() {} });
       await hooks.settle();
-      expect(barcodeStatus()).toBe("No current public food matches that exact barcode.");
+      expect(barcodeStatus()).toBe(
+        "No current public food matches that exact barcode. The lookup was for 012345678905. Check the digits or search by food name.",
+      );
       expect(field("food-barcode").props.value).toBe("012345678905");
       expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
       expect(

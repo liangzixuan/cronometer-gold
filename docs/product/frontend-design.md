@@ -1102,3 +1102,8 @@ Existing results and uncertain food additions keep their own recovery state.
 Unavailable barcode lookups name the submitted digits. Digits edited while the
 request is pending remain available, and Look up submits the current input.
 Search results and uncertain food additions retain their own recovery state.
+
+No-match and invalid-barcode results identify the submitted digits, including when
+the input changes during the lookup. No match suggests checking the digits or
+searching by food name. Invalid results suggest checking the digits and choosing
+Look up. The next lookup uses the current input; these results do not add food.
