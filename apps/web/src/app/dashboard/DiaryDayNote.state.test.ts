@@ -527,6 +527,74 @@ describe("actual web day-note state transitions", () => {
     expect(second.get("x-expected-profile-time-zone")).toBe("America/New_York");
     expect(second.get("idempotency-key")).not.toBe(first.get("idempotency-key"));
   });
+  it.each(["note503", "profile503", "transport", "malformed"])(
+    "names the exact note review retry after %s and preserves the conflict draft",
+    async (failure) => {
+      head = noteFixture("original saved", "4");
+      const normalPut = put;
+      put = async () => Response.json({ code: "DAY_NOTE_REVISION_CONFLICT" }, { status: 412 });
+      await mount();
+      const raw = " exact draft\r\n😀 ";
+      await change(raw);
+      await click("Save note");
+      head = noteFixture("newer saved text", "8");
+      const validRead = async (call: RequestCall) =>
+        call.url === "/api/diary/day-notes/profile"
+          ? Response.json(noteSession(noteOwner, "America/New_York"))
+          : noteResponse(head);
+      read = async (call) => {
+        const profile = call.url === "/api/diary/day-notes/profile";
+        if ((failure === "note503" && !profile) || (failure === "profile503" && profile))
+          return Response.json({}, { status: 503 });
+        if (failure === "transport" && !profile) throw new Error("offline");
+        if (failure === "malformed" && profile) return new Response("broken", { status: 200 });
+        return validRead(call);
+      };
+      const beforeFailure = calls.length;
+      await click("Review current note");
+      expect(text()).toContain(
+        `The current note for ${noteDate} could not be reviewed. Your draft is unchanged. Choose Review current note to try again.`,
+      );
+      expect(field().props.value).toBe(raw);
+      expect(button("Save note").props.disabled).toBe(true);
+      expect(puts()).toHaveLength(1);
+      const failedReads = calls.slice(beforeFailure);
+      expect(failedReads).toHaveLength(2);
+      const retry = button("Review current note");
+      read = validRead;
+      const beforeRetry = calls.length;
+      await click("Review current note");
+      expect(calls.slice(beforeRetry)).toHaveLength(2);
+      for (const [index, previous] of failedReads.entries()) {
+        expect(calls[beforeRetry + index]).toEqual({
+          url: previous.url,
+          init: { ...previous.init, signal: expect.any(AbortSignal) },
+        });
+        expect(calls[beforeRetry + index]?.init.signal).not.toBe(previous.init.signal);
+      }
+      expect(text()).toContain("newer saved text");
+      expect(text()).toContain("America/New_York");
+      expect(field().props.value).toBe(raw);
+      expect(button("Save note").props.disabled).toBe(true);
+      const reviewed = text();
+      invoke(retry);
+      expect(calls).toHaveLength(beforeRetry + 2);
+      expect(text()).toBe(reviewed);
+      await click("Keep my draft");
+      expect(puts()).toHaveLength(1);
+      expect(field().props.value).toBe(raw);
+      put = normalPut;
+      await click("Save note");
+      expect(puts()).toHaveLength(2);
+      const saved = puts()[1];
+      expect(JSON.parse(String(saved?.init.body)).note).toBe(raw);
+      expect(new Headers(saved?.init.headers).get("if-match")).toBe('"8"');
+      expect(new Headers(saved?.init.headers).get("x-expected-profile-time-zone")).toBe(
+        "America/New_York",
+      );
+      expect(expired).not.toHaveBeenCalled();
+    },
+  );
   it("invalidates a reviewed revision when navigation loads a newer saved note", async () => {
     head = noteFixture("initial", "4");
     put = async () => Response.json({ code: "DAY_NOTE_REVISION_CONFLICT" }, { status: 412 });

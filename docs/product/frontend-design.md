@@ -1052,3 +1052,12 @@ the saved date in the message. Name Reload saved note and explain that it checks
 the note without repeating the save. Recovery uses the same note GET with a new
 signal, then displays the checked current head. Paused controls stay disabled;
 retained recovery actions cannot repeat a read after recovery.
+
+### Day-note conflict review retry
+
+A failed conflict review names Review current note and the original note date.
+The raw draft remains unchanged and Save stays disabled. A fresh review reads
+the saved note and current profile again with the same GET options and a new
+signal. Reviewing and keeping the draft do not write it; the next explicit
+Save uses the reviewed revision and profile time zone. Retained review actions
+cannot restart reads or replace the recovered review.

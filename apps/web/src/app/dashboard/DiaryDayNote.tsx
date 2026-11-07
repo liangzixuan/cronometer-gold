@@ -471,8 +471,7 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
         install({
           ...stateRef.current,
           busy: false,
-          message:
-            "The current note could not be reviewed. Your draft is unchanged; retry the review.",
+          message: `The current note for ${conflict.date} could not be reviewed. Your draft is unchanged. Choose Review current note to try again.`,
         });
     } finally {
       controllers.current.delete(controller);
