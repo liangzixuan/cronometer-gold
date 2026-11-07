@@ -405,6 +405,44 @@ describe("Calm goal response ownership and freshness", () => {
     expect(await request).toBeNull();
     expect(fetch).toHaveBeenCalledOnce();
   });
+  it.each(["progress", "session"] as const)(
+    "guides a failed %s target read to a fresh read-only retry",
+    async (stage) => {
+      const fetch = vi.fn();
+      if (stage === "session") fetch.mockResolvedValueOnce(Response.json({ data: progress() }));
+      fetch.mockResolvedValueOnce(new Response(null, { status: 503 }));
+      vi.stubGlobal("fetch", fetch);
+      const onUnauthorized = vi.fn();
+      const signal = new AbortController().signal;
+      const request = load({ signal, onUnauthorized });
+      await expect(request).rejects.toThrow(
+        stage === "progress"
+          ? "Saved targets could not be loaded."
+          : "Your session could not be revalidated safely.",
+      );
+      await expect(request).rejects.toThrow(
+        `Choose Retry targets to reload saved targets for ${day.localDate}.`,
+      );
+      const options = { cache: "no-store", headers: { accept: "application/json" }, signal };
+      expect(fetch.mock.calls).toEqual([
+        [`/api/goals/progress?date=${day.localDate}`, options],
+        ...(stage === "session" ? [["/api/auth/me", options]] : []),
+      ]);
+      expect(onUnauthorized).not.toHaveBeenCalled();
+      const before = fetch.mock.calls.length;
+      fetch
+        .mockResolvedValueOnce(Response.json({ data: progress() }))
+        .mockResolvedValueOnce(Response.json(noteSession()));
+      const retrySignal = new AbortController().signal;
+      expect(retrySignal).not.toBe(signal);
+      expect(await load({ signal: retrySignal, onUnauthorized })).toEqual(progress());
+      expect(fetch.mock.calls.slice(before)).toEqual([
+        [`/api/goals/progress?date=${day.localDate}`, { ...options, signal: retrySignal }],
+        ["/api/auth/me", { ...options, signal: retrySignal }],
+      ]);
+      expect(onUnauthorized).not.toHaveBeenCalled();
+    },
+  );
   it("does not erase nutrition data by converting failed goal loading to zero", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(null, { status: 503 })));
     await expect(load()).rejects.toThrow("Saved targets could not be loaded");

@@ -154,7 +154,10 @@ export async function loadCalmGoalProgress({
     onUnauthorized();
     return null;
   }
-  if (!response.ok) throw new Error("Saved targets could not be loaded.");
+  if (!response.ok)
+    throw new Error(
+      `Saved targets could not be loaded. Choose Retry targets to reload saved targets for ${day.localDate}.`,
+    );
   const body: unknown = await response.json();
   if (!current()) return null;
   const progress = parseGoalProgress(body);
@@ -168,7 +171,10 @@ export async function loadCalmGoalProgress({
     onUnauthorized();
     return null;
   }
-  if (!responseSession.ok) throw new Error("Your session could not be revalidated safely.");
+  if (!responseSession.ok)
+    throw new Error(
+      `Your session could not be revalidated safely. Choose Retry targets to reload saved targets for ${day.localDate}.`,
+    );
   const sessionBody: unknown = await responseSession.json();
   if (!current()) return null;
   const verified = parseSession(sessionBody);

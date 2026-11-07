@@ -1080,3 +1080,11 @@ This action reloads the diary and its saved targets. Mismatched targets stay hid
 existing nutrition totals and missing-value qualifications remain unchanged.
 The progress and session reads keep their exact no-store options and shared abort
 signal. These mismatches do not write data or sign the account out.
+
+### Saved-target read recovery guidance
+
+If the saved-target or session HTTP read fails, retain its reason and name Retry
+targets with the selected date. The retry reloads the selected day's targets and
+verifies the session with the same read options and a fresh signal. It does not
+write data or treat unavailable targets as zero. Unauthorized, stale-response,
+profile and diary-snapshot admission remain unchanged.
