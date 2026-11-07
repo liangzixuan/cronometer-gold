@@ -1061,3 +1061,12 @@ the saved note and current profile again with the same GET options and a new
 signal. Reviewing and keeping the draft do not write it; the next explicit
 Save uses the reviewed revision and profile time zone. Retained review actions
 cannot restart reads or replace the recovered review.
+
+### Day-note load recovery guidance
+
+An ordinary day-note read failure keeps the diary-available message and names
+Retry note load with the date it reloads. When an acknowledged save still needs
+checking, name Reload saved note with that save's original date instead, including
+after a different selected date fails to load. Recovery keeps the existing GET
+requests and never repeats the save. Paused controls and retained retry actions
+keep their protections; an unavailable note is not presented as an empty note.

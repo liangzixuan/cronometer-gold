@@ -860,9 +860,24 @@ describe("actual web day-note state transitions", () => {
       expect(field().props.disabled).toBe(true);
       expect(text()).toContain("could not be loaded");
       expect(text()).not.toContain("No day note saved yet");
+      expect(text()).toContain(`Choose Retry note load to reload ${noteDate}.`);
+      const original = calls.at(-1);
+      const retry = button("Retry note load");
+      const before = calls.length;
       read = async () => noteResponse(noteFixture());
       await click("Retry note load");
       expect(field().props.disabled).toBe(false);
+      expect(calls.slice(before)).toHaveLength(1);
+      expect(calls[before]).toEqual({
+        url: original?.url,
+        init: { ...original?.init, signal: expect.any(AbortSignal) },
+      });
+      expect(calls[before]?.init.signal).not.toBe(original?.init.signal);
+      expect(puts()).toHaveLength(0);
+      const recovered = text();
+      invoke(retry);
+      expect(calls).toHaveLength(before + 1);
+      expect(text()).toBe(recovered);
     },
   );
 });
@@ -933,6 +948,7 @@ describe("day-note controls while the diary view is paused", () => {
   it("disables an unavailable note read while the selected view is not current", async () => {
     read = async () => Response.json({}, { status: 503 });
     await mount();
+    expect(text()).toContain(`Choose Retry note load to reload ${noteDate}.`);
     pauseBeforeEffects();
     const requests = calls.length;
     expect(button("Retry note load").props.disabled).toBe(true);
@@ -1063,6 +1079,10 @@ describe("ordinary rereads of acknowledged day-note saves", () => {
       };
       await navigate(noteDate);
       expect(hasReload()).toBe(true);
+      expect(text()).toContain(
+        `Choose Reload saved note to check your acknowledged save for ${noteDate}.`,
+      );
+      expect(text()).not.toContain("Retry note load");
       expect(field().props.disabled).toBe(true);
       expect(puts()).toHaveLength(1);
       read = currentRead;
@@ -1077,6 +1097,29 @@ describe("ordinary rereads of acknowledged day-note saves", () => {
     },
   );
 
+  it("names the acknowledged date when an away-date note read fails", async () => {
+    await acknowledgedWithFailedRead();
+    read = async () => Response.json({}, { status: 503 });
+    await navigate(otherDate);
+    expect(text()).toContain(
+      `Choose Reload saved note to check your acknowledged save for ${noteDate}.`,
+    );
+    expect(text()).not.toContain("Retry note load");
+    expect(hasReload()).toBe(true);
+    const before = calls.length;
+    read = currentRead;
+    await click("Reload saved note");
+    expect(calls.slice(before)).toHaveLength(1);
+    expect(calls[before]?.url).toBe(`/api/diary/day-notes/${noteDate}`);
+    expect(calls[before]?.init.method).toBeUndefined();
+    expect(puts()).toHaveLength(1);
+    expect(hasReload()).toBe(false);
+    expect(text()).toContain(`Note saved for ${noteDate}. Current saved state checked.`);
+    await navigate(noteDate);
+    expect(field().props.value).toBe(head.note);
+    expect(field().props.disabled).toBe(false);
+    expect(puts()).toHaveLength(1);
+  });
   it("does not settle from a late ordinary read after its view ticket is retired", async () => {
     await acknowledgedWithFailedRead();
     await navigate(otherDate);

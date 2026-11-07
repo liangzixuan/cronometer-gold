@@ -218,8 +218,9 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
                 message: `Your save for ${date} was acknowledged. The current note could not be reloaded. Choose Reload saved note to check it without repeating the save.`,
               }
             : {
-                message:
-                  "The day note could not be loaded. Your existing diary is still available.",
+                message: stateRef.current.acknowledgement
+                  ? `The day note could not be loaded. Your existing diary is still available. Choose Reload saved note to check your acknowledged save for ${stateRef.current.acknowledgement.date}.`
+                  : `The day note could not be loaded. Your existing diary is still available. Choose Retry note load to reload ${date}.`,
               }),
         });
       } finally {
