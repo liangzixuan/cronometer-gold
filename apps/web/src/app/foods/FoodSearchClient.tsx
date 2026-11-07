@@ -535,7 +535,7 @@ export function FoodSearchClient() {
           setNextCursor(null);
           setSearchState("error");
           setSearchMessage(
-            "These results changed while you were browsing. Search again for a fresh result set.",
+            `These results changed while you were browsing. The search was for “${normalized}”. Your current results are still available. Search again for a fresh result set.`,
           );
           return;
         }

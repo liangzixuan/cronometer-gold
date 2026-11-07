@@ -1111,3 +1111,7 @@ Look up. The next lookup uses the current input; these results do not add food.
 Successful barcode lookups name both the matched food and the submitted digits.
 Editing the input during a lookup keeps those edits available. Add uses the food
 returned by that lookup; the next explicit lookup uses the current digits.
+
+An expired search continuation identifies the submitted term and keeps the loaded
+foods available. The message asks for a fresh search. Query edits and raw portions
+stay available; Search uses the current query without the expired cursor.

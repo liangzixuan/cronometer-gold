@@ -1330,36 +1330,72 @@ describe("web search request retirement", () => {
     expect(operationId).not.toHaveBeenCalled();
   });
 
-  it("keeps current continuation expiry visible and permits a fresh search", async () => {
-    const json = vi.fn();
-    let reads = 0;
-    const fetcher = vi.fn(async (url: string) => {
-      if (url === "/api/auth/me") return session();
-      if (url.startsWith("/api/foods/search?")) {
-        reads += 1;
-        if (url.includes("cursor=")) return { ok: false, status: 400, json } as unknown as Response;
-        return Response.json(
-          page(reads === 1 ? [hit] : [freshHit], reads === 1 ? "expired_cursor" : null),
-        );
+  it.each([false, true])(
+    "keeps current continuation expiry visible and permits a fresh search (edited draft: %s)",
+    async (editDraft) => {
+      const json = vi.fn();
+      const held = deferred<Response>();
+      const requests: Array<{ url: string; init: RequestInit | undefined }> = [];
+      let reads = 0;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?")) {
+          reads += 1;
+          requests.push({ url, init });
+          if (url.includes("cursor=")) return held.promise;
+          return Response.json(
+            page(reads === 1 ? [hit] : [freshHit], reads === 1 ? "expired_cursor" : null),
+          );
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await submitQuery("apple");
+      await change("quick-add-search-202-amount", "2.500000");
+      const retired = button("Load more results");
+      invoke(retired);
+      await hooks.settle();
+      if (editDraft) await change("food-query", "  pear  ");
+      held.resolve({ ok: false, status: 400, json } as unknown as Response);
+      await hooks.settle();
+      expect(searchView().names).toEqual(["Apple Pie"]);
+      expect(searchView().status).toBe(
+        "These results changed while you were browsing. The search was for “apple”. Your current results are still available. Search again for a fresh result set.",
+      );
+      expect(searchView().loadMore).toBe(false);
+      expect(json).not.toHaveBeenCalled();
+      expect(field("food-query").props.value).toBe(editDraft ? "  pear  " : "apple");
+      expect(field("quick-add-search-202-amount").props.value).toBe("2.500000");
+      expect(requests.map((r) => r.url)).toEqual([
+        "/api/foods/search?query=apple&intent=all&limit=20",
+        "/api/foods/search?query=apple&intent=all&cursor=expired_cursor&limit=20",
+      ]);
+      invoke(retired);
+      await hooks.settle();
+      expect(reads).toBe(2);
+      await submitQuery(editDraft ? "  pear  " : "pear");
+      expect(searchView().names).toEqual(["Fresh Pear"]);
+      expect(reads).toBe(3);
+      expect(requests[2]?.url).toBe("/api/foods/search?query=pear&intent=all&limit=20");
+      for (const request of requests) {
+        expect(request.init).toEqual({
+          headers: { accept: "application/json" },
+          signal: expect.any(AbortSignal),
+        });
       }
-      return publicResponse(url);
-    });
-    vi.stubGlobal("fetch", fetcher);
-    hooks.mount(FoodSearchClient);
-    await hooks.settle();
-    await submitQuery("apple");
-    invoke(button("Load more results"));
-    await hooks.settle();
-    expect(searchView().names).toEqual(["Apple Pie"]);
-    expect(searchView().status).toBe(
-      "These results changed while you were browsing. Search again for a fresh result set.",
-    );
-    expect(searchView().loadMore).toBe(false);
-    expect(json).not.toHaveBeenCalled();
-    await submitQuery("pear");
-    expect(searchView().names).toEqual(["Fresh Pear"]);
-    expect(reads).toBe(3);
-  });
+      expect(requests[1]?.init?.signal).not.toBe(requests[0]?.init?.signal);
+      expect(requests[2]?.init?.signal).not.toBe(requests[1]?.init?.signal);
+      invoke(retired);
+      await hooks.settle();
+      expect(reads).toBe(3);
+      expect(searchView().names).toEqual(["Fresh Pear"]);
+      expect(authCount(fetcher)).toBe(1);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("food additions after session expiry", () => {
