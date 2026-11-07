@@ -559,8 +559,8 @@ export function FoodSearchClient() {
           setSearchState("error");
           setSearchMessage(
             cursor === undefined
-              ? "Food search is unavailable right now. Your query and food type are still selected. Choose Search to try again."
-              : "More matching foods could not be loaded. Your current results are still available. Choose Load more results to try again.",
+              ? `Food search is unavailable right now. The search was for “${normalized}”. Your query and food type are still selected. Choose Search to try again.`
+              : `More matching foods could not be loaded. The search was for “${normalized}”. Your current results are still available. Choose Load more results to try again.`,
           );
         }
       }

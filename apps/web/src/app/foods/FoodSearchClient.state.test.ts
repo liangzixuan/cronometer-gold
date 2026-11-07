@@ -1151,6 +1151,55 @@ describe("web search request retirement", () => {
   );
 
   it.each(["503", "network", "malformed"])(
+    "identifies the submitted query after a %s failure beside an edited draft",
+    async (kind) => {
+      const held = deferred<Response>();
+      const reads: Array<{ url: string; init: RequestInit | undefined }> = [];
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (url.startsWith("/api/foods/search?")) {
+          reads.push({ url, init });
+          return reads.length === 1 ? held.promise : Response.json(page([freshHit]));
+        }
+        return publicResponse(url);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(FoodSearchClient);
+      await hooks.settle();
+      await submitQuery("  apple  ");
+      expect(reads).toHaveLength(1);
+      expect(new URL(reads[0]?.url ?? "", "https://example.test").searchParams.get("query")).toBe(
+        "apple",
+      );
+      await change("food-query", "  pear  ");
+      if (kind === "network") held.reject(new TypeError("Synthetic network failure"));
+      else held.resolve(failure(kind));
+      await hooks.settle();
+      expect(searchView().status).toContain("The search was for “apple”.");
+      expect(searchView().status).toContain("Choose Search to try again.");
+      expect(field("food-query").props.value).toBe("  pear  ");
+      expect(searchView().names).toEqual([]);
+      expect(searchView().loadMore).toBe(false);
+      await submitQuery("  pear  ");
+      expect(reads).toHaveLength(2);
+      expect(new URL(reads[1]?.url ?? "", "https://example.test").searchParams.get("query")).toBe(
+        "pear",
+      );
+      expect(reads[1]?.init).toEqual({
+        headers: { accept: "application/json" },
+        signal: expect.any(AbortSignal),
+      });
+      expect(reads[1]?.init?.signal).not.toBe(reads[0]?.init?.signal);
+      expect(searchView().names).toEqual(["Fresh Pear"]);
+      expect(searchView().status).toBe("1 result shown for “pear”.");
+      expect(field("food-query").props.value).toBe("  pear  ");
+      expect(authCount(fetcher)).toBe(1);
+      expect(pendingPosts(fetcher)).toHaveLength(0);
+      expect(operationId).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["503", "network", "malformed"])(
     "guides a failed %s continuation to the same cursor without disturbing food additions",
     async (kind) => {
       const reads: string[] = [];
@@ -1207,7 +1256,7 @@ describe("web search request retirement", () => {
       expect(field("quick-add-time").props.value).toBe("12:00");
       expect(field("quick-add-meal").props.value).toBe("dinner");
       expect(searchView().status).toBe(
-        "More matching foods could not be loaded. Your current results are still available. Choose Load more results to try again.",
+        "More matching foods could not be loaded. The search was for “apple”. Your current results are still available. Choose Load more results to try again.",
       );
       invoke(retired);
       await hooks.settle();
@@ -1240,7 +1289,7 @@ describe("web search request retirement", () => {
       failSearch = true;
       await submitQuery("pear");
       expect(searchView().status).toBe(
-        "Food search is unavailable right now. Your query and food type are still selected. Choose Search to try again.",
+        "Food search is unavailable right now. The search was for “pear”. Your query and food type are still selected. Choose Search to try again.",
       );
       expect(field("food-query").props.value).toBe("pear");
       expect(searchView().names).toEqual([]);
@@ -5425,7 +5474,7 @@ describe("Food Add attempt admission", () => {
       expect(field("quick-add-meal").props.value).toBe("dinner");
       expect(addStatus()).toBe(uncertainStatus);
       expect(text()).toContain(
-        "Food search is unavailable right now. Your query and food type are still selected. Choose Search to try again.",
+        "Food search is unavailable right now. The search was for “Apple Pie”. Your query and food type are still selected. Choose Search to try again.",
       );
       expect(button("Search").props.disabled).toBe(false);
       expect(

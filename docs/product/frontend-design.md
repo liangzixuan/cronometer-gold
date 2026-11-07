@@ -1093,3 +1093,8 @@ targets with the selected date. The retry reloads the selected day's targets and
 verifies the session with the same read options and a fresh signal. It does not
 write data or treat unavailable targets as zero. Unauthorized, stale-response,
 profile and diary-snapshot admission remain unchanged.
+
+Food-search failures name the submitted search term, including continuation
+failures. A query edited while a request is pending remains available. Search
+uses the current draft; Load more results keeps the original query and cursor.
+Existing results and uncertain food additions keep their own recovery state.
