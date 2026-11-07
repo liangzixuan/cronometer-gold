@@ -34,6 +34,11 @@ bounds. Remaining energy appears only for an exact, comparable energy total and
 saved target. Water, activity and private notes retain their existing persistence
 and ownership boundaries.
 
+Retry targets accepts each displayed retry action once. Repeated calls from that
+consumed action cannot restart pending reads or clear recovered targets. A new
+failure provides a fresh retry action. A retry from an inactive view does nothing.
+The selected day's nutrition remains available while target reads recover.
+
 Macro icons keep explicit labels and units: flame for Energy, sliced egg for
 Protein, wheat for Carbs and cooking-oil bottle for Fat. They are decorative
 symbols, not nutrient-source claims. Standard interface icons reuse the licensed

@@ -256,7 +256,10 @@ export function CalmOverview({
               <button
                 className="buttonQuiet"
                 type="button"
-                onClick={() => setRetry((value) => value + 1)}
+                onClick={() => {
+                  if (!isCurrent()) return;
+                  setRetry((value) => (value === retry ? value + 1 : value));
+                }}
               >
                 Retry targets
               </button>{" "}
